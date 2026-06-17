@@ -9,6 +9,7 @@
 #       export CROSS_CC=/path/to/theos/toolchain/linux/iphone/bin/clang
 #       make linux                 -> decrypt_helper.dylib
 
+VERSION := 1.0.0
 TARGET  := decrypt_helper.dylib
 SRC     := src/fishhook.c \
            src/log_store.m \
@@ -33,6 +34,8 @@ CFLAGS  := -arch $(ARCH) \
            -miphoneos-version-min=$(MIN_IOS) \
            -dynamiclib \
            -install_name @executable_path/$(TARGET) \
+           -Xlinker -current_version -Xlinker $(VERSION) \
+           -Xlinker -compatibility_version -Xlinker 1.0.0 \
            -ObjC -fobjc-arc \
            -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
            -Os \
@@ -54,6 +57,8 @@ linux:
 	    -isysroot $$IOS_SDK \
 	    -dynamiclib \
 	    -install_name @executable_path/$(TARGET) \
+	    -Xlinker -current_version -Xlinker $(VERSION) \
+	    -Xlinker -compatibility_version -Xlinker 1.0.0 \
 	    -ObjC -fobjc-arc \
 	    -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
 	    -Os \

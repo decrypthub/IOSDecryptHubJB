@@ -278,23 +278,31 @@
 @implementation DHLogViewer
 
 + (UIWindow *)foregroundKeyWindow {
+    // 我们自己的悬浮窗 windowLevel = Alert + 1000, 要排除掉, 否则 present 会从悬浮窗的小 rootVC 弹出
     if (@available(iOS 13.0, *)) {
         for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
             if ([s isKindOfClass:[UIWindowScene class]]
                 && s.activationState == UISceneActivationStateForegroundActive) {
+                // 先找 keyWindow 且非 alert 层级的
                 for (UIWindow *w in ((UIWindowScene *)s).windows) {
-                    if (w.isKeyWindow) return w;
+                    if (w.isKeyWindow && w.windowLevel < UIWindowLevelAlert) return w;
                 }
-                // 没有 key window, 取第一个非自己的窗口
-                for (UIWindow *w in ((UIWindowScene *)s).windows) return w;
+                // 退而求其次: 第一个非 alert 层级的窗口
+                for (UIWindow *w in ((UIWindowScene *)s).windows) {
+                    if (w.windowLevel < UIWindowLevelAlert) return w;
+                }
             }
         }
     }
-    return UIApplication.sharedApplication.keyWindow;
+    UIWindow *kw = UIApplication.sharedApplication.keyWindow;
+    if (kw && kw.windowLevel < UIWindowLevelAlert) return kw;
+    return nil;
 }
 
 + (UIViewController *)topVC {
-    UIViewController *root = [self foregroundKeyWindow].rootViewController;
+    UIWindow *w = [self foregroundKeyWindow];
+    if (!w) return nil;
+    UIViewController *root = w.rootViewController;
     while (root.presentedViewController) root = root.presentedViewController;
     return root;
 }

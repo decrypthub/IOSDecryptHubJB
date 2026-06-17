@@ -202,9 +202,28 @@ static DHFloatingController *gFloat = nil;
 
 @end
 
+static BOOL dh_scene_ready(void) {
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]]
+                && s.activationState == UISceneActivationStateForegroundActive) {
+                return YES;
+            }
+        }
+        return NO;
+    }
+    return YES;
+}
+
 void dh_ui_install_floating(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gFloat) return;
+        if (!dh_scene_ready()) {
+            // scene 还没准备好, 退后再试; 不要错误地把 gFloat 设上, 否则永远不出现
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ dh_ui_install_floating(); });
+            return;
+        }
         gFloat = [[DHFloatingController alloc] init];
     });
 }
