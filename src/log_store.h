@@ -45,6 +45,9 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 - (NSArray<DHLogEntry *> *)snapshotMatching:(nullable NSString *)keyword
                                    category:(NSInteger)categoryOrMinusOne;
 
+// 单条查询 (用于 web detail 端点)
+- (nullable DHLogEntry *)entryWithSeq:(uint64_t)seq;
+
 // 统计
 - (NSUInteger)totalCount;
 - (NSUInteger)countForCategory:(DHCategory)cat;

@@ -131,6 +131,18 @@ static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘�
     return out;
 }
 
+- (DHLogEntry *)entryWithSeq:(uint64_t)seq {
+    __block DHLogEntry *r = nil;
+    dispatch_sync(_queue, ^{
+        // 倒着找, 命中率高 (用户多看最新)
+        for (NSInteger i = (NSInteger)self->_entries.count - 1; i >= 0; i--) {
+            DHLogEntry *e = self->_entries[i];
+            if (e.seq == seq) { r = e; break; }
+        }
+    });
+    return r;
+}
+
 - (NSUInteger)totalCount {
     __block NSUInteger n;
     dispatch_sync(_queue, ^{ n = (NSUInteger)self->_seqCounter; });

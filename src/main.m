@@ -10,6 +10,7 @@
 #import <UIKit/UIKit.h>
 #import "log_store.h"
 #import "ui_float.h"
+#import "http_server.h"
 
 extern void dh_install_digest_hooks(void);
 extern void dh_install_hmac_hooks(void);
@@ -28,6 +29,9 @@ static void dh_bootstrap(void) {
     // 先安装 hook —— 这一步要在尽可能早的时刻完成, 否则早期发生的加解密会漏抓.
     dh_install_all_hooks();
     NSLog(@"[解密助手] hook 已全部安装 (Digest / HMAC / 对称 / 非对称)");
+
+    // 启动本地 HTTP 服务 - 不依赖 UIApplication, 可以立刻起.
+    dh_http_start();
 
     // UI 必须等 UIApplication 实例化后再做; 用 didFinishLaunching 通知做后置初始化.
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
