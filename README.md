@@ -81,6 +81,56 @@ bash scripts/wsl_build.sh              # 编译 + ldid 自签
 # 产出 hooked_input.ipa, 直接用 AltStore / Sideloadly 重签后安装
 ```
 
+## 测试 / 灰度
+
+按"上手快 → 接近真实"三种模式。**强烈建议先用 Mac 灰度跑通再上设备**。
+
+### A. Mac 上灰度（最快，5 秒看结果）
+
+dylib 用 `__has_include(<UIKit/UIKit.h>)` 隔离 UI 代码 —— 没 UIKit 就只编 hook 和 HTTP，浏览器看 web 面板就够了。
+
+```bash
+make test-mac
+# 这一条会:
+#   1. 编 decrypt_helper.mac.dylib (macOS target, 无 UI)
+#   2. 编 tests/exercise_runner (调一遍所有 hook 的小程序)
+#   3. DYLD_INSERT_LIBRARIES=./decrypt_helper.mac.dylib ./tests/exercise_runner
+```
+
+跑起来后打开 [http://127.0.0.1:8088](http://127.0.0.1:8088)，**应能看到 ~12 条日志**：
+- MD5 / SHA1 / SHA256 / SHA512（4 摘要）+ SHA256-streaming
+- HMAC-SHA256 / HMAC-SHA1 + HMAC-streaming
+- AES-128-CBC encrypt + AES-128-CBC decrypt (streaming)
+- RSA SIGN / VERIFY / ENC / DEC（4 条）
+
+没看到 = hook 失效，看到 = OK。runner 会停 600 秒等你看，按 Ctrl-C 退。
+
+**适合**：hook 逻辑、HTTP API、web UI、JSON 序列化、流式 ctx 跟踪全测；UI（悬浮窗）测不了。
+**不适合**：真实 iOS 应用的复杂调用链、UIKit 集成。
+
+### B. iOS 模拟器
+
+跟 Mac 测一样，只是把 `make mac` 换成模拟器 target：
+
+```bash
+xcrun --sdk iphonesimulator --show-sdk-path
+# 然后手动改 Makefile 的 -target 为 arm64-apple-ios14.0-simulator
+# (或自己加一个 sim 目标, PR 欢迎)
+```
+
+模拟器里跑任意 iOS 应用，`DYLD_INSERT_LIBRARIES=...` 即可，UIKit 完整可用。
+
+### C. 真机（最接近生产）
+
+```bash
+make linux                              # 或 macOS 上 make
+./scripts/inject.sh YourApp.ipa decrypt_helper.dylib
+# 越狱机: 直接装 hooked_YourApp.ipa
+# 非越狱: 用 AltStore / Sideloadly 重签后装
+```
+
+启动 App，悬浮窗会显示 `http://<手机Wi-Fi IP>:8088`，电脑浏览器打开看。
+
 ## 文件结构
 
 ```

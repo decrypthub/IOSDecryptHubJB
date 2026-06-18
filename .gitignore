@@ -10,3 +10,8 @@ hooked_*.ipa
 # 系统/编辑器垃圾
 .DS_Store
 *.swp
+
+# 含密钥不上传 (QQ SMTP 授权码)
+scripts/send_notification_email.sh
+# 一次性 release notes
+scripts/_release_notes_*.md

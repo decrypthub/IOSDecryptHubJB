@@ -1,9 +1,15 @@
 // ui_float.m
 // 悬浮窗 - 只显示状态(各算法计数)和控制按钮(打开日志/清空/暂停/隐藏)
 // 严格不显示任何明文 / 密文 / 摘要 - 那些都在 ui_logview.
+//
+// UIKit 隔离: macOS 纯 target 没有 UIKit, 整个文件编译为空, 提供 no-op stub.
+// iOS / Mac Catalyst / iOS Simulator 都有 UIKit, 正常走.
+
+#import "ui_float.h"
+
+#if __has_include(<UIKit/UIKit.h>)
 
 #import <UIKit/UIKit.h>
-#import "ui_float.h"
 #import "ui_logview.h"
 #import "log_store.h"
 #import "http_server.h"
@@ -277,3 +283,10 @@ void dh_ui_install_floating(void) {
         gFloat = [[DHFloatingController alloc] init];
     });
 }
+
+#else  // !__has_include(<UIKit/UIKit.h>)
+
+// 纯 macOS target 下没有 UIKit, 提供空 stub - 浏览器看 web 面板就够了.
+void dh_ui_install_floating(void) {}
+
+#endif

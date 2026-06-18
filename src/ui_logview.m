@@ -1,10 +1,9 @@
-// ui_logview.m
-// 全屏日志查看器:
-//   - 顶栏: 标题, 关闭, 分类筛选 (全部 / 摘要 / HMAC / 对称 / 非对称), 搜索框, 分享按钮
-//   - 列表: 每条一行 (算法、操作、时间、长度), 点击进入详情
-//   - 详情: 完整的 KEY / IV / 输入 (UTF-8 / Hex / HexDump) / 输出 / 调用栈, 长按拷贝
+// ui_logview.m - 全屏日志查看器 (iOS UI), 在没有 UIKit 的 target 下编译为空.
 
 #import "ui_logview.h"
+
+#if __has_include(<UIKit/UIKit.h>)
+
 #import "log_store.h"
 
 // ===================== 详情页 =====================
@@ -331,3 +330,11 @@
 }
 
 @end
+
+#else  // !__has_include(<UIKit/UIKit.h>)
+
+@implementation DHLogViewer
++ (void)presentFromFloating {}
+@end
+
+#endif
