@@ -147,3 +147,13 @@ src/
 ├── ui_logview.{h,m}      # 全屏日志查看器
 └── main.m                # 入口 + 构造函数
 ```
+
+---
+
+## 关注公众号
+
+> 更多 iOS 逆向 / 加解密调试干货，欢迎关注公众号 👇
+
+<div align="center">
+  <img src="https://blog-img-1393828675.cos.ap-shanghai.myqcloud.com/rreversewechat/wechatsearch.png" alt="关注公众号" width="320">
+</div>
