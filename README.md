@@ -102,3 +102,11 @@ src/
 sim_uitest/             交互式测试宿主 App
 scripts/inject.sh       IPA 注入脚本
 ```
+
+## 关注公众号
+
+更多 iOS 逆向与加解密调试相关内容，欢迎关注微信公众号。
+
+<div align="center">
+  <img src="https://blog-img-1393828675.cos.ap-shanghai.myqcloud.com/rreversewechat/wechatsearch.png" alt="关注公众号" width="320">
+</div>
