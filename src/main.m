@@ -7,7 +7,9 @@
 //   3. 落盘文件路径: Documents/decrypt_helper.log
 
 #import <Foundation/Foundation.h>
+#if __has_include(<UIKit/UIKit.h>)
 #import <UIKit/UIKit.h>
+#endif
 #import "log_store.h"
 #import "ui_float.h"
 #import "http_server.h"
@@ -16,12 +18,14 @@ extern void dh_install_digest_hooks(void);
 extern void dh_install_hmac_hooks(void);
 extern void dh_install_symmetric_hooks(void);
 extern void dh_install_asymmetric_hooks(void);
+extern void dh_install_kdf_hooks(void);
 
 static void dh_install_all_hooks(void) {
     dh_install_digest_hooks();
     dh_install_hmac_hooks();
     dh_install_symmetric_hooks();
     dh_install_asymmetric_hooks();
+    dh_install_kdf_hooks();
 }
 
 __attribute__((constructor))
@@ -33,6 +37,7 @@ static void dh_bootstrap(void) {
     // 启动本地 HTTP 服务 - 不依赖 UIApplication, 可以立刻起.
     dh_http_start();
 
+#if __has_include(<UIKit/UIKit.h>)
     // UI 必须等 UIApplication 实例化后再做; 用 didFinishLaunching 通知做后置初始化.
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                        object:nil queue:nil usingBlock:^(NSNotification *_) {
@@ -42,6 +47,7 @@ static void dh_bootstrap(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         dh_ui_install_floating();
     });
+#endif
 
     NSLog(@"[解密助手] 日志文件: %@", [[DHLogStore shared] logFilePath]);
 }

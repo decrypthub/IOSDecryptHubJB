@@ -17,6 +17,7 @@ SRC     := src/fishhook.c \
            src/hook_hmac.m \
            src/hook_symmetric.m \
            src/hook_asymmetric.m \
+           src/hook_kdf.m \
            src/http_server.m \
            src/ui_float.m \
            src/ui_logview.m \

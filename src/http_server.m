@@ -204,6 +204,7 @@ static void handle_stats(int fd) {
         @"byCategory":  byCat,
         @"port":        @(gPort),
         @"version":     @DH_HTTP_VERSION,
+        @"process":     [s processInfo],
     });
 }
 
@@ -213,8 +214,9 @@ static void handle_logs_list(int fd, NSDictionary *q) {
     uint64_t  since = q[@"since"] ? (uint64_t)[q[@"since"] longLongValue] : 0;
     NSInteger lim   = q[@"limit"] ? [q[@"limit"] integerValue] : 500;
     if (lim <= 0 || lim > 5000) lim = 500;
+    NSUInteger minSize = q[@"minSize"] ? (NSUInteger)[q[@"minSize"] integerValue] : 0;
 
-    NSArray *src = [[DHLogStore shared] snapshotMatching:kw category:cat];
+    NSArray *src = [[DHLogStore shared] snapshotMatching:kw category:cat minSize:minSize];
     // 最新在前
     NSMutableArray *out = [NSMutableArray array];
     for (NSInteger i = (NSInteger)src.count - 1; i >= 0 && (NSInteger)out.count < lim; i--) {

@@ -61,6 +61,14 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 // 日志文件路径 (落盘文件用于 share/导出)
 - (NSString *)logFilePath;
 
+// 当前宿主进程信息 (pid/进程名/bundle/系统版本/设备型号), 一次性采集并缓存
+- (NSDictionary *)processInfo;
+
+// 大小过滤快照: 仅保留 input 或 output 字节数 >= minBytes 的条目 (keyword/category 同 snapshotMatching)
+- (NSArray<DHLogEntry *> *)snapshotMatching:(nullable NSString *)keyword
+                                   category:(NSInteger)categoryOrMinusOne
+                                    minSize:(NSUInteger)minBytes;
+
 @end
 
 // ===== 工具函数 =====

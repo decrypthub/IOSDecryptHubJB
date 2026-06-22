@@ -1,5 +1,6 @@
 // log_store.m
 #import "log_store.h"
+#import <sys/sysctl.h>
 
 @implementation DHLogEntry
 @end
@@ -166,6 +167,42 @@ static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘�
             [fm removeItemAtPath:self->_filePath error:nil];
         }
     });
+}
+
+- (NSDictionary *)processInfo {
+    static NSDictionary *info = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSProcessInfo *pi = [NSProcessInfo processInfo];
+        NSBundle *mb = [NSBundle mainBundle];
+        char model[256] = {0}; size_t sz = sizeof(model);
+        sysctlbyname("hw.machine", model, &sz, NULL, 0);
+        NSString *appName = [mb objectForInfoDictionaryKey:@"CFBundleDisplayName"]
+                          ?: [mb objectForInfoDictionaryKey:@"CFBundleName"] ?: @"";
+        info = @{
+            @"pid":             @(pi.processIdentifier),
+            @"processName":     pi.processName ?: @"",
+            @"bundleId":        mb.bundleIdentifier ?: @"",
+            @"appName":         appName,
+            @"systemVersion":   pi.operatingSystemVersionString ?: @"",
+            @"deviceModel":     model[0] ? [NSString stringWithUTF8String:model] : @"",
+            @"physicalMemoryMB":@(pi.physicalMemory / (1024 * 1024)),
+        };
+    });
+    return info;
+}
+
+- (NSArray<DHLogEntry *> *)snapshotMatching:(NSString *)keyword
+                                   category:(NSInteger)categoryOrMinusOne
+                                    minSize:(NSUInteger)minBytes {
+    NSArray<DHLogEntry *> *base = [self snapshotMatching:keyword category:categoryOrMinusOne];
+    if (minBytes == 0) return base;
+    NSMutableArray *out = [NSMutableArray array];
+    for (DHLogEntry *e in base) {
+        NSUInteger maxLen = MAX(e.input.length, e.output.length);
+        if (maxLen >= minBytes) [out addObject:e];
+    }
+    return out;
 }
 
 @end

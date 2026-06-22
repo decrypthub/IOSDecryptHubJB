@@ -58,21 +58,31 @@ static DHFloatingController *gFloat = nil;
 
 - (void)build {
     CGRect screen = [UIScreen mainScreen].bounds;
-    CGFloat W = 240, H = 158;
-    CGRect frame = CGRectMake(screen.size.width - W - 12, 90, W, H);
+    CGFloat W = 248, H = 162;
+    // 初始贴右上, 顶部避开灵动岛/刘海 (保守安全值, 拖动后随用户)
+    CGRect frame = CGRectMake(screen.size.width - W - 12, 64, W, H);
     self.expandedFrame = frame;
 
     UIWindow *w = [self mostUsableWindowScene];
     w.frame = frame;
     w.windowLevel = UIWindowLevelAlert + 1000;
-    w.backgroundColor = [UIColor colorWithWhite:0.06 alpha:0.94];
-    w.layer.cornerRadius = 14;
+    w.backgroundColor = [UIColor clearColor];
+    w.layer.cornerRadius = 18;
     w.layer.masksToBounds = YES;
-    w.layer.borderWidth = 1;
-    w.layer.borderColor = [UIColor colorWithWhite:0.30 alpha:1.0].CGColor;
     w.rootViewController = [UIViewController new];
     w.rootViewController.view.backgroundColor = [UIColor clearColor];
     self.window = w;
+
+    // 毛玻璃背景 (UIVisualEffectView) — 现代玻璃质感, 取代 flat 半透明深色
+    UIVisualEffectView *glass = [[UIVisualEffectView alloc]
+        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    glass.frame = CGRectMake(0, 0, W, H);
+    glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    glass.layer.cornerRadius = 18;
+    glass.layer.masksToBounds = YES;
+    glass.layer.borderWidth = 0.5;
+    glass.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.20].CGColor;
+    [w.rootViewController.view addSubview:glass];
 
     // 标题栏
     UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W, 32)];
@@ -97,6 +107,9 @@ static DHFloatingController *gFloat = nil;
     // 拖动手势 - 标题栏
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(onPan:)];
     [bar addGestureRecognizer:pan];
+    // 缩小态下「–」展开按钮会被裁到窗外, 给标题栏加 tap: 点小窗即可展开
+    UITapGestureRecognizer *barTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onBarTap)];
+    [bar addGestureRecognizer:barTap];
 
     // 统计文本
     self.statsLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 38, W - 20, 36)];
@@ -223,6 +236,11 @@ static DHFloatingController *gFloat = nil;
         self.pauseBtn.alpha   = self.collapsed ? 0 : 1;
         self.clearBtn.alpha   = self.collapsed ? 0 : 1;
     }];
+}
+
+- (void)onBarTap {
+    // 只在缩小态点击标题栏才展开; 展开态点击不缩小, 避免误触(缩小仍用「–」按钮)
+    if (self.collapsed) [self toggleCollapsed];
 }
 
 - (void)onOpenLog {
