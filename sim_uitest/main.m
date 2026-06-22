@@ -1,6 +1,6 @@
 // sim_uitest/main.m — 交互式加密算法测试台
 // 每个按钮单独触发一类算法(而非启动一次性全跑), 便于逐个观察 hook 效果。
-// 触发后看右上角「解密助手」悬浮窗计数, 或浏览器打开 http://<ip>:8088。
+// 触发后看右上角「解密助手」悬浮窗计数, 或用浏览器打开悬浮窗显示的地址(端口自动分配)。
 //
 // 自动化测试通道: 注册 URL scheme "dhtest", 用
 //   xcrun simctl openurl <dev> dhtest://md5
@@ -12,6 +12,16 @@
 #import <CommonCrypto/CommonCryptor.h>
 #import <CommonCrypto/CommonKeyDerivation.h>
 #import <Security/Security.h>
+#import <dlfcn.h>
+
+// 运行时从注入的 dylib 取真实服务地址(端口会在 8088..8108 间自动顺延), 避免写死端口
+static NSString *gUrlHint = @"";
+static NSString *dh_real_url(void) {
+    NSString *(*fn)(void) = (NSString *(*)(void))dlsym(RTLD_DEFAULT, "dh_http_url");
+    if (!fn) return nil;
+    NSString *u = fn();
+    return (u && ![u hasPrefix:@"("]) ? u : nil;
+}
 
 @interface DHLogViewer : NSObject
 + (void)presentFromFloating;
@@ -125,7 +135,7 @@ static void do_bigdata(void) {
     [stack addArrangedSubview:title];
 
     self.status = [UILabel new];
-    self.status.text = @"点按钮触发对应算法, 看右上角悬浮窗计数 / 浏览器 :8088";
+    self.status.text = @"点按钮触发对应算法, 看右上角悬浮窗计数";
     self.status.font = [UIFont systemFontOfSize:13];
     self.status.numberOfLines = 0;
     self.status.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
@@ -157,6 +167,15 @@ static void do_bigdata(void) {
            buttons:@[@"128KB 大数据",@"全部跑一遍",@"打开日志"]
               sels:@[@"onBig",@"onAll",@"onLog"]
               keys:@[@"big",@"all",@"log"]];
+
+    // dylib 启动 HTTP 服务后异步读取真实地址(含实际端口)填入提示
+    __weak typeof(self) ws = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        NSString *u = dh_real_url();
+        gUrlHint = u ?: @"";
+        if (u) ws.status.text = [NSString stringWithFormat:@"点按钮触发对应算法, 看右上角悬浮窗计数 / 浏览器 %@", u];
+    });
 }
 
 - (void)addGroup:(UIStackView *)parent title:(NSString *)t color:(UIColor *)c
@@ -199,7 +218,8 @@ static void do_bigdata(void) {
 }
 
 - (void)flash:(NSString *)name {
-    self.status.text = [NSString stringWithFormat:@"已触发 %@, 看悬浮窗计数 / 浏览器 :8088", name];
+    NSString *u = gUrlHint.length ? [@" / 浏览器 " stringByAppendingString:gUrlHint] : @"";
+    self.status.text = [NSString stringWithFormat:@"已触发 %@, 看悬浮窗计数%@", name, u];
     self.status.textColor = [UIColor colorWithRed:0.36 green:0.92 blue:0.70 alpha:1.0];
 }
 
