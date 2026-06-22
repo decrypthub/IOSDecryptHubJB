@@ -9,7 +9,7 @@
 #       export CROSS_CC=/path/to/theos/toolchain/linux/iphone/bin/clang
 #       make linux                 -> decrypt_helper.dylib
 
-VERSION := 1.1.0
+VERSION := 1.2.0
 TARGET  := decrypt_helper.dylib
 SRC     := src/fishhook.c \
            src/log_store.m \
