@@ -56,7 +56,7 @@ static void hooked_CCHmac(CCHmacAlgorithm algorithm,
 }
 
 // ---------- streaming ----------
-// ctx pointer → (alg, key, data accumulator)
+// ctx pointer -> (alg, key, data accumulator)
 @interface DHHmacState : NSObject
 @property (nonatomic, assign) CCHmacAlgorithm alg;
 @property (nonatomic, strong) NSData *key;

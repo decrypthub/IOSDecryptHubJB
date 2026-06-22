@@ -6,14 +6,14 @@
 // 为什么这样做:
 //   * 单参数版本 (CC_MD5/CC_SHA256 等) 一次拿到完整 data, 简单.
 //   * 流式版本 update 时调用方可能切片喂入, 必须把切片粘起来才能看到完整明文.
-//   * 用一个全局 NSMapTable (ctx指针 → NSMutableData) 关联, _Final 时取出并清理.
+//   * 用一个全局 NSMapTable (ctx指针 -> NSMutableData) 关联, _Final 时取出并清理.
 
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonDigest.h>
 #import "fishhook.h"
 #import "log_store.h"
 
-// =================== ctx ↔ buffer 关联 ===================
+// =================== ctx <-> buffer 关联 ===================
 static NSMapTable *gCtxBuffers = nil;     // weak->strong 不合适 (ctx 是裸指针), 用 strong->strong with manual cleanup
 static dispatch_semaphore_t gCtxLock = nil;
 

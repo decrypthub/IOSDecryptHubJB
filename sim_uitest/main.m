@@ -119,13 +119,13 @@ static void do_bigdata(void) {
     ]];
 
     UILabel *title = [UILabel new];
-    title.text = @"🔐 加密算法测试台";
+    title.text = @"加密算法测试台";
     title.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
     title.textColor = [UIColor whiteColor];
     [stack addArrangedSubview:title];
 
     self.status = [UILabel new];
-    self.status.text = @"点按钮触发对应算法 → 看右上角悬浮窗计数 / 浏览器 :8088";
+    self.status.text = @"点按钮触发对应算法, 看右上角悬浮窗计数 / 浏览器 :8088";
     self.status.font = [UIFont systemFontOfSize:13];
     self.status.numberOfLines = 0;
     self.status.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
@@ -199,7 +199,7 @@ static void do_bigdata(void) {
 }
 
 - (void)flash:(NSString *)name {
-    self.status.text = [NSString stringWithFormat:@"✓ 已触发 %@ — 看悬浮窗计数 / 浏览器 :8088", name];
+    self.status.text = [NSString stringWithFormat:@"已触发 %@, 看悬浮窗计数 / 浏览器 :8088", name];
     self.status.textColor = [UIColor colorWithRed:0.36 green:0.92 blue:0.70 alpha:1.0];
 }
 

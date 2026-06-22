@@ -57,7 +57,7 @@ static NSString *get_local_ip(void) {
             inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf));
             NSString *ifn = [NSString stringWithUTF8String:p->ifa_name];
             NSString *ip  = [NSString stringWithUTF8String:buf];
-            // 优先 Wi-Fi (en0) → 蜂窝 (pdp_ip0) → 其它
+            // 优先 Wi-Fi (en0) -> 蜂窝 (pdp_ip0) -> 其它
             if ([ifn isEqualToString:@"en0"]) { best = ip; break; }
             if ([ifn hasPrefix:@"en"] && !best) best = ip;
             if (!fallback) fallback = ip;
