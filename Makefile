@@ -46,7 +46,7 @@ CFLAGS  := -arch $(ARCH) \
 
 all: $(TARGET)
 
-$(TARGET): $(SRC)
+$(TARGET): $(SRC) $(wildcard src/*.h)
 	@echo "[*] 使用 $(CC) 编译..."
 	$(CC) $(CFLAGS) $(SRC) -o $(TARGET)
 	@echo "✅ 编译完成: $(TARGET)"
