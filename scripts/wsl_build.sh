@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 解密助手 - 在 WSL 里用 swift-toolchain 交叉编译 (跳过 make, 直接 clang)
+# IOSDecryptHub - 在 WSL 里用 swift-toolchain 交叉编译 (跳过 make, 直接 clang)
 set -euo pipefail
 source "$HOME/dh-cross/env.sh"
 cd /mnt/c/Users/diiho/Claude/finshhook-plugin
@@ -7,16 +7,21 @@ echo "CC : $CROSS_CC"
 echo "SDK: $IOS_SDK"
 
 SRCS=(
-  src/fishhook.c
-  src/log_store.m
-  src/hook_digest.m
-  src/hook_hmac.m
-  src/hook_symmetric.m
-  src/hook_asymmetric.m
-  src/http_server.m
-  src/ui_float.m
-  src/ui_logview.m
-  src/main.m
+  src/core/fishhook.c
+  src/core/dh_health.c
+  src/core/log_store.m
+  src/hooks/crypto/hook_digest.m
+  src/hooks/crypto/hook_hmac.m
+  src/hooks/crypto/hook_symmetric.m
+  src/hooks/crypto/hook_asymmetric.m
+  src/hooks/crypto/hook_kdf.m
+  src/hooks/behavior/hook_network.m
+  src/hooks/behavior/hook_file.m
+  src/hooks/behavior/hook_system.m
+  src/server/http_server.m
+  src/ui/ui_float.m
+  src/ui/ui_logview.m
+  src/core/main.m
 )
 
 OUT=decrypt_helper.dylib
@@ -25,11 +30,12 @@ OUT=decrypt_helper.dylib
   -isysroot "$IOS_SDK" \
   -dynamiclib \
   -install_name "@executable_path/$OUT" \
-  -Xlinker -current_version -Xlinker 1.1.0 \
+  -Xlinker -current_version -Xlinker 1.5.0 \
   -Xlinker -compatibility_version -Xlinker 1.0.0 \
   -ObjC -fobjc-arc \
   -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
   -Os \
+  -Isrc/core -Isrc/server -Isrc/ui \
   -framework Foundation -framework UIKit -framework CoreGraphics -framework Security \
   "${SRCS[@]}" -o "$OUT"
 

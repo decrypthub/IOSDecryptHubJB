@@ -111,24 +111,24 @@ Release 附带一个已注入 dylib 的测试 IPA（未签名），重签后即�
 
 ```
 src/
-  fishhook.{c,h}        上游 fishhook
-  log_store.{h,m}       日志中心 (环形缓冲 + 异步落盘 + 分类计数 + 进程信息)
-  hook_digest.m         摘要 hook
-  hook_hmac.m           HMAC hook
-  hook_symmetric.m      对称加密 hook
-  hook_asymmetric.m     非对称 hook
-  hook_kdf.m            PBKDF2 密钥派生 hook
-  hook_network.m        网络 hook (connect / SSL_write / SSL_read)
-  hook_file.m           文件 hook (open / write / unlink / rename)
-  hook_system.m         系统 hook (dlopen)
-  dh_health.{h,c}       健康状态中心 (fail-loud) + 递归保护
-  http_server.{h,m}     零依赖本地 HTTP 服务
-  web_index_html.h      内嵌的单页前端
-  ui_float.{h,m}        悬浮控制窗
-  ui_logview.{h,m}      全屏日志查看器
-  main.m                注入入口 (构造函数)
-sim_uitest/             交互式测试宿主 App
+  core/                 核心引擎
+    fishhook.{c,h}      上游 fishhook (符号表重绑定)
+    dh_health.{h,c}     健康状态中心 (fail-loud) + 递归保护 dh_in_hook
+    log_store.{h,m}     日志中心 (环形缓冲 + 异步落盘 + 分类计数 + 进程信息)
+    main.m              注入入口 (构造函数, 安装所有 hook)
+  hooks/
+    crypto/             加解密 hook: digest / hmac / symmetric / asymmetric / kdf
+    behavior/           行为 hook: network(connect/SSL) / file(open/write/...) / system(dlopen)
+  server/
+    http_server.{h,m}   零依赖本地 HTTP 服务
+    web_index_html.h    内嵌单页前端 (多 tab master-detail)
+  ui/
+    ui_float.{h,m}      悬浮控制窗
+    ui_logview.{h,m}    全屏日志查看器
+sim_uitest/             交互式测试宿主 App (分 tab + mock SSL)
 scripts/inject.sh       IPA 注入脚本
+
+编译时 -Isrc/core -Isrc/server -Isrc/ui 提供头搜索路径, 故各文件 #import "xxx.h" 无需带目录前缀。
 ```
 
 ## 关注公众号

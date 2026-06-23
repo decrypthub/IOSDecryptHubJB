@@ -11,23 +11,24 @@
 
 VERSION := 1.5.0
 TARGET  := decrypt_helper.dylib
-SRC     := src/fishhook.c \
-           src/dh_health.c \
-           src/log_store.m \
-           src/hook_digest.m \
-           src/hook_hmac.m \
-           src/hook_symmetric.m \
-           src/hook_asymmetric.m \
-           src/hook_kdf.m \
-           src/hook_network.m \
-           src/hook_file.m \
-           src/hook_system.m \
-           src/http_server.m \
-           src/ui_float.m \
-           src/ui_logview.m \
-           src/main.m
+SRC     := src/core/fishhook.c \
+           src/core/dh_health.c \
+           src/core/log_store.m \
+           src/hooks/crypto/hook_digest.m \
+           src/hooks/crypto/hook_hmac.m \
+           src/hooks/crypto/hook_symmetric.m \
+           src/hooks/crypto/hook_asymmetric.m \
+           src/hooks/crypto/hook_kdf.m \
+           src/hooks/behavior/hook_network.m \
+           src/hooks/behavior/hook_file.m \
+           src/hooks/behavior/hook_system.m \
+           src/server/http_server.m \
+           src/ui/ui_float.m \
+           src/ui/ui_logview.m \
+           src/core/main.m
 
 FRAMEWORKS := -framework Foundation -framework UIKit -framework CoreGraphics -framework Security
+INCLUDES   := -Isrc/core -Isrc/server -Isrc/ui
 ARCH       := arm64
 MIN_IOS    := 14.0
 
@@ -45,11 +46,12 @@ CFLAGS  := -arch $(ARCH) \
            -ObjC -fobjc-arc \
            -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
            -Os \
+           $(INCLUDES) \
            $(FRAMEWORKS)
 
 all: $(TARGET)
 
-$(TARGET): $(SRC) $(wildcard src/*.h)
+$(TARGET): $(SRC) $(wildcard src/*/*.h)
 	@echo "[*] 使用 $(CC) 编译..."
 	$(CC) $(CFLAGS) $(SRC) -o $(TARGET)
 	@echo "✅ 编译完成: $(TARGET)"
@@ -68,6 +70,7 @@ linux:
 	    -ObjC -fobjc-arc \
 	    -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
 	    -Os \
+	    $(INCLUDES) \
 	    $(FRAMEWORKS) \
 	    $(SRC) -o $(TARGET)
 	@command -v ldid >/dev/null 2>&1 && ldid -S $(TARGET) && echo "✅ 已用 ldid 自签" || echo "⚠️ 未找到 ldid, 请手动签名"
@@ -90,6 +93,7 @@ MAC_CFLAGS := -arch $(MAC_ARCH) \
               -ObjC -fobjc-arc \
               -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
               -O0 -g \
+              $(INCLUDES) \
               $(MAC_FRAMEWORKS)
 
 mac: $(MAC_TARGET)
