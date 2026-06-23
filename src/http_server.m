@@ -25,6 +25,7 @@
 #import "http_server.h"
 #import "log_store.h"
 #import "web_index_html.h"
+#import "dh_health.h"
 
 #define DH_HTTP_PORT_FIRST  8088
 #define DH_HTTP_PORT_LAST   8108
@@ -64,7 +65,11 @@ static NSString *get_local_ip(void) {
         }
         freeifaddrs(ifa);
     }
-    return best ?: fallback ?: @"127.0.0.1";
+    if (best) return best;
+    if (fallback) return fallback;
+    // fail-loud(info): 没有任何非回环 IP, 服务只能本地访问 —— 明示而非假装一切正常.
+    dh_health_note_localonly();
+    return @"127.0.0.1";
 }
 
 static NSString *url_decode(NSString *s) {
@@ -129,8 +134,15 @@ static void send_response(int fd, int status, NSString *statusMsg, NSString *con
 }
 
 static void send_json(int fd, int status, id obj) {
-    NSData *body = [NSJSONSerialization dataWithJSONObject:obj ?: @{}
-                                                   options:0 error:nil] ?: [NSData data];
+    NSError *jerr = nil;
+    NSData *body = [NSJSONSerialization dataWithJSONObject:obj ?: @{} options:0 error:&jerr];
+    if (!body) {
+        // fail-loud: 序列化失败返回 500 + 明确错误, 而不是静默回空让客户端以为「无数据」.
+        DH_ERR(@"JSON 序列化失败: %@", jerr.localizedDescription);
+        NSData *eb = [@"{\"error\":\"json encode failed\"}" dataUsingEncoding:NSUTF8StringEncoding];
+        send_response(fd, 500, @"Error", @"application/json; charset=utf-8", eb);
+        return;
+    }
     send_response(fd, status, status == 200 ? @"OK" : @"Error", @"application/json; charset=utf-8", body);
 }
 
@@ -198,6 +210,7 @@ static void handle_stats(int fd) {
         @([s countForCategory:DHCategoryAsymmetric]),
         @([s countForCategory:DHCategoryOther]),
     ];
+    const char *hsum = dh_health_summary();
     send_json(fd, 200, @{
         @"total":       @(s.totalCount),
         @"paused":      @(s.paused),
@@ -205,6 +218,13 @@ static void handle_stats(int fd) {
         @"port":        @(gPort),
         @"version":     @DH_HTTP_VERSION,
         @"process":     [s processInfo],
+        @"health":      @{
+            @"hookFails":     @(dh_health_hook_fail_count()),
+            @"persistFailed": dh_health_persist_failed() ? @YES : @NO,
+            @"httpFailed":    dh_health_http_failed() ? @YES : @NO,
+            @"localOnly":     dh_health_local_only() ? @YES : @NO,
+            @"summary":       (hsum && hsum[0]) ? [NSString stringWithUTF8String:hsum] : @"",
+        },
     });
 }
 
@@ -266,14 +286,23 @@ static void handle_download(int fd) {
 
     // 64KB 分块, 避免一次性把整个日志文件吃进内存
     NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
-    if (!fh) return;
+    if (!fh) {
+        // fail-loud: header(含 Content-Length) 已发出但打不开文件, 连接会被中断而非静默补 0.
+        DH_ERR(@"下载: 无法读取日志文件 %@, 连接将中断", path);
+        return;
+    }
     @try {
         while (1) {
             NSData *chunk = [fh readDataOfLength:64 * 1024];
             if (chunk.length == 0) break;
-            if (!write_all(fd, chunk.bytes, chunk.length)) break;
+            if (!write_all(fd, chunk.bytes, chunk.length)) {
+                DH_ERR(@"下载: 发送数据块失败(客户端可能已断开), 连接中断");
+                break;
+            }
         }
-    } @catch (__unused NSException *e) {}
+    } @catch (NSException *e) {
+        DH_ERR(@"下载: 读取日志文件异常: %@", e.reason);
+    }
     [fh closeFile];
 }
 
@@ -415,8 +444,8 @@ void dh_http_start(void) {
             if (fd >= 0) { gListenFD = fd; gPort = p; break; }
         }
         if (gListenFD < 0) {
-            NSLog(@"[解密助手] HTTP 服务启动失败: %s..%s 端口都被占用",
-                  "8088", "8108");
+            NSLog(@"[解密助手] HTTP 服务启动失败: %s..%s 端口都被占用", "8088", "8108");
+            dh_health_http_fail("端口 8088..8108 全被占用, 本地服务不可用");
             return;
         }
         NSString *ip = get_local_ip();
@@ -425,6 +454,7 @@ void dh_http_start(void) {
         gWorkerQ = dispatch_queue_create("com.decrypthelper.http.worker", DISPATCH_QUEUE_CONCURRENT);
         gConcurrency = dispatch_semaphore_create(DH_HTTP_MAX_CONCURRENCY);
         dispatch_async(gAcceptQ, ^{ accept_loop(); });
+        dh_health_http_ok();
         NSLog(@"[解密助手] HTTP 服务已启动: %@", gURL);
     });
 }

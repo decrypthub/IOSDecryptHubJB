@@ -9,6 +9,7 @@
 #import <Security/Security.h>
 #import "fishhook.h"
 #import "log_store.h"
+#import "dh_health.h"
 
 static NSString *describe_key(SecKeyRef key) {
     if (!key) return @"(null)";
@@ -35,9 +36,14 @@ static NSString *describe_key(SecKeyRef key) {
             // 取前 24 字节做指纹
             NSUInteger n = MIN(pd.length, 24u);
             [out appendFormat:@" pubFP=%@…", DHHexFromData([pd subdataWithRange:NSMakeRange(0,n)])];
+        } else {
+            // fail-loud: 导出失败时明确标注, 而非留空让人以为没有公钥
+            [out appendFormat:@" pubExportFailed(err=%ld)", err ? (long)CFErrorGetCode(err) : -1L];
         }
         if (err) CFRelease(err);
         CFRelease(pub);
+    } else {
+        [out appendString:@" pubKeyUnavailable"];
     }
     return out;
 }
@@ -123,4 +129,7 @@ void dh_install_asymmetric_hooks(void) {
         {"SecKeyCreateDecryptedData", hooked_SecKeyCreateDecryptedData, (void **)&orig_SecKeyCreateDecryptedData},
     };
     rebind_symbols(r, sizeof(r)/sizeof(r[0]));
+    // 注: 不在此做安装后自检 —— Security.framework 可能在 dylib 注入后才被宿主加载,
+    // 此刻 orig 仍为 NULL 是正常的(随后 add-image 回调会补挂), 误报反而违背 fail-loud 初衷.
+    // 真正没挂上的情形会在 SecKey* 调用发生却无日志时体现.
 }

@@ -10,6 +10,7 @@
 #import <CommonCrypto/CommonKeyDerivation.h>
 #import "fishhook.h"
 #import "log_store.h"
+#import "dh_health.h"
 
 static const char *prf_name(CCPseudoRandomAlgorithm prf) {
     switch (prf) {
@@ -46,7 +47,9 @@ static int hooked_CCKeyDerivationPBKDF(CCPBKDFAlgorithm algorithm,
         e.timestamp = DHTimestampNow();
         e.callStack = DHCallStackFiltered();
         [[DHLogStore shared] append:e];
-    } @catch (__unused NSException *ex) {}
+    } @catch (NSException *ex) {
+        DH_ERR(@"PBKDF2 记录失败: %@", ex.reason);
+    }
     return r;
 }
 
@@ -55,4 +58,7 @@ void dh_install_kdf_hooks(void) {
         {"CCKeyDerivationPBKDF", hooked_CCKeyDerivationPBKDF, (void **)&orig_CCKeyDerivationPBKDF},
     };
     rebind_symbols(r, sizeof(r) / sizeof(r[0]));
+    // 安装后自检(fail-loud): orig 仍为 NULL 即没挂上. CommonCrypto 注入时必已加载.
+    for (size_t k = 0; k < sizeof(r)/sizeof(r[0]); k++)
+        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(r[k].name);
 }

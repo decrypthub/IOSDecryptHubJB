@@ -12,6 +12,7 @@
 VERSION := 1.2.0
 TARGET  := decrypt_helper.dylib
 SRC     := src/fishhook.c \
+           src/dh_health.c \
            src/log_store.m \
            src/hook_digest.m \
            src/hook_hmac.m \

@@ -13,6 +13,7 @@
 #import "ui_logview.h"
 #import "log_store.h"
 #import "http_server.h"
+#import "dh_health.h"
 
 #define DH_ACCENT [UIColor colorWithRed:0.36 green:0.92 blue:0.70 alpha:1.0]
 
@@ -206,10 +207,29 @@ static DHFloatingController *gFloat = nil;
         state, (unsigned long)[s totalCount],
         (unsigned long)d, (unsigned long)h, (unsigned long)sym, (unsigned long)asym];
 
+    // fail-loud: 把健康状态显示出来 —— 服务失败/hook未挂上/落盘失败都用红字明示,
+    // 而不是恒显"启动中…"假装一切正常.
+    const char *hc = dh_health_summary();
+    NSString *health = (hc && hc[0]) ? [NSString stringWithUTF8String:hc] : @"";
+    UIColor *blue = [UIColor colorWithRed:0.45 green:0.85 blue:1.0 alpha:1.0];
+    UIColor *red  = [UIColor colorWithRed:0.98 green:0.45 blue:0.42 alpha:1.0];
+
     uint16_t port = dh_http_port();
-    if (port > 0) {
-        self.urlLabel.text = [NSString stringWithFormat:@"%@\n(点这里复制)", dh_http_url()];
+    if (dh_health_http_failed()) {
+        self.urlLabel.textColor = red;
+        self.urlLabel.text = [NSString stringWithFormat:@"服务失败\n%@", health.length ? health : @"端口被占用"];
+    } else if (port > 0) {
+        NSString *url = dh_http_url();
+        if (dh_health_local_only()) url = [url stringByAppendingString:@" (仅本地)"];
+        if (health.length) {
+            self.urlLabel.textColor = red;
+            self.urlLabel.text = [NSString stringWithFormat:@"%@\n⚠ %@", url, health];
+        } else {
+            self.urlLabel.textColor = blue;
+            self.urlLabel.text = [NSString stringWithFormat:@"%@\n(点这里复制)", url];
+        }
     } else {
+        self.urlLabel.textColor = blue;
         self.urlLabel.text = @"(本地服务启动中…)";
     }
 }

@@ -176,6 +176,12 @@ static void do_bigdata(void) {
         gUrlHint = u ?: @"";
         if (u) ws.status.text = [NSString stringWithFormat:@"点按钮触发对应算法, 看右上角悬浮窗计数 / 浏览器 %@", u];
     });
+
+    // 截图/自动化: 设 DH_AUTOLOG=1 启动后自动打开日志查看器(走 triggerByKey, 免去 simctl openurl 的系统确认框)
+    if ([[NSProcessInfo processInfo].environment[@"DH_AUTOLOG"] isEqualToString:@"1"]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.3 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [ws triggerByKey:@"log"]; });
+    }
 }
 
 - (void)addGroup:(UIStackView *)parent title:(NSString *)t color:(UIColor *)c
@@ -277,6 +283,13 @@ static void do_bigdata(void) {
     self.window = [[UIWindow alloc] initWithWindowScene:ws];
     self.window.rootViewController = [TestVC new];
     [self.window makeKeyAndVisible];
+    // 冷启动经 dhtest:// 唤起时 URL 在 connectionOptions 里, 补触发(否则冷启动不响应)
+    if (connectionOptions.URLContexts.count) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [self scene:scene openURLContexts:connectionOptions.URLContexts];
+        });
+    }
 }
 
 - (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {

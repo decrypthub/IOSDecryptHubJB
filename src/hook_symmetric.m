@@ -6,6 +6,7 @@
 #import <CommonCrypto/CommonCryptor.h>
 #import "fishhook.h"
 #import "log_store.h"
+#import "dh_health.h"
 
 static NSString *sym_alg_name(CCAlgorithm a) {
     switch (a) {
@@ -212,7 +213,12 @@ static CCCryptorStatus hooked_CCCryptorFinal(CCCryptorRef cryptorRef,
         }
     }
     dispatch_semaphore_signal(gCryptorLock);
-    if (!st) return s;
+    if (!st) {
+        // fail-loud: 这个 cryptorRef 从没被 Create hook 记录过 —— 流式加密被漏抓.
+        // 通常意味着 CCCryptorCreate* 没挂上, 或 App 用了未 hook 的创建函数(如 CCCryptorCreateFromData).
+        DH_ERR(@"CCCryptorFinal 收到未跟踪的 cryptorRef=%p, 流式加密漏抓", cryptorRef);
+        return s;
+    }
 
     DHLogEntry *e = [DHLogEntry new];
     e.category   = DHCategorySymmetric;
@@ -247,4 +253,7 @@ void dh_install_symmetric_hooks(void) {
         {"CCCryptorRelease",        hooked_CCCryptorRelease,        (void **)&orig_CCCryptorRelease},
     };
     rebind_symbols(r, sizeof(r)/sizeof(r[0]));
+    // 安装后自检(fail-loud): orig 仍为 NULL 即没挂上. CommonCrypto 注入时必已加载.
+    for (size_t k = 0; k < sizeof(r)/sizeof(r[0]); k++)
+        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(r[k].name);
 }

@@ -6,11 +6,13 @@
 
 ## 截图
 
-交互式测试台（逐个触发各类算法）与内置 Web 日志面板（含进程信息、大小过滤、分类着色、详情展开）：
+覆盖三种查看方式：交互式测试台逐个触发算法、内置 Web 日志面板、iOS 悬浮窗与全屏日志查看器。
 
 | 交互式测试台 | Web 日志面板 |
 | --- | --- |
 | ![test-host](docs/screenshots/01-test-host.png) | ![web-panel](docs/screenshots/02-web-panel.png) |
+| 悬浮窗（毛玻璃，可拖动、可收起成胶囊） | 全屏日志查看器（分类切换、搜索、详情展开） |
+| ![floating](docs/screenshots/03-floating.png) | ![logview](docs/screenshots/04-logview.png) |
 
 ## 覆盖的算法
 
@@ -37,12 +39,21 @@
 - 内存中按环形缓冲保留最近若干条；单段 blob 落盘有上限（默认 64KB），避免大数据撑爆内存。
 - HTTP 服务用信号量限制并发连接、设读超时、fd 耗尽时指数退避，并支持日志文件分块下载。
 
+## 健康监控（fail-loud）
+
+hook 框架最怕「时好时坏」：某个符号没挂上、服务端口被占、日志落盘失败却被静默兜底，让你以为一切正常，真正的失效点被掩盖、难以定位。本插件坚持 fail-loud——失效就让它可见：
+
+- 每个 hook 模块安装后立即自检，没挂上的符号会被记录（MD2/MD4 等系统已移除的废弃算法除外，避免常态化误报淹没真正的告警）。
+- HTTP 服务起不来、日志落盘失败、流式加密遇到未跟踪的上下文，都会上报。
+- 失效状态三处同时可见：悬浮窗顶部红字、Web 面板红色横幅、控制台 `[解密助手/ERR]` 日志，一眼定位失效锚点，但不中止宿主 App。
+- `GET /api/stats` 的 `health` 字段暴露 hook 失败数与落盘/服务状态，便于自动化巡检。
+
 ## HTTP API
 
 | 端点 | 说明 |
 | --- | --- |
 | GET / | 嵌入式单页前端 |
-| GET /api/stats | total / paused / byCategory / port / version / process（进程信息） |
+| GET /api/stats | total / paused / byCategory / port / version / process（进程信息）/ health（健康状态） |
 | GET /api/logs?cat=N&q=KW&minSize=N&since=SEQ&limit=N | 日志摘要数组，minSize 按字节数过滤 |
 | GET /api/logs/:seq | 单条详情（含 Hex / HexDump / 调用栈） |
 | POST /api/clear | 清空内存与文件 |

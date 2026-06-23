@@ -22,7 +22,9 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "fishhook.h"
+#include "dh_health.h"
 
+#include <stdio.h>
 #include <dlfcn.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -154,6 +156,10 @@ static void perform_rebinding_with_section(struct rebindings_entry *rebindings,
              * -- Lionfore Hao Jun 11th, 2021
              **/
             indirect_symbol_bindings[i] = cur->rebindings[j].replacement;
+          } else {
+            // fail-loud: 找到了符号但 vm_protect 失败, 替换没写进去 = hook 未生效.
+            // 上报健康中心(内部已写 stderr 并去重).
+            dh_health_hook_fail(cur->rebindings[j].name);
           }
           goto symbol_loop;
         }
@@ -169,6 +175,9 @@ static void rebind_symbols_for_image(struct rebindings_entry *rebindings,
                                      intptr_t slide) {
   Dl_info info;
   if (dladdr(header, &info) == 0) {
+    // fail-loud: 整个 image 无法定位, 其上所有待 hook 的符号都会被静默跳过.
+    fprintf(stderr, "[解密助手/ERR] dladdr 失败, 跳过 image header=%p (该 image 的 hook 全部未生效)\n",
+            (const void *)header);
     return;
   }
 

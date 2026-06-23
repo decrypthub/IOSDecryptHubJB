@@ -12,6 +12,7 @@
 #import <CommonCrypto/CommonDigest.h>
 #import "fishhook.h"
 #import "log_store.h"
+#import "dh_health.h"
 
 // =================== ctx <-> buffer 关联 ===================
 static NSMapTable *gCtxBuffers = nil;     // weak->strong 不合适 (ctx 是裸指针), 用 strong->strong with manual cleanup
@@ -158,4 +159,12 @@ void dh_install_digest_hooks(void) {
         {"CC_SHA512_Final", hooked_CC_SHA512_Final,   (void **)&orig_CC_SHA512_Final},
     };
     rebind_symbols(r, sizeof(r)/sizeof(r[0]));
+    // 安装后自检(fail-loud): 没匹配到的符号其 orig 指针仍为 NULL = 没挂上.
+    // CommonCrypto 属 libSystem, 注入时必已加载, 此处检查可靠.
+    // 例外: MD2/MD4 已废弃, 新系统(iOS 26+)可能不再导出这些符号, 属 best-effort.
+    // 它们没挂上是系统行为而非我们的失效, 不纳入告警 —— 否则常态化误报会淹没真正的告警(狼来了).
+    for (size_t k = 0; k < sizeof(r)/sizeof(r[0]); k++) {
+        if (strstr(r[k].name, "MD2") || strstr(r[k].name, "MD4")) continue;
+        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(r[k].name);
+    }
 }

@@ -1,6 +1,8 @@
 // log_store.m
 #import "log_store.h"
+#import "dh_health.h"
 #import <sys/sysctl.h>
+#import <errno.h>
 
 @implementation DHLogEntry
 @end
@@ -88,17 +90,29 @@ static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘�
     [s appendString:@"\n"];
 
     NSData *bytes = [s dataUsingEncoding:NSUTF8StringEncoding];
-    if (!bytes) return;
+    if (!bytes) { DH_ERR(@"日志 UTF-8 编码失败, 丢弃 #%llu", (unsigned long long)e.seq); return; }
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:_filePath]) {
-        [bytes writeToFile:_filePath atomically:YES];
+        NSError *werr = nil;
+        if (![bytes writeToFile:_filePath options:NSDataWritingAtomic error:&werr]) {
+            dh_health_persist_fail((int)werr.code);
+            DH_ERR(@"日志落盘失败(创建 %@): %@", _filePath, werr.localizedDescription);
+        }
     } else {
         NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:_filePath];
+        if (!fh) {
+            dh_health_persist_fail(errno);
+            DH_ERR(@"日志落盘失败: 无法打开 %@ (errno=%d)", _filePath, errno);
+            return;
+        }
         @try {
             [fh seekToEndOfFile];
             [fh writeData:bytes];
             [fh closeFile];
-        } @catch (__unused NSException *ex) {}
+        } @catch (NSException *ex) {
+            dh_health_persist_fail(errno);
+            DH_ERR(@"日志落盘失败(追加): %@", ex.reason);
+        }
     }
 }
 

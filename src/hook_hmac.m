@@ -6,6 +6,7 @@
 #import <CommonCrypto/CommonHMAC.h>
 #import "fishhook.h"
 #import "log_store.h"
+#import "dh_health.h"
 
 static NSString *hmac_alg_name(CCHmacAlgorithm a) {
     switch (a) {
@@ -132,4 +133,7 @@ void dh_install_hmac_hooks(void) {
         {"CCHmacFinal",  hooked_CCHmacFinal,  (void **)&orig_CCHmacFinal},
     };
     rebind_symbols(r, sizeof(r)/sizeof(r[0]));
+    // 安装后自检(fail-loud): orig 仍为 NULL 即没挂上. CommonCrypto 注入时必已加载.
+    for (size_t k = 0; k < sizeof(r)/sizeof(r[0]); k++)
+        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(r[k].name);
 }
