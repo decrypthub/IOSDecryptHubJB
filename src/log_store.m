@@ -73,6 +73,9 @@ static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘�
     if (e.publicKeyInfo) {
         [s appendFormat:@"-- KeyInfo: %@\n", e.publicKeyInfo];
     }
+    if (e.detail) {
+        [s appendFormat:@"-- Detail: %@\n", e.detail];
+    }
     if (e.input) {
         NSData *d = e.input.length > kMaxBlobLogged
             ? [e.input subdataWithRange:NSMakeRange(0, kMaxBlobLogged)] : e.input;
@@ -91,28 +94,35 @@ static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘�
 
     NSData *bytes = [s dataUsingEncoding:NSUTF8StringEncoding];
     if (!bytes) { DH_ERR(@"日志 UTF-8 编码失败, 丢弃 #%llu", (unsigned long long)e.seq); return; }
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:_filePath]) {
-        NSError *werr = nil;
-        if (![bytes writeToFile:_filePath options:NSDataWritingAtomic error:&werr]) {
-            dh_health_persist_fail((int)werr.code);
-            DH_ERR(@"日志落盘失败(创建 %@): %@", _filePath, werr.localizedDescription);
+    // 关键: 落盘自身的 open/write(写 decrypt_helper.log) 不能被 file hook 再记录, 否则
+    // write -> 记录 -> append -> _persist -> write 无限自我循环. 落盘期间置 dh_in_hook.
+    dh_in_hook = 1;
+    @try {
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if (![fm fileExistsAtPath:_filePath]) {
+            NSError *werr = nil;
+            if (![bytes writeToFile:_filePath options:NSDataWritingAtomic error:&werr]) {
+                dh_health_persist_fail((int)werr.code);
+                DH_ERR(@"日志落盘失败(创建 %@): %@", _filePath, werr.localizedDescription);
+            }
+        } else {
+            NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:_filePath];
+            if (!fh) {
+                dh_health_persist_fail(errno);
+                DH_ERR(@"日志落盘失败: 无法打开 %@ (errno=%d)", _filePath, errno);
+            } else {
+                @try {
+                    [fh seekToEndOfFile];
+                    [fh writeData:bytes];
+                    [fh closeFile];
+                } @catch (NSException *ex) {
+                    dh_health_persist_fail(errno);
+                    DH_ERR(@"日志落盘失败(追加): %@", ex.reason);
+                }
+            }
         }
-    } else {
-        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:_filePath];
-        if (!fh) {
-            dh_health_persist_fail(errno);
-            DH_ERR(@"日志落盘失败: 无法打开 %@ (errno=%d)", _filePath, errno);
-            return;
-        }
-        @try {
-            [fh seekToEndOfFile];
-            [fh writeData:bytes];
-            [fh closeFile];
-        } @catch (NSException *ex) {
-            dh_health_persist_fail(errno);
-            DH_ERR(@"日志落盘失败(追加): %@", ex.reason);
-        }
+    } @finally {
+        dh_in_hook = 0;
     }
 }
 
@@ -126,12 +136,16 @@ static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘�
                                     category:(NSInteger)categoryOrMinusOne {
     __block NSArray *src = nil;
     dispatch_sync(_queue, ^{ src = [self->_entries copy]; });
-    if ((!keyword || keyword.length == 0) && categoryOrMinusOne < 0) return src;
+    if ((!keyword || keyword.length == 0) && categoryOrMinusOne == -1) return src;
 
     NSMutableArray *out = [NSMutableArray array];
     NSString *kw = [keyword lowercaseString];
     for (DHLogEntry *e in src) {
-        if (categoryOrMinusOne >= 0 && e.category != categoryOrMinusOne) continue;
+        if (categoryOrMinusOne == -2) {
+            if (e.category > DHCategoryAsymmetric) continue;   // 加密组 (0..3)
+        } else if (categoryOrMinusOne >= 0 && e.category != categoryOrMinusOne) {
+            continue;
+        }
         if (kw.length) {
             BOOL hit = NO;
             if ([[e.algorithm lowercaseString] containsString:kw]) hit = YES;

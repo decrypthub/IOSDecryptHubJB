@@ -20,6 +20,11 @@
 extern "C" {
 #endif
 
+// 线程局部递归保护: hook 记录路径会用 Foundation API(NSDateFormatter/backtrace 等),
+// 其内部可能再触发同类系统调用(open/dlopen 被 os_log/locale 内部调用); 置 1 时各 hook
+// 直接放行不记录, 防止递归死锁。
+extern __thread int dh_in_hook;
+
 // ---- 上报失效 ----
 void dh_health_hook_fail(const char *sym);      // 某符号 rebind 后 orig 仍为 NULL = 没挂上
 void dh_health_persist_fail(int err);           // 日志落盘失败 (errno)

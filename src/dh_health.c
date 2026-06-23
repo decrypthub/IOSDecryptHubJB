@@ -17,6 +17,8 @@ static char g_hook_names[256] = {0};   // 拼接没挂上的符号名
 static char g_http_reason[128] = {0};
 static char g_summary[512]     = {0};
 
+__thread int dh_in_hook = 0;   // 见 dh_health.h: hook 记录路径的递归保护标志
+
 void dh_health_hook_fail(const char *sym) {
     // 去重: vm_protect 失败可能在多个 image / 多次 add-image 回调里对同一符号重复触发,
     // 计数应反映「不同失败符号数」而非触发次数。

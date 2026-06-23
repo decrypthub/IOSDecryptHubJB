@@ -1,6 +1,6 @@
 # IOSDecryptHub
 
-基于 fishhook 的 iOS App 行为监控平台。当前已实现**加解密审计**：透明拦截系统加解密、哈希、密钥派生 API，记录每次调用的算法、操作、Key、IV、明文、密文、派生密钥及应用层调用栈，用于快速还原一个 App 的加密体系。Web 面板采用多 tab 架构，网络抓包、文件监控、内存追踪、动态库加载、调用链追踪等方向已留好扩展位（开发中）。
+基于 fishhook 的 iOS App 行为监控平台。已实现四类监控：**加解密审计**（哈希 / HMAC / 对称 / 非对称 / KDF 的算法、Key、IV、明文、密文）、**网络抓包**（connect 目标 + SSL_write/SSL_read 的 TLS 明文请求与响应）、**文件监控**（open / write / unlink / rename 沙盒文件操作）、**系统模块**（dlopen 载入的动态库），每次调用都附应用层调用栈。Web 面板多 tab 架构，浏览器即可实时查看。
 
 注入到目标 App 后，它自己调用系统加密 API 时，你能在旁边实时看到全部参数。
 
@@ -34,18 +34,18 @@ Web 面板（多 tab + 宿主 App 图标 + 左右分栏 master-detail）、交�
 
 安全提示：Web 服务无认证、监听所有网卡（0.0.0.0），会把 Key 与明文暴露给同网络中任何能连接的人，仅建议在可信网络中调试使用。
 
-## 平台路线图
+## 监控能力
 
-Web 面板已是多 tab 架构，「加解密」tab 为完整功能，其余方向已搭好占位骨架，后续逐步实现：
+Web 面板多 tab 架构，四类监控共享同一套左右分栏 master-detail（左列表 + 右详情，详情按类型自适应字段）：
 
-| tab | 状态 | hook 目标 | 能看到什么 |
-| --- | --- | --- | --- |
-| 加解密 | 已实现 | CommonCrypto / SecKey | 算法 / Key / IV / 明文 / 密文 / 调用栈 |
-| 网络 | 开发中 | connect / send / recv / SSL_write / SSL_read | 域名 / IP / 请求响应 / 明文传输审计 |
-| 文件 | 开发中 | open / read / write / unlink / stat | 沙盒读写 / SDK 偷写缓存 |
-| 内存 | 开发中 | malloc / calloc / realloc / free | 分配统计 / 泄漏 / 大对象 |
-| 系统 | 开发中 | dlopen / dlsym / time / sysctl | 动态库加载 / 时间设备伪造 |
-| 调用链 | 开发中 | backtrace | 谁打开文件 / 发起请求 / 分配内存 |
+| tab | hook 目标 | 能看到什么 |
+| --- | --- | --- |
+| 加解密 | CommonCrypto / SecKey | 算法 / Key / IV / 明文 / 密文 / 调用栈 |
+| 网络 | connect / SSL_write / SSL_read | 目标 IP:port / TLS 明文请求与响应 |
+| 文件 | open / write / unlink / rename | 沙盒文件读写、删除、重命名（过滤系统噪音） |
+| 系统 | dlopen | 运行时载入的动态库 |
+
+> 注：网络的 SSL_write/SSL_read 抓的是 App 自带 BoringSSL/OpenSSL 的明文（系统 Network.framework 的 TLS 不走这两个符号）；内存（malloc/free）因高频且记录路径自身会触发 malloc 易递归，暂不纳入。
 
 ## 性能与实现要点
 

@@ -1,10 +1,9 @@
-// sim_uitest/main.m — 交互式加密算法测试台
-// 每个按钮单独触发一类算法(而非启动一次性全跑), 便于逐个观察 hook 效果。
-// 触发后看右上角「IOSDecryptHub」悬浮窗计数, 或用浏览器打开悬浮窗显示的地址(端口自动分配)。
+// sim_uitest/main.m — IOSDecryptHub 交互式测试台
+// 顶部 segment 分 tab(加解密 / 网络 / 文件 / 系统), 每个 tab 的按钮触发对应一类系统调用,
+// 便于在注入的 dylib 里逐个观察 hook 效果。不把所有按钮堆在一页。
 //
-// 自动化测试通道: 注册 URL scheme "dhtest", 用
-//   xcrun simctl openurl <dev> dhtest://md5
-// 会通过 sendActionsForControlEvents: 模拟点击对应按钮(完整 UIKit 事件分发)。
+// 自动化测试通道: 注册 URL scheme "dhtest", xcrun simctl openurl <dev> dhtest://md5
+// 会通过 sendActionsForControlEvents: 模拟点击对应按钮(即使该 tab 当前隐藏)。
 
 #import <UIKit/UIKit.h>
 #import <CommonCrypto/CommonDigest.h>
@@ -13,8 +12,18 @@
 #import <CommonCrypto/CommonKeyDerivation.h>
 #import <Security/Security.h>
 #import <dlfcn.h>
+#import <sys/socket.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
+#import <fcntl.h>
+#import <unistd.h>
 
-// 运行时从注入的 dylib 取真实服务地址(端口会在 8088..8108 间自动顺延), 避免写死端口
+// 来自 libmock_ssl.dylib —— 提供可被 fishhook 重绑定的 SSL_write/SSL_read 导入符号
+// (真实 App 自带 BoringSSL/OpenSSL 时同理)。这里不是真 TLS, 仅为演示 SSL 明文抓包。
+extern int SSL_write(void *ssl, const void *buf, int num);
+extern int SSL_read(void *ssl, void *buf, int num);
+
+// 运行时从注入的 dylib 取真实服务地址(端口在 8088..8108 间自动顺延), 避免写死端口
 static NSString *gUrlHint = @"";
 static NSString *dh_real_url(void) {
     NSString *(*fn)(void) = (NSString *(*)(void))dlsym(RTLD_DEFAULT, "dh_http_url");
@@ -27,7 +36,7 @@ static NSString *dh_real_url(void) {
 + (void)presentFromFloating;
 @end
 
-// ==================== 算法触发函数 ====================
+// ==================== 算法触发(加解密 tab) ====================
 static const char *kMsg = "decrypt-helper interactive test sample";
 
 static void do_digest(int which) {
@@ -53,14 +62,12 @@ static void do_sym(CCAlgorithm alg, size_t keyLen, size_t blockLen) {
 static void do_rc4(void) {
     unsigned char key[16]; for (int i = 0; i < 16; i++) key[i] = (unsigned char)i;
     const char *m = kMsg; unsigned char out[256]; size_t mv = 0;
-    CCCrypt(kCCEncrypt, kCCAlgorithmRC4, 0, key, sizeof(key), NULL,
-            m, strlen(m), out, sizeof(out), &mv);
+    CCCrypt(kCCEncrypt, kCCAlgorithmRC4, 0, key, sizeof(key), NULL, m, strlen(m), out, sizeof(out), &mv);
 }
 static SecKeyRef gRSA = NULL;
 static SecKeyRef rsa_key(void) {
     if (gRSA) return gRSA;
-    NSDictionary *p = @{ (id)kSecAttrKeyType: (id)kSecAttrKeyTypeRSA,
-                         (id)kSecAttrKeySizeInBits: @2048 };
+    NSDictionary *p = @{ (id)kSecAttrKeyType: (id)kSecAttrKeyTypeRSA, (id)kSecAttrKeySizeInBits: @2048 };
     gRSA = SecKeyCreateRandomKey((CFDictionaryRef)p, NULL);
     return gRSA;
 }
@@ -95,10 +102,67 @@ static void do_bigdata(void) {
     free(b); free(c);
 }
 
+// ==================== 网络触发(网络 tab) ====================
+static void do_tcp_connect(void) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return;
+    struct sockaddr_in a = {0};
+    a.sin_family = AF_INET; a.sin_port = htons(443);
+    inet_pton(AF_INET, "1.1.1.1", &a.sin_addr);
+    fcntl(fd, F_SETFL, O_NONBLOCK);          // 非阻塞, connect 调用本身即被 hook 记录
+    connect(fd, (struct sockaddr *)&a, sizeof(a));
+    close(fd);
+}
+static void do_ssl_capture(void) {
+    void *ssl = (void *)0x1;                 // mock 不解引用
+    const char *req = "POST /login HTTP/1.1\r\nHost: api.example.com\r\nContent-Type: application/json\r\n\r\n{\"user\":\"alice\",\"password\":\"my-secret-pwd\"}";
+    SSL_write(ssl, req, (int)strlen(req));    // 抓发送明文
+    char buf[512];
+    SSL_read(ssl, buf, sizeof(buf));          // 抓接收明文(mock 返回含 token 的响应)
+}
+
+// ==================== 文件触发(文件 tab) ====================
+static NSString *test_file_path(void) {
+    NSArray *p = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    return [[p firstObject] stringByAppendingPathComponent:@"iosdh_test.txt"];
+}
+static void do_file_write(void) {
+    NSString *p = test_file_path();
+    int fd = open(p.UTF8String, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd >= 0) {
+        const char *data = "IOSDecryptHub file hook test - 文件操作测试数据\n";
+        write(fd, data, strlen(data));
+        close(fd);
+    }
+}
+static void do_file_read(void) {
+    NSString *p = test_file_path();
+    int fd = open(p.UTF8String, O_RDONLY);
+    if (fd >= 0) { char buf[256]; read(fd, buf, sizeof(buf)); close(fd); }
+}
+static void do_file_delete(void) {
+    NSString *p = test_file_path();
+    unlink(p.UTF8String);
+}
+static void do_file_rename(void) {
+    NSString *from = test_file_path();
+    NSString *to = [from stringByAppendingPathExtension:@"bak"];
+    [@"rename test" writeToFile:from atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    rename(from.UTF8String, to.UTF8String);
+}
+
+// ==================== 系统触发(系统 tab) ====================
+static void do_dlopen(void) {
+    void *h1 = dlopen("/usr/lib/libsqlite3.dylib", RTLD_LAZY); if (h1) dlclose(h1);
+    void *h2 = dlopen("/usr/lib/libz.dylib", RTLD_LAZY);       if (h2) dlclose(h2);
+}
+
 // ==================== 测试台 VC ====================
 @interface TestVC : UIViewController
 @property (nonatomic, strong) UILabel *status;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UIButton *> *btnMap;
+@property (nonatomic, strong) NSMutableArray<UIScrollView *> *tabScrolls;
+@property (nonatomic, strong) UISegmentedControl *seg;
 - (BOOL)triggerByKey:(NSString *)key;
 @end
 
@@ -106,40 +170,42 @@ static void do_bigdata(void) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.btnMap = [NSMutableDictionary dictionary];
+    self.tabScrolls = [NSMutableArray array];
     self.view.backgroundColor = [UIColor colorWithRed:0.07 green:0.09 blue:0.13 alpha:1.0];
 
-    UIScrollView *sv = [UIScrollView new];
-    sv.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:sv];
-    UIStackView *stack = [UIStackView new];
-    stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 10;
-    stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [sv addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [sv.topAnchor      constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
-        [sv.leadingAnchor  constraintEqualToAnchor:self.view.leadingAnchor],
-        [sv.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [sv.bottomAnchor   constraintEqualToAnchor:self.view.bottomAnchor],
-        [stack.topAnchor      constraintEqualToAnchor:sv.topAnchor constant:16],
-        [stack.leadingAnchor  constraintEqualToAnchor:sv.leadingAnchor constant:16],
-        [stack.trailingAnchor constraintEqualToAnchor:sv.trailingAnchor constant:-16],
-        [stack.bottomAnchor   constraintEqualToAnchor:sv.bottomAnchor constant:-16],
-        [stack.widthAnchor    constraintEqualToAnchor:sv.widthAnchor constant:-32],
-    ]];
-
     UILabel *title = [UILabel new];
-    title.text = @"加密算法测试台";
-    title.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
+    title.text = @"IOSDecryptHub 测试台";
+    title.font = [UIFont systemFontOfSize:21 weight:UIFontWeightBold];
     title.textColor = [UIColor whiteColor];
-    [stack addArrangedSubview:title];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:title];
 
     self.status = [UILabel new];
-    self.status.text = @"点按钮触发对应算法, 看右上角悬浮窗计数";
-    self.status.font = [UIFont systemFontOfSize:13];
+    self.status.text = @"选 tab, 点按钮触发对应系统调用, 看悬浮窗计数 / Web 面板";
+    self.status.font = [UIFont systemFontOfSize:12];
     self.status.numberOfLines = 0;
     self.status.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
-    [stack addArrangedSubview:self.status];
+    self.status.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.status];
+
+    self.seg = [[UISegmentedControl alloc] initWithItems:@[@"加解密", @"网络", @"文件", @"系统"]];
+    self.seg.selectedSegmentIndex = 0;
+    self.seg.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.seg addTarget:self action:@selector(onSeg:) forControlEvents:UIControlEventValueChanged];
+    [self.view addSubview:self.seg];
+
+    UILayoutGuide *g = self.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [title.topAnchor      constraintEqualToAnchor:g.topAnchor constant:12],
+        [title.leadingAnchor  constraintEqualToAnchor:g.leadingAnchor constant:16],
+        [title.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-16],
+        [self.status.topAnchor      constraintEqualToAnchor:title.bottomAnchor constant:6],
+        [self.status.leadingAnchor  constraintEqualToAnchor:g.leadingAnchor constant:16],
+        [self.status.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-16],
+        [self.seg.topAnchor      constraintEqualToAnchor:self.status.bottomAnchor constant:10],
+        [self.seg.leadingAnchor  constraintEqualToAnchor:g.leadingAnchor constant:16],
+        [self.seg.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-16],
+    ]];
 
     UIColor *green  = [UIColor colorWithRed:0.34 green:0.83 blue:0.39 alpha:1.0];
     UIColor *blue   = [UIColor colorWithRed:0.35 green:0.65 blue:1.00 alpha:1.0];
@@ -147,41 +213,85 @@ static void do_bigdata(void) {
     UIColor *purple = [UIColor colorWithRed:0.82 green:0.66 blue:1.00 alpha:1.0];
     UIColor *mint   = [UIColor colorWithRed:0.36 green:0.92 blue:0.70 alpha:1.0];
     UIColor *red    = [UIColor colorWithRed:0.95 green:0.45 blue:0.45 alpha:1.0];
+    UIColor *teal   = [UIColor colorWithRed:0.25 green:0.80 blue:0.74 alpha:1.0];
 
-    [self addGroup:stack title:@"摘要" color:green
-           buttons:@[@"MD5",@"SHA1",@"SHA256",@"SHA512"]
-              sels:@[@"onMD5",@"onSHA1",@"onSHA256",@"onSHA512"]
-              keys:@[@"md5",@"sha1",@"sha256",@"sha512"]];
-    [self addGroup:stack title:@"HMAC" color:blue
-           buttons:@[@"HMAC-SHA256"] sels:@[@"onHMAC"] keys:@[@"hmac"]];
-    [self addGroup:stack title:@"对称加密" color:orange
-           buttons:@[@"AES-CBC",@"3DES",@"DES",@"RC4"]
-              sels:@[@"onAES",@"on3DES",@"onDES",@"onRC4"]
-              keys:@[@"aes",@"3des",@"des",@"rc4"]];
-    [self addGroup:stack title:@"非对称" color:purple
-           buttons:@[@"RSA 签名",@"RSA 加密"] sels:@[@"onRSASign",@"onRSAEnc"]
-              keys:@[@"rsasign",@"rsaenc"]];
-    [self addGroup:stack title:@"密钥派生" color:mint
-           buttons:@[@"PBKDF2"] sels:@[@"onPBKDF"] keys:@[@"pbkdf"]];
-    [self addGroup:stack title:@"压测 / 综合" color:red
-           buttons:@[@"128KB 大数据",@"全部跑一遍",@"打开日志"]
-              sels:@[@"onBig",@"onAll",@"onLog"]
-              keys:@[@"big",@"all",@"log"]];
+    // --- tab 0: 加解密 ---
+    UIStackView *t0 = [self addTabStack];
+    [self addGroup:t0 title:@"摘要" color:green buttons:@[@"MD5",@"SHA1",@"SHA256",@"SHA512"]
+              sels:@[@"onMD5",@"onSHA1",@"onSHA256",@"onSHA512"] keys:@[@"md5",@"sha1",@"sha256",@"sha512"]];
+    [self addGroup:t0 title:@"HMAC" color:blue buttons:@[@"HMAC-SHA256"] sels:@[@"onHMAC"] keys:@[@"hmac"]];
+    [self addGroup:t0 title:@"对称加密" color:orange buttons:@[@"AES-CBC",@"3DES",@"DES",@"RC4"]
+              sels:@[@"onAES",@"on3DES",@"onDES",@"onRC4"] keys:@[@"aes",@"3des",@"des",@"rc4"]];
+    [self addGroup:t0 title:@"非对称" color:purple buttons:@[@"RSA 签名",@"RSA 加密"]
+              sels:@[@"onRSASign",@"onRSAEnc"] keys:@[@"rsasign",@"rsaenc"]];
+    [self addGroup:t0 title:@"密钥派生" color:mint buttons:@[@"PBKDF2"] sels:@[@"onPBKDF"] keys:@[@"pbkdf"]];
+    [self addGroup:t0 title:@"压测 / 综合" color:red buttons:@[@"128KB 大数据",@"全部跑一遍",@"打开日志"]
+              sels:@[@"onBig",@"onAll",@"onLog"] keys:@[@"big",@"all",@"log"]];
 
-    // dylib 启动 HTTP 服务后异步读取真实地址(含实际端口)填入提示
+    // --- tab 1: 网络 ---
+    UIStackView *t1 = [self addTabStack];
+    [self addGroup:t1 title:@"抓包" color:teal buttons:@[@"TCP 连接",@"SSL 抓包(明文)"]
+              sels:@[@"onTCP",@"onSSL"] keys:@[@"tcp",@"ssl"]];
+
+    // --- tab 2: 文件 ---
+    UIStackView *t2 = [self addTabStack];
+    [self addGroup:t2 title:@"文件操作" color:orange buttons:@[@"写文件",@"读文件",@"删除",@"重命名"]
+              sels:@[@"onFWrite",@"onFRead",@"onFDel",@"onFRename"] keys:@[@"fwrite",@"fread",@"fdel",@"frename"]];
+
+    // --- tab 3: 系统 ---
+    UIStackView *t3 = [self addTabStack];
+    [self addGroup:t3 title:@"动态库" color:purple buttons:@[@"dlopen 模块"] sels:@[@"onDlopen"] keys:@[@"dlopen"]];
+
+    self.tabScrolls[0].hidden = NO;   // 默认显示加解密
+
     __weak typeof(self) ws = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSString *u = dh_real_url();
         gUrlHint = u ?: @"";
-        if (u) ws.status.text = [NSString stringWithFormat:@"点按钮触发对应算法, 看右上角悬浮窗计数 / 浏览器 %@", u];
+        if (u) ws.status.text = [NSString stringWithFormat:@"选 tab 点按钮触发, 看悬浮窗 / 浏览器 %@", u];
     });
-
-    // 截图/自动化: 设 DH_AUTOLOG=1 启动后自动打开日志查看器(走 triggerByKey, 免去 simctl openurl 的系统确认框)
     if ([[NSProcessInfo processInfo].environment[@"DH_AUTOLOG"] isEqualToString:@"1"]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.3 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [ws triggerByKey:@"log"]; });
     }
+    // 截图/自动化: DH_AUTOTEST=1 启动后自动触发各类调用(免 simctl openurl 确认框)
+    if ([[NSProcessInfo processInfo].environment[@"DH_AUTOTEST"] isEqualToString:@"1"]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            for (NSString *k in @[@"md5",@"sha256",@"hmac",@"aes",@"3des",@"rsasign",@"pbkdf",
+                                  @"ssl",@"tcp",@"fwrite",@"fread",@"fdel",@"frename",@"dlopen"])
+                [ws triggerByKey:k];
+        });
+    }
+}
+
+- (UIStackView *)addTabStack {
+    UIScrollView *sv = [UIScrollView new];
+    sv.translatesAutoresizingMaskIntoConstraints = NO;
+    sv.hidden = YES;
+    [self.view addSubview:sv];
+    UIStackView *stack = [UIStackView new];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.spacing = 10;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [sv addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [sv.topAnchor      constraintEqualToAnchor:self.seg.bottomAnchor constant:12],
+        [sv.leadingAnchor  constraintEqualToAnchor:self.view.leadingAnchor],
+        [sv.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [sv.bottomAnchor   constraintEqualToAnchor:self.view.bottomAnchor],
+        [stack.topAnchor      constraintEqualToAnchor:sv.topAnchor],
+        [stack.leadingAnchor  constraintEqualToAnchor:sv.leadingAnchor constant:16],
+        [stack.trailingAnchor constraintEqualToAnchor:sv.trailingAnchor constant:-16],
+        [stack.bottomAnchor   constraintEqualToAnchor:sv.bottomAnchor constant:-16],
+        [stack.widthAnchor    constraintEqualToAnchor:sv.widthAnchor constant:-32],
+    ]];
+    [self.tabScrolls addObject:sv];
+    return stack;
+}
+
+- (void)onSeg:(UISegmentedControl *)s {
+    for (NSUInteger i = 0; i < self.tabScrolls.count; i++)
+        self.tabScrolls[i].hidden = (i != (NSUInteger)s.selectedSegmentIndex);
 }
 
 - (void)addGroup:(UIStackView *)parent title:(NSString *)t color:(UIColor *)c
@@ -214,6 +324,7 @@ static void do_bigdata(void) {
         [row addArrangedSubview:b];
         self.btnMap[keys[i]] = b;
     }
+    if (titles.count % 2 == 1) [row addArrangedSubview:[UIView new]];  // 单数补占位, 末按钮不撑满
 }
 
 - (BOOL)triggerByKey:(NSString *)key {
@@ -229,6 +340,7 @@ static void do_bigdata(void) {
     self.status.textColor = [UIColor colorWithRed:0.36 green:0.92 blue:0.70 alpha:1.0];
 }
 
+// 加解密
 - (void)onMD5    { do_digest(0); [self flash:@"MD5"]; }
 - (void)onSHA1   { do_digest(1); [self flash:@"SHA1"]; }
 - (void)onSHA256 { do_digest(2); [self flash:@"SHA256"]; }
@@ -240,35 +352,35 @@ static void do_bigdata(void) {
 - (void)onRC4    { do_rc4();      [self flash:@"RC4"]; }
 - (void)onRSASign {
     [self flash:@"RSA 签名 (首次生成密钥…)"];
-    dispatch_async(dispatch_get_global_queue(0, 0), ^{
-        do_rsa_sign();
-        dispatch_async(dispatch_get_main_queue(), ^{ [self flash:@"RSA 签名"]; });
-    });
+    dispatch_async(dispatch_get_global_queue(0, 0), ^{ do_rsa_sign(); dispatch_async(dispatch_get_main_queue(), ^{ [self flash:@"RSA 签名"]; }); });
 }
 - (void)onRSAEnc {
     [self flash:@"RSA 加密 (首次生成密钥…)"];
-    dispatch_async(dispatch_get_global_queue(0, 0), ^{
-        do_rsa_enc();
-        dispatch_async(dispatch_get_main_queue(), ^{ [self flash:@"RSA 加密"]; });
-    });
+    dispatch_async(dispatch_get_global_queue(0, 0), ^{ do_rsa_enc(); dispatch_async(dispatch_get_main_queue(), ^{ [self flash:@"RSA 加密"]; }); });
 }
 - (void)onPBKDF  { do_pbkdf();    [self flash:@"PBKDF2-HMAC-SHA256"]; }
 - (void)onBig    { do_bigdata();  [self flash:@"128KB 大数据 AES"]; }
 - (void)onAll {
     do_digest(0); do_digest(1); do_digest(2); do_digest(3);
-    do_hmac();
-    do_sym(kCCAlgorithmAES, 16, 16); do_sym(kCCAlgorithm3DES, 24, 8);
-    do_sym(kCCAlgorithmDES, 8, 8); do_rc4();
-    do_pbkdf();
+    do_hmac(); do_sym(kCCAlgorithmAES, 16, 16); do_sym(kCCAlgorithm3DES, 24, 8);
+    do_sym(kCCAlgorithmDES, 8, 8); do_rc4(); do_pbkdf();
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ do_rsa_sign(); do_rsa_enc(); });
     [self flash:@"全部算法"];
 }
 - (void)onLog {
     Class c = NSClassFromString(@"DHLogViewer");
-    if (c && [c respondsToSelector:@selector(presentFromFloating)]) {
-        [c performSelector:@selector(presentFromFloating)];
-    }
+    if (c && [c respondsToSelector:@selector(presentFromFloating)]) [c performSelector:@selector(presentFromFloating)];
 }
+// 网络
+- (void)onTCP { do_tcp_connect(); [self flash:@"TCP connect 1.1.1.1:443"]; }
+- (void)onSSL { do_ssl_capture(); [self flash:@"SSL 抓包(明文)"]; }
+// 文件
+- (void)onFWrite   { do_file_write();  [self flash:@"写文件"]; }
+- (void)onFRead    { do_file_read();   [self flash:@"读文件"]; }
+- (void)onFDel     { do_file_delete(); [self flash:@"删除文件"]; }
+- (void)onFRename  { do_file_rename(); [self flash:@"重命名"]; }
+// 系统
+- (void)onDlopen   { do_dlopen();      [self flash:@"dlopen 模块"]; }
 @end
 
 // ==================== Scene / App ====================
@@ -283,15 +395,11 @@ static void do_bigdata(void) {
     self.window = [[UIWindow alloc] initWithWindowScene:ws];
     self.window.rootViewController = [TestVC new];
     [self.window makeKeyAndVisible];
-    // 冷启动经 dhtest:// 唤起时 URL 在 connectionOptions 里, 补触发(否则冷启动不响应)
     if (connectionOptions.URLContexts.count) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            [self scene:scene openURLContexts:connectionOptions.URLContexts];
-        });
+                       dispatch_get_main_queue(), ^{ [self scene:scene openURLContexts:connectionOptions.URLContexts]; });
     }
 }
-
 - (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {
     TestVC *vc = (TestVC *)self.window.rootViewController;
     if (![vc isKindOfClass:[TestVC class]]) return;
@@ -304,22 +412,17 @@ static void do_bigdata(void) {
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 @end
-
 @implementation AppDelegate
-- (BOOL)application:(UIApplication *)application
-        didFinishLaunchingWithOptions:(NSDictionary *)launchOptions { return YES; }
+- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions { return YES; }
 - (UISceneConfiguration *)application:(UIApplication *)application
         configurationForConnectingSceneSession:(UISceneSession *)connectingSceneSession
         options:(UISceneConnectionOptions *)options {
-    UISceneConfiguration *cfg = [[UISceneConfiguration alloc] initWithName:@"Default"
-                                                              sessionRole:connectingSceneSession.role];
+    UISceneConfiguration *cfg = [[UISceneConfiguration alloc] initWithName:@"Default" sessionRole:connectingSceneSession.role];
     cfg.delegateClass = [SceneDelegate class];
     return cfg;
 }
 @end
 
 int main(int argc, char *argv[]) {
-    @autoreleasepool {
-        return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class]));
-    }
+    @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class])); }
 }

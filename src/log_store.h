@@ -15,6 +15,9 @@ typedef NS_ENUM(NSInteger, DHCategory) {
     DHCategoryHMAC,              // HMAC-*
     DHCategorySymmetric,         // AES / DES / 3DES / CAST / RC2 / RC4 / Blowfish
     DHCategoryAsymmetric,        // RSA / EC sign / encrypt / verify / decrypt
+    DHCategoryNetwork,           // connect / send / recv / SSL_write / SSL_read
+    DHCategoryFile,              // open / write / unlink / rename
+    DHCategorySystem,            // dlopen 载入模块
     DHCategoryOther,
 };
 
@@ -28,6 +31,7 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 @property (nonatomic, copy, nullable) NSData *input;        // 输入 (明文/密文/待签数据)
 @property (nonatomic, copy, nullable) NSData *output;       // 输出 (摘要/密文/明文/签名)
 @property (nonatomic, copy, nullable) NSString *publicKeyInfo;  // RSA 公钥摘要描述
+@property (nonatomic, copy, nullable) NSString *detail;         // 通用详情: 网络 IP:port / 文件路径 / 系统库路径
 @property (nonatomic, copy)   NSString *timestamp;          // 格式化时间
 @property (nonatomic, copy)   NSString *callStack;          // 应用层调用栈 (已过滤)
 @property (nonatomic, assign) uint64_t seq;                 // 自增序号

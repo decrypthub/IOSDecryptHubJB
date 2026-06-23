@@ -32,7 +32,7 @@
 #define DH_HTTP_PORT_LAST   8108
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
-#define DH_HTTP_VERSION     "1.4.0"
+#define DH_HTTP_VERSION     "1.5.0"
 
 static int        gListenFD = -1;
 static uint16_t   gPort     = 0;
@@ -99,6 +99,9 @@ static const char *category_name(NSInteger c) {
         case DHCategoryHMAC:       return "hmac";
         case DHCategorySymmetric:  return "sym";
         case DHCategoryAsymmetric: return "asym";
+        case DHCategoryNetwork:    return "net";
+        case DHCategoryFile:       return "file";
+        case DHCategorySystem:     return "sys";
         default: return "other";
     }
 }
@@ -175,6 +178,7 @@ static NSDictionary *entry_summary(DHLogEntry *e) {
         @"timestamp":  e.timestamp ?: @"",
         @"inLen":      @(e.input.length),
         @"outLen":     @(e.output.length),
+        @"detail":     e.detail ?: @"",
         @"preview":    preview ?: @"",
     };
 }
@@ -209,6 +213,9 @@ static void handle_stats(int fd) {
         @([s countForCategory:DHCategoryHMAC]),
         @([s countForCategory:DHCategorySymmetric]),
         @([s countForCategory:DHCategoryAsymmetric]),
+        @([s countForCategory:DHCategoryNetwork]),
+        @([s countForCategory:DHCategoryFile]),
+        @([s countForCategory:DHCategorySystem]),
         @([s countForCategory:DHCategoryOther]),
     ];
     const char *hsum = dh_health_summary();
