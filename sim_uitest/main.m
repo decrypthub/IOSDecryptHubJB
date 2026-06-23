@@ -120,6 +120,12 @@ static void do_ssl_capture(void) {
     char buf[512];
     SSL_read(ssl, buf, sizeof(buf));          // 抓接收明文(mock 返回含 token 的响应)
 }
+static void do_https_request(void) {
+    // 真实 HTTPS(系统 NSURLSession): 实测 fishhook 能否抓到系统 TLS 的 connect 与明文.
+    NSURL *url = [NSURL URLWithString:@"https://httpbin.org/get?app=IOSDecryptHub"];
+    NSURLSession *sess = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration]];
+    [[sess dataTaskWithURL:url completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) { (void)d; (void)r; (void)e; }] resume];
+}
 
 // ==================== 文件触发(文件 tab) ====================
 static NSString *test_file_path(void) {
@@ -230,8 +236,10 @@ static void do_dlopen(void) {
 
     // --- tab 1: 网络 ---
     UIStackView *t1 = [self addTabStack];
-    [self addGroup:t1 title:@"抓包" color:teal buttons:@[@"TCP 连接",@"SSL 抓包(明文)"]
-              sels:@[@"onTCP",@"onSSL"] keys:@[@"tcp",@"ssl"]];
+    [self addGroup:t1 title:@"真实请求(系统 TLS)" color:teal buttons:@[@"HTTPS 请求",@"TCP 连接"]
+              sels:@[@"onHTTPS",@"onTCP"] keys:@[@"https",@"tcp"]];
+    [self addGroup:t1 title:@"SSL 明文抓包(自带 BoringSSL 场景, mock 演示)" color:blue buttons:@[@"SSL 抓包(明文)"]
+              sels:@[@"onSSL"] keys:@[@"ssl"]];
 
     // --- tab 2: 文件 ---
     UIStackView *t2 = [self addTabStack];
@@ -372,6 +380,7 @@ static void do_dlopen(void) {
     if (c && [c respondsToSelector:@selector(presentFromFloating)]) [c performSelector:@selector(presentFromFloating)];
 }
 // 网络
+- (void)onHTTPS { do_https_request(); [self flash:@"HTTPS 请求 httpbin.org"]; }
 - (void)onTCP { do_tcp_connect(); [self flash:@"TCP connect 1.1.1.1:443"]; }
 - (void)onSSL { do_ssl_capture(); [self flash:@"SSL 抓包(明文)"]; }
 // 文件

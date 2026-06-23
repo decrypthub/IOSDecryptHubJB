@@ -6,15 +6,13 @@
 
 ## 截图
 
-Web 面板（多 tab + 宿主 App 图标 + 左右分栏 master-detail）、交互式测试台、iOS 悬浮窗与全屏日志查看器。
+Web 面板多 tab（加解密 / 网络 / 文件 / 系统）+ 宿主 App 图标 + 左右分栏 master-detail，配交互式测试台、iOS 悬浮窗与全屏日志查看器。
 
-| Web 面板（加解密 tab，左右分栏） | 多 tab 平台（占位：网络 / 文件 / 内存 / 系统 / 调用链） |
+| Web 网络抓包（SSL_write 明文请求 + connect 目标 IP） | 交互式测试台（分 tab 触发各类调用） |
 | --- | --- |
-| ![web-panel](docs/screenshots/02-web-panel.png) | ![platform](docs/screenshots/05-platform.png) |
-| 交互式测试台 | 悬浮窗（毛玻璃，可拖动、可收起成胶囊） |
-| ![test-host](docs/screenshots/01-test-host.png) | ![floating](docs/screenshots/03-floating.png) |
-| 全屏日志查看器（分类切换、搜索、详情展开） | |
-| ![logview](docs/screenshots/04-logview.png) | |
+| ![web-net](docs/screenshots/02-web-panel.png) | ![test-host](docs/screenshots/01-test-host.png) |
+| 悬浮窗（毛玻璃，可拖动、可收起成胶囊） | 全屏日志查看器（分类切换、搜索、详情展开） |
+| ![floating](docs/screenshots/03-floating.png) | ![logview](docs/screenshots/04-logview.png) |
 
 ## 覆盖的算法
 
@@ -105,7 +103,7 @@ make test-mac
 
 编出 dylib 与一个命令行 exerciser，用 DYLD_INSERT_LIBRARIES 注入运行，浏览器开 http://127.0.0.1:8088 看结果。
 
-iOS 模拟器 / 真机：编出 sim_uitest 这个测试 App，注入 dylib 后安装运行，点界面上的按钮触发算法。该测试 App 还注册了 dhtest:// URL scheme，可用 xcrun simctl openurl <device> dhtest://md5 之类的命令模拟点击对应按钮，方便无人值守的自动化测试（可用的 key：md5 / sha1 / sha256 / sha512 / hmac / aes / 3des / des / rc4 / rsasign / rsaenc / pbkdf / big / all / log）。
+iOS 模拟器 / 真机：编出 sim_uitest 这个测试 App，注入 dylib 后安装运行，点界面上的按钮触发算法。该测试 App 还注册了 dhtest:// URL scheme，可用 xcrun simctl openurl <device> dhtest://md5 之类的命令模拟点击对应按钮，方便无人值守的自动化测试（可用的 key：md5 / sha1 / sha256 / sha512 / hmac / aes / 3des / des / rc4 / rsasign / rsaenc / pbkdf / big / all / log / https / tcp / ssl / fwrite / fread / fdel / frename / dlopen）。
 
 Release 附带一个已注入 dylib 的测试 IPA（未签名），重签后即可在真机上体验。
 
@@ -120,6 +118,10 @@ src/
   hook_symmetric.m      对称加密 hook
   hook_asymmetric.m     非对称 hook
   hook_kdf.m            PBKDF2 密钥派生 hook
+  hook_network.m        网络 hook (connect / SSL_write / SSL_read)
+  hook_file.m           文件 hook (open / write / unlink / rename)
+  hook_system.m         系统 hook (dlopen)
+  dh_health.{h,c}       健康状态中心 (fail-loud) + 递归保护
   http_server.{h,m}     零依赖本地 HTTP 服务
   web_index_html.h      内嵌的单页前端
   ui_float.{h,m}        悬浮控制窗

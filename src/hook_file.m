@@ -17,8 +17,11 @@ static BOOL dh_is_app_file(const char *p) {
     if (!p || !*p) return NO;
     if (strstr(p, "/System/") || strstr(p, "/usr/") || strstr(p, ".framework") ||
         strstr(p, ".dylib")   || strstr(p, "/var/db/")) return NO;
-    return (strstr(p, "/Documents/") || strstr(p, "/Library/") || strstr(p, "/tmp/") ||
-            strstr(p, "/Caches/")    || strstr(p, "/Application Support/")) ? YES : NO;
+    // 只认 App 自己的沙盒数据容器(真机 /var/mobile/Containers/Data/Application/...;
+    // 模拟器 .../CoreSimulator/Devices/.../data/Containers/Data/Application/...) —— 这样系统级
+    // /Library/Preferences/com.apple.*.plist 等不会混进来。/Documents/ /tmp/ 兜底。
+    if (strstr(p, "/Containers/Data/Application/")) return YES;
+    return (strstr(p, "/Documents/") || strstr(p, "/tmp/")) ? YES : NO;
 }
 
 static NSMutableDictionary<NSNumber *, NSString *> *gFdPath = nil;
