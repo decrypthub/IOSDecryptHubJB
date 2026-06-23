@@ -111,7 +111,7 @@ static DHFloatingController *gFloat = nil;
     [root addSubview:bar];
 
     self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 9, 170, 22)];
-    self.titleLabel.text = @"解密助手";
+    self.titleLabel.text = @"IOSDecryptHub";
     self.titleLabel.textColor = DH_ACCENT;
     self.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
     [bar addSubview:self.titleLabel];
@@ -342,6 +342,29 @@ static BOOL dh_scene_ready(void) {
     return YES;
 }
 
+// 读取宿主被注入 App 的图标 -> PNG (best-effort): 优先 CFBundleIcons 里最大的一张,
+// 退化尝试常见 AppIcon 名。imageNamed 能从 Assets.car 读出真机图标。
+NSData *dh_host_app_icon_png(void) {
+    UIImage *icon = nil;
+    NSBundle *mb = [NSBundle mainBundle];
+    NSDictionary *icons = [mb objectForInfoDictionaryKey:@"CFBundleIcons"];
+    NSArray *files = icons[@"CFBundlePrimaryIcon"][@"CFBundleIconFiles"];
+    for (NSString *n in [files reverseObjectEnumerator]) {
+        UIImage *i = [UIImage imageNamed:n];
+        if (i) { icon = i; break; }
+    }
+    if (!icon) {
+        for (NSString *n in @[@"AppIcon60x60", @"AppIcon", @"Icon-60", @"Icon", @"icon"]) {
+            UIImage *i = [UIImage imageNamed:n];
+            if (i) { icon = i; break; }
+        }
+    }
+    if (!icon) return nil;
+    NSData *png = UIImagePNGRepresentation(icon);
+    if (!png || png.length > 200 * 1024) return nil;
+    return png;
+}
+
 void dh_ui_install_floating(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gFloat) return;
@@ -358,5 +381,6 @@ void dh_ui_install_floating(void) {
 
 // 纯 macOS target 下没有 UIKit, 提供空 stub - 浏览器看 web 面板就够了.
 void dh_ui_install_floating(void) {}
+NSData *dh_host_app_icon_png(void) { return nil; }
 
 #endif

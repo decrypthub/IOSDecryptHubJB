@@ -176,7 +176,7 @@ static void rebind_symbols_for_image(struct rebindings_entry *rebindings,
   Dl_info info;
   if (dladdr(header, &info) == 0) {
     // fail-loud: 整个 image 无法定位, 其上所有待 hook 的符号都会被静默跳过.
-    fprintf(stderr, "[解密助手/ERR] dladdr 失败, 跳过 image header=%p (该 image 的 hook 全部未生效)\n",
+    fprintf(stderr, "[IOSDecryptHub/ERR] dladdr 失败, 跳过 image header=%p (该 image 的 hook 全部未生效)\n",
             (const void *)header);
     return;
   }

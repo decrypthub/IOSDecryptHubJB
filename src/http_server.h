@@ -1,4 +1,4 @@
-// http_server.h - 解密助手
+// http_server.h - IOSDecryptHub
 // 极简本地 HTTP 服务, 用 BSD socket, 暴露 hook 日志给浏览器看 / 筛 / 下载.
 //
 // 端点:

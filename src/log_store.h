@@ -1,4 +1,4 @@
-// log_store.h - 解密助手
+// log_store.h - IOSDecryptHub
 // 公共日志记录中心：所有 hook 模块都把抓到的明文/密文/算法信息丢到这里。
 // 严格遵守约束：悬浮窗只用 entry_count 这种统计数据，不显示明细。
 

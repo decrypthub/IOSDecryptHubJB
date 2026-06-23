@@ -13,7 +13,7 @@
 // 纯 C 文件(.c)请直接调用下面的 dh_health_* 函数, 内部已写 stderr。
 #ifdef __OBJC__
 #import <Foundation/Foundation.h>
-#define DH_ERR(fmt, ...) NSLog(@"[解密助手/ERR] " fmt, ##__VA_ARGS__)
+#define DH_ERR(fmt, ...) NSLog(@"[IOSDecryptHub/ERR] " fmt, ##__VA_ARGS__)
 #endif
 
 #ifdef __cplusplus

@@ -1,4 +1,4 @@
-// main.m - 解密助手 (Decrypt Helper)
+// main.m - IOSDecryptHub (Decrypt Helper)
 // 注入入口: 在 dylib 被加载时安装所有 hook 并初始化悬浮窗 UI.
 //
 // 严格约束:
@@ -32,7 +32,7 @@ __attribute__((constructor))
 static void dh_bootstrap(void) {
     // 先安装 hook —— 这一步要在尽可能早的时刻完成, 否则早期发生的加解密会漏抓.
     dh_install_all_hooks();
-    NSLog(@"[解密助手] hook 已全部安装 (Digest / HMAC / 对称 / 非对称)");
+    NSLog(@"[IOSDecryptHub] hook 已全部安装 (Digest / HMAC / 对称 / 非对称)");
 
     // 启动本地 HTTP 服务 - 不依赖 UIApplication, 可以立刻起.
     dh_http_start();
@@ -49,5 +49,5 @@ static void dh_bootstrap(void) {
     });
 #endif
 
-    NSLog(@"[解密助手] 日志文件: %@", [[DHLogStore shared] logFilePath]);
+    NSLog(@"[IOSDecryptHub] 日志文件: %@", [[DHLogStore shared] logFilePath]);
 }

@@ -105,7 +105,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"解密助手 - 日志";
+    self.title = @"IOSDecryptHub - 日志";
     self.view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1.0];
     self.filterCategory = -1;
     self.searchKw = @"";

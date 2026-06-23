@@ -1,18 +1,20 @@
-# ios-decrypt-helper
+# IOSDecryptHub
 
-基于 fishhook 的 iOS 加解密算法调试 dylib 插件。通过 fishhook 透明拦截系统加解密、哈希、密钥派生 API，记录每次调用的算法、操作、Key、IV、明文、密文、派生密钥及应用层调用栈。用于 iOS 逆向工程中快速还原一个 App 的加密体系。
+基于 fishhook 的 iOS App 行为监控平台。当前已实现**加解密审计**：透明拦截系统加解密、哈希、密钥派生 API，记录每次调用的算法、操作、Key、IV、明文、密文、派生密钥及应用层调用栈，用于快速还原一个 App 的加密体系。Web 面板采用多 tab 架构，网络抓包、文件监控、内存追踪、动态库加载、调用链追踪等方向已留好扩展位（开发中）。
 
 注入到目标 App 后，它自己调用系统加密 API 时，你能在旁边实时看到全部参数。
 
 ## 截图
 
-覆盖三种查看方式：交互式测试台逐个触发算法、内置 Web 日志面板、iOS 悬浮窗与全屏日志查看器。
+Web 面板（多 tab + 宿主 App 图标 + 左右分栏 master-detail）、交互式测试台、iOS 悬浮窗与全屏日志查看器。
 
-| 交互式测试台 | Web 日志面板 |
+| Web 面板（加解密 tab，左右分栏） | 多 tab 平台（占位：网络 / 文件 / 内存 / 系统 / 调用链） |
 | --- | --- |
-| ![test-host](docs/screenshots/01-test-host.png) | ![web-panel](docs/screenshots/02-web-panel.png) |
-| 悬浮窗（毛玻璃，可拖动、可收起成胶囊） | 全屏日志查看器（分类切换、搜索、详情展开） |
-| ![floating](docs/screenshots/03-floating.png) | ![logview](docs/screenshots/04-logview.png) |
+| ![web-panel](docs/screenshots/02-web-panel.png) | ![platform](docs/screenshots/05-platform.png) |
+| 交互式测试台 | 悬浮窗（毛玻璃，可拖动、可收起成胶囊） |
+| ![test-host](docs/screenshots/01-test-host.png) | ![floating](docs/screenshots/03-floating.png) |
+| 全屏日志查看器（分类切换、搜索、详情展开） | |
+| ![logview](docs/screenshots/04-logview.png) | |
 
 ## 覆盖的算法
 
@@ -26,11 +28,24 @@
 
 ## 三种查看方式
 
-1. 本地 Web 服务（推荐）。dylib 加载后自动在 8088 起一个零依赖的 HTTP 服务，浏览器访问即可。支持实时列表、分类切换、关键字搜索、按数据大小过滤、详情展开（Key/IV/明文/密文的 Hex 与 HexDump、调用栈）、暂停、清空、下载日志文件。顶部展示当前宿主进程信息（应用名、bundle id、PID、系统版本、设备型号、物理内存）。
+1. 本地 Web 服务（推荐）。dylib 加载后自动在 8088 起一个零依赖的 HTTP 服务，浏览器访问即可。多 tab 架构，加解密 tab 为左右分栏 master-detail（左列表 / 右详情，分隔条可拖动，输入/输出上下卡片）。支持实时列表、分类切换、关键字搜索、按数据大小过滤、详情展开（Key/IV/明文/密文的 Hex 与 HexDump、调用栈）、暂停、清空、下载日志文件。顶部展示宿主 App 图标与进程信息（应用名、bundle id、PID、系统版本、设备型号、物理内存）。
 2. iOS 内嵌悬浮窗 + 全屏查看器。悬浮窗是一个毛玻璃质感的小窗，显示各分类计数与服务地址，可拖动、可缩小成胶囊；点其中的日志按钮弹出全屏查看器看完整明细。
 3. 文件落盘。所有日志同时异步追加到 Documents/decrypt_helper.log，可用于导出。
 
 安全提示：Web 服务无认证、监听所有网卡（0.0.0.0），会把 Key 与明文暴露给同网络中任何能连接的人，仅建议在可信网络中调试使用。
+
+## 平台路线图
+
+Web 面板已是多 tab 架构，「加解密」tab 为完整功能，其余方向已搭好占位骨架，后续逐步实现：
+
+| tab | 状态 | hook 目标 | 能看到什么 |
+| --- | --- | --- | --- |
+| 加解密 | 已实现 | CommonCrypto / SecKey | 算法 / Key / IV / 明文 / 密文 / 调用栈 |
+| 网络 | 开发中 | connect / send / recv / SSL_write / SSL_read | 域名 / IP / 请求响应 / 明文传输审计 |
+| 文件 | 开发中 | open / read / write / unlink / stat | 沙盒读写 / SDK 偷写缓存 |
+| 内存 | 开发中 | malloc / calloc / realloc / free | 分配统计 / 泄漏 / 大对象 |
+| 系统 | 开发中 | dlopen / dlsym / time / sysctl | 动态库加载 / 时间设备伪造 |
+| 调用链 | 开发中 | backtrace | 谁打开文件 / 发起请求 / 分配内存 |
 
 ## 性能与实现要点
 
@@ -45,7 +60,7 @@ hook 框架最怕「时好时坏」：某个符号没挂上、服务端口被占
 
 - 每个 hook 模块安装后立即自检，没挂上的符号会被记录（MD2/MD4 等系统已移除的废弃算法除外，避免常态化误报淹没真正的告警）。
 - HTTP 服务起不来、日志落盘失败、流式加密遇到未跟踪的上下文，都会上报。
-- 失效状态三处同时可见：悬浮窗顶部红字、Web 面板红色横幅、控制台 `[解密助手/ERR]` 日志，一眼定位失效锚点，但不中止宿主 App。
+- 失效状态三处同时可见：悬浮窗顶部红字、Web 面板红色横幅、控制台 `[IOSDecryptHub/ERR]` 日志，一眼定位失效锚点，但不中止宿主 App。
 - `GET /api/stats` 的 `health` 字段暴露 hook 失败数与落盘/服务状态，便于自动化巡检。
 
 ## HTTP API

@@ -1,4 +1,4 @@
-// http_server.m - 解密助手 本地 HTTP 服务
+// http_server.m - IOSDecryptHub 本地 HTTP 服务
 //
 // 设计:
 //   - 一个 socket 监听端口, 一个 accept 队列, 每个连接 dispatch 到处理队列
@@ -26,12 +26,13 @@
 #import "log_store.h"
 #import "web_index_html.h"
 #import "dh_health.h"
+#import "ui_float.h"
 
 #define DH_HTTP_PORT_FIRST  8088
 #define DH_HTTP_PORT_LAST   8108
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
-#define DH_HTTP_VERSION     "1.3.0"
+#define DH_HTTP_VERSION     "1.4.0"
 
 static int        gListenFD = -1;
 static uint16_t   gPort     = 0;
@@ -306,6 +307,12 @@ static void handle_download(int fd) {
     [fh closeFile];
 }
 
+static void handle_appicon(int fd) {
+    NSData *png = dh_host_app_icon_png();
+    if (!png) { send_text(fd, 404, @"no app icon"); return; }
+    send_response(fd, 200, @"OK", @"image/png", png);
+}
+
 static void handle_index(int fd) {
     NSData *body = [NSData dataWithBytes:kDHIndexHTML length:strlen(kDHIndexHTML)];
     send_response(fd, 200, @"OK", @"text/html; charset=utf-8", body);
@@ -358,6 +365,8 @@ static void handle_connection(int fd) {
                 handle_log_detail(fd, [path substringFromIndex:[@"/api/logs/" length]]);
             } else if ([path isEqualToString:@"/download"]) {
                 handle_download(fd);
+            } else if ([path isEqualToString:@"/api/appicon"]) {
+                handle_appicon(fd);
             } else if ([path isEqualToString:@"/favicon.ico"]) {
                 send_response(fd, 204, @"No Content", @"image/x-icon", [NSData data]);
             } else {
@@ -444,7 +453,7 @@ void dh_http_start(void) {
             if (fd >= 0) { gListenFD = fd; gPort = p; break; }
         }
         if (gListenFD < 0) {
-            NSLog(@"[解密助手] HTTP 服务启动失败: %s..%s 端口都被占用", "8088", "8108");
+            NSLog(@"[IOSDecryptHub] HTTP 服务启动失败: %s..%s 端口都被占用", "8088", "8108");
             dh_health_http_fail("端口 8088..8108 全被占用, 本地服务不可用");
             return;
         }
@@ -455,7 +464,7 @@ void dh_http_start(void) {
         gConcurrency = dispatch_semaphore_create(DH_HTTP_MAX_CONCURRENCY);
         dispatch_async(gAcceptQ, ^{ accept_loop(); });
         dh_health_http_ok();
-        NSLog(@"[解密助手] HTTP 服务已启动: %@", gURL);
+        NSLog(@"[IOSDecryptHub] HTTP 服务已启动: %@", gURL);
     });
 }
 

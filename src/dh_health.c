@@ -33,13 +33,13 @@ void dh_health_hook_fail(const char *sym) {
         }
     }
     pthread_mutex_unlock(&g_lock);
-    if (!dup) fprintf(stderr, "[解密助手/ERR] hook 未挂上: %s\n", sym ? sym : "(?)");
+    if (!dup) fprintf(stderr, "[IOSDecryptHub/ERR] hook 未挂上: %s\n", sym ? sym : "(?)");
 }
 
 void dh_health_persist_fail(int err) {
     atomic_store(&g_persist_failed, 1);
     atomic_store(&g_persist_errno, err);
-    fprintf(stderr, "[解密助手/ERR] 日志落盘失败 errno=%d\n", err);
+    fprintf(stderr, "[IOSDecryptHub/ERR] 日志落盘失败 errno=%d\n", err);
 }
 
 void dh_health_http_fail(const char *reason) {
@@ -47,7 +47,7 @@ void dh_health_http_fail(const char *reason) {
     pthread_mutex_lock(&g_lock);
     if (reason) strlcpy(g_http_reason, reason, sizeof(g_http_reason));
     pthread_mutex_unlock(&g_lock);
-    fprintf(stderr, "[解密助手/ERR] HTTP 服务失败: %s\n", reason ? reason : "");
+    fprintf(stderr, "[IOSDecryptHub/ERR] HTTP 服务失败: %s\n", reason ? reason : "");
 }
 
 void dh_health_http_ok(void) {
@@ -56,7 +56,7 @@ void dh_health_http_ok(void) {
 
 void dh_health_note_localonly(void) {
     atomic_store(&g_local_only, 1);
-    fprintf(stderr, "[解密助手/ERR] 未找到局域网 IP, 仅本地可访问\n");
+    fprintf(stderr, "[IOSDecryptHub/ERR] 未找到局域网 IP, 仅本地可访问\n");
 }
 
 unsigned dh_health_hook_fail_count(void) { return atomic_load(&g_hook_fails); }

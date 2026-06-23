@@ -1,4 +1,4 @@
-// tests/exercise_runner.m - 解密助手 hook 验证工具
+// tests/exercise_runner.m - IOSDecryptHub hook 验证工具
 //
 // 这个程序把所有我们 hook 的 API 都调一遍, 然后停着等浏览器看.
 // 用法 (macOS):
@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
     setvbuf(stdout, NULL, _IONBF, 0);
 
-    printf("[exercise] PID %d — 解密助手 hook 验证\n", getpid());
+    printf("[exercise] PID %d — IOSDecryptHub hook 验证\n", getpid());
     printf("[exercise] 等 dylib 起 HTTP 服务 (1.5s)...\n");
     usleep(1500 * 1000);
 
