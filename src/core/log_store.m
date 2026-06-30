@@ -8,7 +8,8 @@
 @end
 
 @interface DHLogStore () {
-    NSMutableArray<DHLogEntry *> *_entries;     // 最近 N 条 (ring 限制)
+    NSMutableArray<DHLogEntry *> *_buckets[DHCategoryOther + 1];   // 每类独立环形缓冲, 互不挤占
+    BOOL                          _pausedCat[DHCategoryOther + 1]; // 每类暂停状态
     dispatch_queue_t              _queue;       // 写入串行队列
     NSUInteger                    _categoryCounts[DHCategoryOther + 1];
     uint64_t                      _seqCounter;
@@ -18,8 +19,8 @@
 
 @implementation DHLogStore
 
-static const NSUInteger kMaxInMemoryEntries = 2000;   // 内存里最多保留 2000 条
-static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘上限 64KB
+static const NSUInteger kMaxPerCategory = 2000;          // 每个分类最多保留 2000 条 (各自独立)
+static const NSUInteger kMaxBlobLogged  = 64 * 1024;     // 单段 blob 落盘上限 64KB
 
 + (instancetype)shared {
     static DHLogStore *s = nil;
@@ -30,7 +31,7 @@ static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘�
 
 - (instancetype)init {
     if ((self = [super init])) {
-        _entries = [NSMutableArray array];
+        for (int c = 0; c <= DHCategoryOther; c++) { _buckets[c] = [NSMutableArray array]; _pausedCat[c] = NO; }
         _queue = dispatch_queue_create("com.decrypthelper.logstore", DISPATCH_QUEUE_SERIAL);
         _seqCounter = 0;
         memset(_categoryCounts, 0, sizeof(_categoryCounts));
@@ -44,17 +45,52 @@ static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘�
 
 - (void)append:(DHLogEntry *)entry {
     if (self.paused || entry == nil) return;
+    NSInteger ci = (entry.category >= 0 && entry.category <= DHCategoryOther) ? entry.category : DHCategoryOther;
     dispatch_async(_queue, ^{
+        if (self->_pausedCat[ci]) return;                  // 该分类已暂停
         entry.seq = ++self->_seqCounter;
-        [self->_entries addObject:entry];
-        if (self->_entries.count > kMaxInMemoryEntries) {
-            [self->_entries removeObjectsInRange:NSMakeRange(0, self->_entries.count - kMaxInMemoryEntries)];
-        }
-        if (entry.category >= 0 && entry.category <= DHCategoryOther) {
-            self->_categoryCounts[entry.category]++;
-        }
+        NSMutableArray *b = self->_buckets[ci];
+        [b addObject:entry];
+        if (b.count > kMaxPerCategory)
+            [b removeObjectsInRange:NSMakeRange(0, b.count - kMaxPerCategory)];
+        self->_categoryCounts[ci]++;
         [self _persist:entry];
     });
+}
+
+- (void)setPaused:(BOOL)paused forCategory:(DHCategory)cat {
+    if (cat < 0 || cat > DHCategoryOther) return;
+    dispatch_async(_queue, ^{ self->_pausedCat[cat] = paused; });
+}
+- (BOOL)isPausedForCategory:(DHCategory)cat {
+    if (cat < 0 || cat > DHCategoryOther) return NO;
+    __block BOOL p = NO;
+    dispatch_sync(_queue, ^{ p = self->_pausedCat[cat]; });
+    return p;
+}
+
+// 合并所有桶并按 seq 升序 (供「全部」视图 / 落盘快照)。须在 _queue 内调用。
+- (NSArray<DHLogEntry *> *)_mergedAllLocked {
+    NSMutableArray *all = [NSMutableArray array];
+    for (int c = 0; c <= DHCategoryOther; c++) [all addObjectsFromArray:_buckets[c]];
+    [all sortUsingComparator:^NSComparisonResult(DHLogEntry *a, DHLogEntry *b) {
+        return a.seq < b.seq ? NSOrderedAscending : (a.seq > b.seq ? NSOrderedDescending : NSOrderedSame);
+    }];
+    return all;
+}
+
+// 取某分类切片: -2=加密组(0..3) 合并排序; 0..Other=单桶(本就 seq 升序); 其它=全部。须在 _queue 内调用。
+- (NSArray<DHLogEntry *> *)_categorySliceLocked:(NSInteger)cat {
+    if (cat == -2) {
+        NSMutableArray *m = [NSMutableArray array];
+        for (int c = DHCategoryDigest; c <= DHCategoryAsymmetric; c++) [m addObjectsFromArray:_buckets[c]];
+        [m sortUsingComparator:^NSComparisonResult(DHLogEntry *a, DHLogEntry *b) {
+            return a.seq < b.seq ? NSOrderedAscending : (a.seq > b.seq ? NSOrderedDescending : NSOrderedSame);
+        }];
+        return m;
+    }
+    if (cat >= 0 && cat <= DHCategoryOther) return [_buckets[cat] copy];
+    return [self _mergedAllLocked];
 }
 
 - (void)_persist:(DHLogEntry *)e {
@@ -128,34 +164,27 @@ static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘�
 
 - (NSArray<DHLogEntry *> *)snapshot {
     __block NSArray *r = nil;
-    dispatch_sync(_queue, ^{ r = [self->_entries copy]; });
+    dispatch_sync(_queue, ^{ r = [self _mergedAllLocked]; });
     return r;
 }
 
 - (NSArray<DHLogEntry *> *)snapshotMatching:(NSString *)keyword
                                     category:(NSInteger)categoryOrMinusOne {
     __block NSArray *src = nil;
-    dispatch_sync(_queue, ^{ src = [self->_entries copy]; });
-    if ((!keyword || keyword.length == 0) && categoryOrMinusOne == -1) return src;
+    dispatch_sync(_queue, ^{ src = [self _categorySliceLocked:categoryOrMinusOne]; });
+    if (!keyword || keyword.length == 0) return src;
 
     NSMutableArray *out = [NSMutableArray array];
     NSString *kw = [keyword lowercaseString];
     for (DHLogEntry *e in src) {
-        if (categoryOrMinusOne == -2) {
-            if (e.category > DHCategoryAsymmetric) continue;   // 加密组 (0..3)
-        } else if (categoryOrMinusOne >= 0 && e.category != categoryOrMinusOne) {
-            continue;
-        }
-        if (kw.length) {
-            BOOL hit = NO;
-            if ([[e.algorithm lowercaseString] containsString:kw]) hit = YES;
-            else if ([[e.operation lowercaseString] containsString:kw]) hit = YES;
-            else if (e.input && [[DHUTF8FromData(e.input) lowercaseString] containsString:kw]) hit = YES;
-            else if (e.input && [[DHHexFromData(e.input) lowercaseString] containsString:kw]) hit = YES;
-            else if (e.output && [[DHHexFromData(e.output) lowercaseString] containsString:kw]) hit = YES;
-            if (!hit) continue;
-        }
-        [out addObject:e];
+        BOOL hit = NO;
+        if ([[e.algorithm lowercaseString] containsString:kw]) hit = YES;
+        else if ([[e.operation lowercaseString] containsString:kw]) hit = YES;
+        else if (e.detail && [[e.detail lowercaseString] containsString:kw]) hit = YES;   // 网络/文件/系统按地址/路径搜
+        else if (e.input && [[DHUTF8FromData(e.input) lowercaseString] containsString:kw]) hit = YES;
+        else if (e.input && [[DHHexFromData(e.input) lowercaseString] containsString:kw]) hit = YES;
+        else if (e.output && [[DHHexFromData(e.output) lowercaseString] containsString:kw]) hit = YES;
+        if (hit) [out addObject:e];
     }
     return out;
 }
@@ -163,10 +192,13 @@ static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘�
 - (DHLogEntry *)entryWithSeq:(uint64_t)seq {
     __block DHLogEntry *r = nil;
     dispatch_sync(_queue, ^{
-        // 倒着找, 命中率高 (用户多看最新)
-        for (NSInteger i = (NSInteger)self->_entries.count - 1; i >= 0; i--) {
-            DHLogEntry *e = self->_entries[i];
-            if (e.seq == seq) { r = e; break; }
+        // 各桶倒着找, 命中率高 (用户多看最新)
+        for (int c = 0; c <= DHCategoryOther && !r; c++) {
+            NSMutableArray *b = self->_buckets[c];
+            for (NSInteger i = (NSInteger)b.count - 1; i >= 0; i--) {
+                DHLogEntry *e = b[i];
+                if (e.seq == seq) { r = e; break; }
+            }
         }
     });
     return r;
@@ -187,7 +219,7 @@ static const NSUInteger kMaxBlobLogged      = 64 * 1024;  // 单段 blob 落盘�
 
 - (void)clearAll {
     dispatch_async(_queue, ^{
-        [self->_entries removeAllObjects];
+        for (int c = 0; c <= DHCategoryOther; c++) [self->_buckets[c] removeAllObjects];
         self->_seqCounter = 0;
         memset(self->_categoryCounts, 0, sizeof(self->_categoryCounts));
         NSFileManager *fm = [NSFileManager defaultManager];

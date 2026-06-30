@@ -30,7 +30,15 @@ NSArray<DHDumpImage *> *dh_dump_list_images(void);
 // 对一个镜像砸壳, 返回脱壳后的 thin Mach-O 数据 (cryptid 已置 0)。
 // 若 cryptid 本就为 0, 返回该镜像的原始 thin slice (相当于直接导出明文二进制)。
 // 失败返回 nil 并填充 error。
+// 注意: 此函数会把整个 slice 读进内存, 仅适合小镜像; 大体量主程序请用下面的流式版。
 NSData * _Nullable dh_dump_decrypt_image(DHDumpImage *img, NSError * _Nullable * _Nullable error);
+
+// 流式砸壳: 直接把脱壳结果写到 outPath, 全程 64KB 缓冲, 内存占用 O(缓冲块),
+// 不把镜像整体读进内存 —— 575MB 这种大主程序也不会 OOM。做法同 dumpdecrypted 的三段写:
+// 复制 cryptoff 前段 → 写内存中已解密的 cryptsize 字节 → 复制剩余 → 把 cryptid patch 为 0。
+// cryptid 本就为 0 时退化为整段流式复制 thin slice。成功返回 YES, 失败 NO 并填充 error。
+BOOL dh_dump_decrypt_image_to_file(DHDumpImage *img, const char *outPath,
+                                   NSError * _Nullable * _Nullable error);
 
 NS_ASSUME_NONNULL_END
 

@@ -9,15 +9,20 @@
 #ifndef DH_HEALTH_H
 #define DH_HEALTH_H
 
-// 统一错误日志宏 —— 仅在 ObjC 文件(.m)里使用(依赖 NSLog)。
-// 纯 C 文件(.c)请直接调用下面的 dh_health_* 函数, 内部已写 stderr。
-#ifdef __OBJC__
-#import <Foundation/Foundation.h>
-#define DH_ERR(fmt, ...) NSLog(@"[IOSDecryptHub/ERR] " fmt, ##__VA_ARGS__)
-#endif
-
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+// 统一错误日志宏 —— 仅在 ObjC 文件(.m)里使用(依赖 NSLog)。
+// 双写: 控制台 NSLog + 进程级诊断日志(可在 Web 面板「复制审查日志」一键导出溯源)。
+// 纯 C 文件(.c)请直接调用 dh_health_* / dh_diag_append, 内部已写 stderr + 诊断日志。
+#ifdef __OBJC__
+#import <Foundation/Foundation.h>
+#define DH_ERR(fmt, ...) do { \
+    NSString *_dh_m = [NSString stringWithFormat:(fmt), ##__VA_ARGS__]; \
+    NSLog(@"[IOSDecryptHub/ERR] %@", _dh_m); \
+    dh_diag_append("ERR", _dh_m.UTF8String); \
+} while (0)
 #endif
 
 // 线程局部递归保护: hook 记录路径会用 Foundation API(NSDateFormatter/backtrace 等),
@@ -38,9 +43,20 @@ int         dh_health_persist_failed(void);     // 0/1
 int         dh_health_http_failed(void);        // 0/1
 int         dh_health_local_only(void);         // 0/1
 
-// 给 UI / Web 的简短摘要(仅含真正失效: hook/服务/落盘; 不含 localOnly)。
-// 无问题返回 "" (空串)。返回内部静态缓冲, 调用方应尽快拷贝。
+// 给 UI / Web 的简短摘要(顶部红字横幅)。只含真正的运行时失效: 服务失败/落盘失败。
+// hook 未挂上不计入此摘要(对真实 App 多为「该 App 没用此 API」的常态, 见 dh_diag_*),
+// 避免误报淹没真正的告警。无问题返回 "" (空串)。返回内部静态缓冲, 调用方应尽快拷贝。
 const char *dh_health_summary(void);
+
+// ---- 诊断日志(审查日志): 进程级环形缓冲, 收集所有内部错误/事件供开发者复制溯源 ----
+// 纯 C, 互斥保护, 不依赖 Foundation。各上报口与 DH_ERR 宏都会写入这里, 形成时间线。
+// level 例如 "ERR" / "WARN" / "INFO"; msg 为单行文本(过长会截断)。线程安全。
+void dh_diag_append(const char *level, const char *msg);
+// 返回诊断日志全文(从最旧到最新, 每行 "[HH:MM:SS] LEVEL: msg")。
+// 返回内部静态缓冲, 调用方应尽快拷贝。
+const char *dh_diag_dump(void);
+// 未挂上的符号清单(逗号分隔), 供诊断头部展示; 无则返回 ""。
+const char *dh_health_hook_unhooked(void);
 
 #ifdef __cplusplus
 }

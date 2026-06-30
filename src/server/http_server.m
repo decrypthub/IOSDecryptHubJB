@@ -33,7 +33,7 @@
 #define DH_HTTP_PORT_LAST   8108
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
-#define DH_HTTP_VERSION     "1.6.0"
+#define DH_HTTP_VERSION     "1.7.0"
 
 static int        gListenFD = -1;
 static uint16_t   gPort     = 0;
@@ -219,11 +219,22 @@ static void handle_stats(int fd) {
         @([s countForCategory:DHCategorySystem]),
         @([s countForCategory:DHCategoryOther]),
     ];
+    NSArray *pausedByCat = @[
+        @([s isPausedForCategory:DHCategoryDigest]),
+        @([s isPausedForCategory:DHCategoryHMAC]),
+        @([s isPausedForCategory:DHCategorySymmetric]),
+        @([s isPausedForCategory:DHCategoryAsymmetric]),
+        @([s isPausedForCategory:DHCategoryNetwork]),
+        @([s isPausedForCategory:DHCategoryFile]),
+        @([s isPausedForCategory:DHCategorySystem]),
+        @([s isPausedForCategory:DHCategoryOther]),
+    ];
     const char *hsum = dh_health_summary();
     send_json(fd, 200, @{
         @"total":       @(s.totalCount),
         @"paused":      @(s.paused),
         @"byCategory":  byCat,
+        @"pausedByCat": pausedByCat,
         @"port":        @(gPort),
         @"version":     @DH_HTTP_VERSION,
         @"process":     [s processInfo],
@@ -270,8 +281,41 @@ static void handle_clear(int fd) {
 
 static void handle_pause(int fd, NSDictionary *q) {
     BOOL p = [(q[@"paused"] ?: @"1") isEqualToString:@"1"];
-    [DHLogStore shared].paused = p;
-    send_json(fd, 200, @{@"paused": @(p)});
+    DHLogStore *s = [DHLogStore shared];
+    if (q[@"cat"]) {                                    // 暂停某一分类(文件类等高频)
+        NSInteger cat = [q[@"cat"] integerValue];
+        [s setPaused:p forCategory:(DHCategory)cat];
+        send_json(fd, 200, @{@"paused": @(p), @"cat": @(cat)});
+    } else {                                            // 全局总开关
+        s.paused = p;
+        send_json(fd, 200, @{@"paused": @(p)});
+    }
+}
+
+// 审查日志(诊断): 进程信息 + hook 安装结果 + 错误事件时间线, 纯文本便于一键复制溯源。
+static void handle_diag(int fd) {
+    DHLogStore *s = [DHLogStore shared];
+    NSDictionary *pi = [s processInfo];
+    NSMutableString *t = [NSMutableString string];
+    [t appendString:@"==== IOSDecryptHub 审查日志 (diagnostic) ====\n"];
+    [t appendFormat:@"版本: %s\n", DH_HTTP_VERSION];
+    [t appendFormat:@"应用: %@ (%@)  PID %@\n", pi[@"appName"] ?: @"", pi[@"bundleId"] ?: @"", pi[@"pid"] ?: @"?"];
+    [t appendFormat:@"系统: %@   设备: %@   物理内存: %@ MB\n",
+        pi[@"systemVersion"] ?: @"", pi[@"deviceModel"] ?: @"", pi[@"physicalMemoryMB"] ?: @"?"];
+    [t appendFormat:@"服务端口: %d   监听: %@\n", gPort, gURL ?: @""];
+    const char *unh = dh_health_hook_unhooked();
+    if (unh && unh[0])
+        [t appendFormat:@"未挂上的符号(多为该 App 未调用此 API, 属正常): %s\n", unh];   // 符号名为 ASCII
+    // 注意: NSString 的 %s 按系统默认 C 编码解释, 会把 UTF-8 中文当 MacRoman → 乱码;
+    // 含中文的 C 串必须先用 stringWithUTF8String 转成 NSString 再用 %@。
+    const char *hsum = dh_health_summary();
+    NSString *hs = (hsum && hsum[0]) ? [NSString stringWithUTF8String:hsum] : nil;
+    [t appendFormat:@"健康摘要: %@\n", hs ?: @"正常"];
+    [t appendString:@"---- 事件时间线 ----\n"];
+    NSString *timeline = [NSString stringWithUTF8String:dh_diag_dump()];
+    [t appendString:timeline ?: @""];
+    [t appendString:@"==== END ====\n"];
+    send_text(fd, 200, t);
 }
 
 static void handle_download(int fd) {
@@ -433,6 +477,8 @@ static void handle_connection(int fd) {
                 handle_dump_download(fd, q);
             } else if ([path isEqualToString:@"/api/appicon"]) {
                 handle_appicon(fd);
+            } else if ([path isEqualToString:@"/api/diag"]) {
+                handle_diag(fd);
             } else if ([path isEqualToString:@"/favicon.ico"]) {
                 send_response(fd, 204, @"No Content", @"image/x-icon", [NSData data]);
             } else {

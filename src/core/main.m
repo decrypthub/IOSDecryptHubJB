@@ -13,6 +13,7 @@
 #import "log_store.h"
 #import "ui_float.h"
 #import "http_server.h"
+#import "dh_health.h"
 
 extern void dh_install_digest_hooks(void);
 extern void dh_install_hmac_hooks(void);
@@ -40,8 +41,10 @@ static void dh_bootstrap(void) {
     // 在 hooked_open 内部触发 open/dlopen 递归(与 dh_in_hook 标志双保险).
     (void)DHTimestampNow();
     (void)DHCallStackFiltered();
+    dh_diag_append("INFO", "IOSDecryptHub 启动, 开始安装 hook");
     // 安装 hook —— 尽早完成, 否则早期发生的加解密会漏抓.
     dh_install_all_hooks();
+    dh_diag_append("INFO", "hook 安装完成 (Digest/HMAC/对称/非对称/KDF/网络/文件/系统)");
     NSLog(@"[IOSDecryptHub] hook 已全部安装 (Digest / HMAC / 对称 / 非对称 / KDF / 网络 / 文件 / 系统)");
 
     // 启动本地 HTTP 服务 - 不依赖 UIApplication, 可以立刻起.

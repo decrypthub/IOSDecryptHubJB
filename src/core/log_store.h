@@ -56,8 +56,12 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 - (NSUInteger)totalCount;
 - (NSUInteger)countForCategory:(DHCategory)cat;
 
-// 暂停/恢复
+// 暂停/恢复 (全局总开关)
 @property (atomic, assign) BOOL paused;
+
+// 每类暂停 (高频的文件类可单独停掉, 不影响其它板块继续记录)
+- (void)setPaused:(BOOL)paused forCategory:(DHCategory)cat;
+- (BOOL)isPausedForCategory:(DHCategory)cat;
 
 // 清空 (内存 + 文件)
 - (void)clearAll;

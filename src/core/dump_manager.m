@@ -48,6 +48,18 @@ static NSString *docs_dir(void) {
     return base.length ? base : @"app";
 }
 
+// 砸壳临时目录(放解密后的镜像文件, 供 zw_add_file 流式打包, 用完即删)。
+- (NSString *)makeTmpDir {
+    NSString *d = [docs_dir() stringByAppendingPathComponent:@".dump_tmp"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath:d error:nil];   // 清掉上次残留
+    if (![fm createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil]) return nil;
+    return d;
+}
+- (void)cleanupTmp:(NSString *)d {
+    if (d) [[NSFileManager defaultManager] removeItemAtPath:d error:nil];
+}
+
 - (void)progress:(int)p stage:(NSString *)stage {
     [_lock lock];
     _progress = p;
@@ -129,33 +141,41 @@ static NSString *docs_dir(void) {
     }
     if (targets.count == 0) { [self failWith:@"没有可导出的镜像"]; return; }
 
+    NSString *tmpDir = [self makeTmpDir];
+    if (!tmpDir) { [self failWith:@"无法创建临时目录"]; return; }
+
     NSString *outPath = [docs_dir() stringByAppendingPathComponent:
                          [NSString stringWithFormat:@"%@-decrypted.zip", [self appBaseName]]];
     [[NSFileManager defaultManager] removeItemAtPath:outPath error:nil];
 
     dh_zip_writer *zw = zw_open(outPath.fileSystemRepresentation);
-    if (!zw) { [self failWith:@"无法创建输出 zip"]; return; }
+    if (!zw) { [self cleanupTmp:tmpDir]; [self failWith:@"无法创建输出 zip"]; return; }
 
     NSUInteger n = targets.count;
     for (NSUInteger i = 0; i < n; i++) {
         DHDumpImage *im = targets[i];
         [self progress:(int)(i * 90 / n) stage:[NSString stringWithFormat:@"砸壳 %@", im.name]];
 
+        // 流式砸壳到临时文件, 再流式加入 zip —— 全程不把镜像整体读进内存。
+        NSString *tmp = [tmpDir stringByAppendingPathComponent:
+                         [NSString stringWithFormat:@"%lu_%@.dec", (unsigned long)i, im.name]];
         NSError *err = nil;
-        NSData *dec = dh_dump_decrypt_image(im, &err);
-        if (!dec) { zw_abort(zw); [self failWith:[NSString stringWithFormat:@"%@: %@", im.name, err.localizedDescription]]; return; }
-
+        if (!dh_dump_decrypt_image_to_file(im, tmp.fileSystemRepresentation, &err)) {
+            zw_abort(zw); [self cleanupTmp:tmpDir];
+            [self failWith:[NSString stringWithFormat:@"%@: %@", im.name, err.localizedDescription]]; return;
+        }
         // zip 内用相对 bundle 的路径, 保证唯一且有结构
         NSString *rel = ([im.path hasPrefix:bundlePath] && im.path.length > bundlePath.length + 1)
                       ? [im.path substringFromIndex:bundlePath.length + 1] : im.name;
         NSString *entry = [rel stringByAppendingString:@".decrypted"];
-        if (zw_add_data(zw, entry.UTF8String, dec.bytes, dec.length, 0755) != 0) {
-            zw_abort(zw); [self failWith:@"写入 zip 失败"]; return;
-        }
+        int rc = zw_add_file(zw, entry.UTF8String, tmp.fileSystemRepresentation, 0755);
+        [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
+        if (rc != 0) { zw_abort(zw); [self cleanupTmp:tmpDir]; [self failWith:@"写入 zip 失败"]; return; }
     }
 
     [self progress:95 stage:@"收尾打包"];
-    if (zw_close(zw) != 0) { [self failWith:@"zip 收尾失败"]; return; }
+    if (zw_close(zw) != 0) { [self cleanupTmp:tmpDir]; [self failWith:@"zip 收尾失败"]; return; }
+    [self cleanupTmp:tmpDir];
 
     [_lock lock]; _binPath = outPath; _state = @"done"; _progress = 100; _stage = @"完成"; [_lock unlock];
     NSLog(@"[IOSDecryptHub] 砸壳(bin)完成: %@", outPath);
@@ -170,33 +190,40 @@ static NSString *docs_dir(void) {
     NSString *appDirName = [bundlePath lastPathComponent];   // X.app
     if (bundlePath.length == 0) { [self failWith:@"无法取得 bundle 路径"]; return; }
 
+    NSString *tmpDir = [self makeTmpDir];
+    if (!tmpDir) { [self failWith:@"无法创建临时目录"]; return; }
+
     NSString *outPath = [docs_dir() stringByAppendingPathComponent:
                          [NSString stringWithFormat:@"%@-decrypted.ipa", [self appBaseName]]];
     [fm removeItemAtPath:outPath error:nil];
 
-    // 1. 砸壳所有加密镜像, 建 path -> 解密data 映射
+    // 1. 砸壳所有加密镜像 -> 临时文件, 建 原路径 -> 临时解密文件 映射 (不持有 NSData)
     [self progress:5 stage:@"砸壳镜像"];
     NSArray<DHDumpImage *> *imgs = dh_dump_list_images();
     NSUInteger encN = 0;
     for (DHDumpImage *im in imgs) if (im.cryptid != 0) encN++;
 
-    NSMutableDictionary<NSString *, NSData *> *decMap = [NSMutableDictionary dictionary];
-    NSUInteger done = 0;
+    NSMutableDictionary<NSString *, NSString *> *decFiles = [NSMutableDictionary dictionary]; // path -> tmpfile
+    NSUInteger done = 0, idx = 0;
     for (DHDumpImage *im in imgs) {
         if (im.cryptid == 0) continue;
+        NSString *tmp = [tmpDir stringByAppendingPathComponent:
+                         [NSString stringWithFormat:@"%lu_%@.dec", (unsigned long)idx++, im.name]];
         NSError *err = nil;
-        NSData *dec = dh_dump_decrypt_image(im, &err);
-        if (!dec) { [self failWith:[NSString stringWithFormat:@"%@: %@", im.name, err.localizedDescription]]; return; }
-        decMap[im.path] = dec;
+        if (!dh_dump_decrypt_image_to_file(im, tmp.fileSystemRepresentation, &err)) {
+            [self cleanupTmp:tmpDir];
+            [self failWith:[NSString stringWithFormat:@"%@: %@", im.name, err.localizedDescription]]; return;
+        }
+        decFiles[im.path] = tmp;
         done++;
         [self progress:(int)(5 + done * 35 / MAX(encN, (NSUInteger)1))
                   stage:[NSString stringWithFormat:@"砸壳 %@", im.name]];
     }
 
-    // 2. 流式遍历 bundle 目录写 zip
+    // 2. 流式遍历 bundle 目录写 zip (加密镜像用临时解密文件, 其余用原文件, 统一 zw_add_file)
     [self progress:45 stage:@"打包 IPA"];
     dh_zip_writer *zw = zw_open(outPath.fileSystemRepresentation);
-    if (!zw) { [self failWith:@"无法创建输出 ipa"]; return; }
+    if (!zw) { [self cleanupTmp:tmpDir]; [self failWith:@"无法创建输出 ipa"]; return; }
 
     NSDirectoryEnumerator *en = [fm enumeratorAtPath:bundlePath];
     NSString *sub;
@@ -208,17 +235,19 @@ static NSString *docs_dir(void) {
         if (isDir) continue;   // zip 不需显式目录项, unzip 会自动建
 
         NSString *zipPath = [NSString stringWithFormat:@"Payload/%@/%@", appDirName, sub];
-        NSData *dec = decMap[full];
-        int rc;
-        if (dec) {
-            rc = zw_add_data(zw, zipPath.UTF8String, dec.bytes, dec.length, 0755);   // 脱壳后的可执行
+        NSString *decTmp = decFiles[full];
+        const char *srcPath;
+        unsigned perm;
+        if (decTmp) {
+            srcPath = decTmp.fileSystemRepresentation; perm = 0755;   // 脱壳后的可执行
         } else {
+            srcPath = full.fileSystemRepresentation;
             NSDictionary *attrs = [fm attributesOfItemAtPath:full error:nil];
-            unsigned perm = attrs ? (unsigned)[attrs[NSFilePosixPermissions] unsignedShortValue] : 0644;
+            perm = attrs ? (unsigned)[attrs[NSFilePosixPermissions] unsignedShortValue] : 0644;
             if (perm == 0) perm = 0644;
-            rc = zw_add_file(zw, zipPath.UTF8String, full.fileSystemRepresentation, perm);
         }
-        if (rc != 0) { zw_abort(zw); [self failWith:[NSString stringWithFormat:@"打包失败: %@", sub]]; return; }
+        int rc = zw_add_file(zw, zipPath.UTF8String, srcPath, perm);
+        if (rc != 0) { zw_abort(zw); [self cleanupTmp:tmpDir]; [self failWith:[NSString stringWithFormat:@"打包失败: %@", sub]]; return; }
 
         if ((++fileCount & 0x3F) == 0) {
             int p = 45 + MIN(50, (int)(fileCount / 20));
@@ -227,7 +256,8 @@ static NSString *docs_dir(void) {
     }
 
     [self progress:97 stage:@"收尾打包"];
-    if (zw_close(zw) != 0) { [self failWith:@"ipa 收尾失败"]; return; }
+    if (zw_close(zw) != 0) { [self cleanupTmp:tmpDir]; [self failWith:@"ipa 收尾失败"]; return; }
+    [self cleanupTmp:tmpDir];
 
     [_lock lock]; _ipaPath = outPath; _state = @"done"; _progress = 100; _stage = @"完成"; [_lock unlock];
     NSLog(@"[IOSDecryptHub] 砸壳(ipa)完成: %@", outPath);
