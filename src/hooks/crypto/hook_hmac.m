@@ -6,7 +6,9 @@
 #import <CommonCrypto/CommonHMAC.h>
 #import "fishhook.h"
 #import "log_store.h"
+#define DH_BOARD DH_DIAG_CRYPTO
 #import "dh_health.h"
+#import "dh_capture.h"
 
 static NSString *hmac_alg_name(CCHmacAlgorithm a) {
     switch (a) {
@@ -43,6 +45,7 @@ static void hooked_CCHmac(CCHmacAlgorithm algorithm,
                           const void *data, size_t dataLength,
                           void *macOut) {
     orig_CCHmac(algorithm, key, keyLength, data, dataLength, macOut);
+    if (!dh_capture_sub_enabled(DH_CAP_HMAC)) return;
     DHLogEntry *e = [DHLogEntry new];
     e.category   = DHCategoryHMAC;
     e.algorithm  = hmac_alg_name(algorithm);
@@ -112,6 +115,7 @@ static void hooked_CCHmacFinal(CCHmacContext *ctx, void *macOut) {
     [gHmacStates removeObjectForKey:(__bridge id)ctx];
     dispatch_semaphore_signal(gHmacLock);
     if (!s) return;
+    if (!dh_capture_sub_enabled(DH_CAP_HMAC)) return;
     size_t outLen = hmac_out_len(s.alg);
     DHLogEntry *e = [DHLogEntry new];
     e.category   = DHCategoryHMAC;
@@ -135,5 +139,5 @@ void dh_install_hmac_hooks(void) {
     rebind_symbols(r, sizeof(r)/sizeof(r[0]));
     // 安装后自检(fail-loud): orig 仍为 NULL 即没挂上. CommonCrypto 注入时必已加载.
     for (size_t k = 0; k < sizeof(r)/sizeof(r[0]); k++)
-        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(r[k].name);
+        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(DH_DIAG_CRYPTO, r[k].name);
 }

@@ -13,6 +13,7 @@ VERSION := 1.7.0
 TARGET  := decrypt_helper.dylib
 SRC     := src/core/fishhook.c \
            src/core/dh_health.c \
+           src/core/dh_capture.c \
            src/core/log_store.m \
            src/core/zip_writer.c \
            src/core/macho_dump.m \
@@ -54,7 +55,13 @@ CFLAGS  := -arch $(ARCH) \
 
 all: $(TARGET)
 
-$(TARGET): $(SRC) $(wildcard src/*/*.h)
+# 前端: 改 web/index.html 后自动重生成内嵌头(字节数组), 不再手刮 C 字符串。
+WEB_HEADER := src/server/web_index_html.h
+$(WEB_HEADER): web/index.html tools/gen_web.py
+	@echo "[*] 生成前端内嵌头 $(WEB_HEADER) ..."
+	python3 tools/gen_web.py web/index.html $(WEB_HEADER)
+
+$(TARGET): $(WEB_HEADER) $(SRC) $(wildcard src/*/*.h)
 	@echo "[*] 使用 $(CC) 编译..."
 	$(CC) $(CFLAGS) $(SRC) -o $(TARGET)
 	@echo "✅ 编译完成: $(TARGET)"

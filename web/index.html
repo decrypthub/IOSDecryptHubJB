@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang='zh-CN'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>IOSDecryptHub</title>
+<style>
+  * { box-sizing: border-box; }
+  html,body { margin:0; padding:0; height:100%; background:#0d1117; color:#c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 13px; }
+  body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+  header, .procbar, .healthbar, .tabbar, .filters { flex-shrink:0; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 14px; background:#161b22; border-bottom:1px solid #30363d; }
+  header h1 { margin:0; font-size:16px; font-weight:700; color:#7ee787; letter-spacing:0.02em; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+  header .stats { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:#8b949e; }
+  header .stats b { color:#c9d1d9; font-weight:600; }
+  header .spacer { flex:1; }
+  header button, header a.btn, .filters button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:5px 10px; border-radius:6px; font-size:12px; cursor:pointer; text-decoration:none; }
+  header button:hover, header a.btn:hover, .filters button:hover { background:#30363d; }
+  header button.danger, .filters button.danger { background:#3d1417; border-color:#5a1d1d; color:#ffa198; }
+  header button.warn, .filters button.warn { background:#3d2c0a; border-color:#5d4310; color:#e3b341; }
+  .procbar { display:flex; align-items:center; gap:10px; padding:6px 14px; background:#0d1117; border-bottom:1px solid #21262d; font-size:11px; color:#6e7681; }
+  .appicon { width:30px; height:30px; border-radius:7px; flex-shrink:0; border:1px solid #30363d; background:#161b22; object-fit:cover; }
+  .procinfo { display:flex; gap:14px; flex-wrap:wrap; align-items:center; }
+  .procinfo b { color:#8b949e; font-weight:600; }
+  .procinfo .none { color:#484f58; }
+  .healthbar { display:none; padding:7px 14px; background:#3d1417; border-bottom:1px solid #5a1d1d; color:#ffa198; font-size:12px; font-weight:600; }
+  .tabbar { display:flex; gap:2px; padding:0 10px; background:#161b22; border-bottom:1px solid #30363d; overflow-x:auto; }
+  .tab { background:none; border:none; color:#8b949e; padding:10px 16px; font-size:13px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
+  .tab:hover { color:#c9d1d9; }
+  .tab.active { color:#c9d1d9; border-bottom-color:#f78166; font-weight:600; }
+  .tab .n { color:#6e7681; font-size:11px; margin-left:5px; }
+  .filters { display:flex; gap:8px; padding:8px 14px; background:#0d1117; border-bottom:1px solid #21262d; align-items:center; flex-wrap:wrap; }
+  .filters input[type=search], .filters select { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:5px 8px; border-radius:6px; font-size:12px; }
+  .filters input[type=search] { width: 240px; }
+  .filters label { color:#8b949e; font-size:12px; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+  .pill.digest { background:#0d3a1f; color:#56d364; }
+  .pill.hmac   { background:#0c2e4a; color:#58a6ff; }
+  .pill.sym    { background:#3c2410; color:#f0a35c; }
+  .pill.asym   { background:#3a1140; color:#d2a8ff; }
+  .pill.net    { background:#0c302c; color:#3fd0c9; }
+  .pill.file   { background:#2e2a0c; color:#d4c95a; }
+  .pill.sys    { background:#241a3a; color:#b89aff; }
+  .pill.other  { background:#21262d; color:#8b949e; }
+  .workspace { flex:1; display:flex; min-height:0; }
+  .list-pane { width:42%; min-width:220px; flex-shrink:0; overflow-y:auto; }
+  .splitter { width:7px; flex-shrink:0; background:#21262d; cursor:col-resize; border-left:1px solid #30363d; border-right:1px solid #30363d; transition: background 0.15s; }
+  .splitter:hover, .splitter.dragging { background:#388bfd; }
+  .detail-pane { flex:1; min-width:240px; overflow-y:auto; padding:0 18px 28px; }
+  .row { border-bottom:1px solid #21262d; cursor:pointer; padding:7px 14px; }
+  .row:hover { background:#161b22; }
+  .row.selected { background:#1b2231; box-shadow: inset 3px 0 0 #58a6ff; }
+  .row .top { display:flex; gap:9px; align-items:center; font-size:12px; }
+  .row .seq { color:#8b949e; min-width:42px; font-variant-numeric: tabular-nums; }
+  .row .algo { font-weight:600; color:#c9d1d9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .op { color:#8b949e; font-size:11px; flex-shrink:0; }
+  .row .ts { color:#6e7681; font-size:11px; margin-left:auto; flex-shrink:0; font-variant-numeric: tabular-nums; }
+  .row .lens { color:#7d8590; font-size:11px; margin-top:2px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .preview { color:#6e7681; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; margin-top:2px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .detail-head { position:sticky; top:0; background:#0d1117; padding:14px 0 10px; border-bottom:1px solid #21262d; z-index:1; }
+  .detail-head h2 { margin:0; font-size:15px; color:#c9d1d9; word-break:break-all; }
+  .detail-head .sub { color:#8b949e; font-size:12px; margin-top:4px; word-break:break-all; }
+  .io-section { margin-top:14px; }
+  .io-section.kv-card  { background:#11151b; border:1px solid #21262d; border-radius:8px; padding:10px 14px; }
+  .io-section.in-card  { background:#0c1c12; border:1px solid #1f4a2b; border-radius:8px; padding:12px 14px 14px; }
+  .io-section.out-card { background:#0b1826; border:1px solid #1a3d61; border-radius:8px; padding:12px 14px 14px; }
+  .io-label { font-size:13px; font-weight:700; letter-spacing:0.04em; padding:5px 12px; border-radius:6px; display:inline-block; margin-bottom:10px; }
+  .io-label.in  { background:#10301c; color:#56d364; }
+  .io-label.out { background:#11243d; color:#58a6ff; }
+  .io-label.kv  { background:#21262d; color:#c9d1d9; }
+  .io-meta { color:#6e7681; font-size:11px; margin-bottom:6px; }
+  .detail-pane h3 { font-size:11px; color:#8b949e; margin:12px 0 5px; font-weight:500; text-transform:uppercase; letter-spacing:0.05em; }
+  .detail-pane pre { background:#161b22; border:1px solid #21262d; border-radius:6px; padding:8px 10px; margin:0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.5; max-height:300px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
+  .detail-pane pre.hex { white-space: pre; word-break: normal; }
+  .row-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .detail-pane button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:3px 9px; border-radius:5px; font-size:11px; cursor:pointer; }
+  .detail-pane button:hover { background:#30363d; }
+  .detail-empty { color:#6e7681; text-align:center; padding:60px 20px; line-height:1.7; }
+  .empty { text-align:center; padding:40px; color:#6e7681; }
+  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#21262d; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); opacity:0; transition: opacity 0.2s; pointer-events:none; z-index:50; }
+  .toast.show { opacity:1; }
+  .dumppane { flex:1; overflow-y:auto; padding:16px 18px; }
+  .dumpwrap { max-width:920px; }
+  .dumpwrap h2 { font-size:15px; margin:2px 0 10px; color:#c9d1d9; }
+  .dumpwrap .note { color:#8b949e; font-size:12px; line-height:1.7; margin-bottom:14px; }
+  .dumpwrap .note b { color:#c9d1d9; }
+  .dumpwrap .warn-note { color:#e3b341; }
+  .dump-actions { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+  .dump-actions button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:7px 14px; border-radius:6px; font-size:13px; cursor:pointer; }
+  .dump-actions button:hover { background:#30363d; }
+  .dump-actions button.primary { background:#1f6feb; border-color:#1f6feb; color:#fff; }
+  .dump-actions button.primary:hover { background:#388bfd; }
+  .dump-actions button:disabled { opacity:0.5; cursor:not-allowed; }
+  .dump-progress { margin:10px 0 14px; }
+  .dump-stage { font-size:12px; color:#8b949e; margin-bottom:6px; }
+  .dump-bar { height:8px; background:#21262d; border-radius:5px; overflow:hidden; }
+  .dump-bar > div { height:100%; width:0; background:#3fb950; transition:width .3s; }
+  .dump-done { margin:6px 0 14px; font-size:13px; }
+  .dl-link { display:inline-block; margin-right:14px; color:#58a6ff; text-decoration:none; }
+  .dl-link:hover { text-decoration:underline; }
+  .dump-table { width:100%; border-collapse:collapse; font-size:12px; margin-top:6px; }
+  .dump-table th, .dump-table td { text-align:left; padding:6px 8px; border-bottom:1px solid #21262d; }
+  .dump-table th { color:#8b949e; font-weight:600; }
+  .dump-table td.enc { color:#ffa198; }
+  .dump-table td.plain { color:#6e7681; }
+  @media (max-width: 760px) {
+    header { flex-wrap:wrap; } header .stats { width:100%; order:3; }
+    .filters input[type=search] { flex:1; width:auto; }
+    .workspace { flex-direction:column; }
+    .list-pane { width:auto !important; height:42%; border-bottom:1px solid #30363d; }
+    .splitter { display:none; }
+  }
+  .ver { color:#6e7681; font-size:11px; font-weight:400; margin-left:6px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+  .cap-group { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .cap-group .lab { color:#8b949e; font-size:12px; }
+  .cap-chip { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:#c9d1d9; background:#0d1117; border:1px solid #30363d; padding:3px 8px; border-radius:6px; cursor:pointer; user-select:none; }
+  .cap-chip input { margin:0; cursor:pointer; }
+  .modal-mask { display:none; position:fixed; inset:0; background:rgba(1,4,9,0.7); z-index:100; align-items:center; justify-content:center; }
+  .modal-mask.show { display:flex; }
+  .modal { width:min(900px,92vw); height:min(80vh,720px); background:#0d1117; border:1px solid #30363d; border-radius:10px; display:flex; flex-direction:column; box-shadow:0 8px 40px rgba(0,0,0,0.55); }
+  .modal h3 { margin:0; padding:12px 16px; border-bottom:1px solid #21262d; font-size:14px; color:#c9d1d9; display:flex; align-items:center; gap:8px; }
+  .modal h3 .spacer { flex:1; }
+  .modal h3 button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
+  .modal h3 button:hover { background:#30363d; }
+  .modal pre { flex:1; overflow:auto; margin:0; padding:14px 16px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; color:#c9d1d9; }
+  .diag-boards { display:flex; gap:4px; flex-wrap:wrap; }
+  .diag-boards button { background:#0d1117; color:#8b949e; border:1px solid #30363d; padding:3px 9px; border-radius:6px; font-size:12px; cursor:pointer; }
+  .diag-boards button.active { background:#1b2231; color:#c9d1d9; border-color:#388bfd; }
+</style>
+</head>
+<body>
+<header>
+  <h1>IOSDecryptHub<span class='ver' id='ver'></span></h1>
+  <div class='stats' id='stats'>加载中…</div>
+  <div class='spacer'></div>
+  <label style='color:#8b949e;font-size:12px;'><input type='checkbox' id='autoRefresh' checked> 自动刷新</label>
+  <button id='diagBtn' title='查看内部诊断/审查日志, 便于排查与复现'>审查日志</button>
+</header>
+<div class='procbar'>
+  <img class='appicon' id='appicon' src='/api/appicon' alt='' onerror='this.style.display="none"'>
+  <div class='procinfo' id='procinfo'></div>
+</div>
+<div class='healthbar' id='healthbar'></div>
+<nav class='tabbar' id='tabbar'>
+  <button class='tab active' data-tab='crypto'>加解密<span class='n' id='n-crypto'></span></button>
+  <button class='tab' data-tab='net'>网络<span class='n' id='n-net'></span></button>
+  <button class='tab' data-tab='file'>文件<span class='n' id='n-file'></span></button>
+  <button class='tab' data-tab='sys'>系统<span class='n' id='n-sys'></span></button>
+  <button class='tab' data-tab='dump'>砸壳</button>
+</nav>
+<div class='filters' id='toolbar'>
+  <span id='catWrap'><label>分类</label>
+  <select id='catSel'>
+    <option value='-2'>全部</option>
+    <option value='0'>摘要</option>
+    <option value='1'>HMAC</option>
+    <option value='2'>对称</option>
+    <option value='3'>非对称</option>
+  </select></span>
+  <input id='q' type='search' placeholder='搜索本类: 算法/路径/明文/Hex…'>
+  <span id='minWrap'><label>最小</label>
+  <select id='minSize'>
+    <option value='0'>不限</option>
+    <option value='64'>≥64 B</option>
+    <option value='1024'>≥1 KB</option>
+    <option value='10240'>≥10 KB</option>
+  </select></span>
+  <button id='tabPauseBtn' class='warn'>暂停</button>
+  <button id='tabDownloadBtn'>下载本类</button>
+  <button id='tabClearBtn' class='danger'>清空本类</button>
+  <span class='cap-group'><span class='lab'>捕获</span><span id='captureWrap'></span></span>
+  <span id='count' style='color:#6e7681; font-size:11px; margin-left:auto;'></span>
+</div>
+<div class='workspace'>
+  <main id='list' class='list-pane'></main>
+  <div class='splitter' id='splitter'></div>
+  <div id='detail' class='detail-pane'><div class='detail-empty'>← 选择左侧一条记录查看详情</div></div>
+</div>
+<div id='dumpPane' class='dumppane' style='display:none;'>
+  <div class='dumpwrap'>
+    <h2>应用砸壳 (脱壳 / dump)</h2>
+    <div class='note'>在目标进程内 dump 已被内核解密的 Mach-O。只能砸<b>当前进程已加载</b>的镜像(主程序 + 内嵌 Frameworks);PlugIns 扩展是独立进程,无法在此砸到。<br><span class='warn-note'>⚠ 仅限授权安全测试与自有 App;砸壳并分发受版权保护的程序可能违法。</span></div>
+    <div class='dump-actions'>
+      <button id='dumpRefresh'>刷新镜像</button>
+      <button id='dumpBin'>导出裸解密二进制 (zip)</button>
+      <button id='dumpIpa' class='primary'>重打包为可重签 IPA</button>
+    </div>
+    <div id='dumpProg' class='dump-progress' style='display:none;'>
+      <div id='dumpStage' class='dump-stage'></div>
+      <div class='dump-bar'><div id='dumpBarFill'></div></div>
+    </div>
+    <div id='dumpDone' class='dump-done' style='display:none;'></div>
+    <table class='dump-table'><thead><tr><th>镜像</th><th>类型</th><th>状态</th><th>大小</th></tr></thead>
+      <tbody id='dumpImgBody'><tr><td colspan='4' style='color:#6e7681;'>点击「刷新镜像」加载…</td></tr></tbody></table>
+  </div>
+</div>
+<div class='modal-mask' id='diagMask'>
+  <div class='modal'>
+    <h3>审查日志<span class='diag-boards' id='diagBoards'></span><span class='spacer'></span>
+      <button id='diagCopy'>复制</button><button id='diagDownload'>下载</button><button id='diagRefresh'>刷新</button><button id='diagClose'>关闭</button></h3>
+    <pre id='diagBody'>加载中…</pre>
+  </div>
+</div>
+<div class='toast' id='toast'></div>
+<script>
+  const CAT_NAMES = ['摘要','HMAC','对称','非对称','网络','文件','系统','其它'];
+  const CAT_CLS   = ['digest','hmac','sym','asym','net','file','sys','other'];
+  const TAB_CAT   = { crypto:-2, net:4, file:5, sys:6 };
+  const TAB_SUBS = {
+    crypto: [['DIGEST','摘要'],['HMAC','HMAC'],['SYMMETRIC','对称'],['ASYMMETRIC','非对称'],['KDF','KDF']],
+    net:    [['NET_CONNECT','connect'],['NET_SSL_WRITE','SSL_write'],['NET_SSL_READ','SSL_read']],
+    file:   [['FILE_OPEN','open'],['FILE_WRITE','write'],['FILE_UNLINK','unlink'],['FILE_RENAME','rename']],
+    sys:    [['SYS_DLOPEN','dlopen']],
+  };
+  const tabState = { crypto:{q:''}, net:{q:''}, file:{q:''}, sys:{q:''} };
+  function tabCat(){ return activeTab==='crypto' ? -2 : TAB_CAT[activeTab]; }
+  const EMPTY = '<div class="detail-empty">← 选择左侧一条记录查看详情</div>';
+  let selectedSeq = null, detailCache = {}, stats = {}, activeTab = 'crypto';
+
+  function $(id) { return document.getElementById(id); }
+  function toast(msg) { const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'),1400); }
+  function escapeHTML(s) { return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  async function copyText(t) { try { await navigator.clipboard.writeText(t); toast('已复制 '+t.length+' 字符'); } catch(e) { const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('已复制'); } }
+  async function fetchJSON(url, opts) { const r=await fetch(url,opts); if(!r.ok) throw new Error(r.status+' '+r.statusText); return r.json(); }
+  function curCat() { return activeTab==='crypto' ? $('catSel').value : TAB_CAT[activeTab]; }
+  function buildCapture(tab) {
+    const subs = TAB_SUBS[tab] || [];
+    $('captureWrap').innerHTML = subs.map(([sub,lab]) =>
+      '<label class="cap-chip"><input type="checkbox" data-sub="'+sub+'" checked> '+escapeHTML(lab)+'</label>').join('');
+  }
+  function updateToolbar() {
+    if (activeTab==='dump') return;
+    const cap=(stats&&stats.capture)||{}, pbc=(stats&&stats.pausedByCat)||[];
+    const paused = activeTab==='crypto' ? !!pbc[0] : !!pbc[TAB_CAT[activeTab]];
+    const pb=$('tabPauseBtn'); if(pb){ pb.textContent = paused?'继续':'暂停'; pb.classList.toggle('danger', paused); }
+    document.querySelectorAll('#captureWrap input[data-sub]').forEach(cb => { if(cap[cb.dataset.sub]!==undefined) cb.checked = cap[cb.dataset.sub]!==0; });
+  }
+  const DIAG_BOARDS = [[-1,'全部'],[0,'通用'],[1,'加解密'],[2,'网络'],[3,'文件'],[4,'系统'],[5,'砸壳']];
+  let diagBoard = -1;
+  function buildDiagBoards(){
+    $('diagBoards').innerHTML = DIAG_BOARDS.map(([b,lab]) =>
+      '<button data-board="'+b+'"'+(b===diagBoard?' class="active"':'')+'>'+lab+'</button>').join('');
+  }
+  async function loadDiag(){ $('diagBody').textContent='加载中…'; try { const r=await fetch('/api/diag?board='+diagBoard); $('diagBody').textContent=await r.text(); } catch(e){ $('diagBody').textContent='获取失败: '+e.message; } }
+  async function openDiag(){ $('diagMask').classList.add('show'); buildDiagBoards(); loadDiag(); }
+  async function refreshStats() {
+    try {
+      stats = await fetchJSON('/api/stats');
+      const bc = stats.byCategory || [];
+      const sp = stats.paused ? '已暂停' : '运行中';
+      $('stats').innerHTML = '<span>'+sp+'</span><span>总: <b>'+stats.total+'</b></span>';
+      const cryptoN = (bc[0]||0)+(bc[1]||0)+(bc[2]||0)+(bc[3]||0);
+      $('n-crypto').textContent = cryptoN ? cryptoN : '';
+      $('n-net').textContent = bc[4] ? bc[4] : '';
+      $('n-file').textContent = bc[5] ? bc[5] : '';
+      $('n-sys').textContent = bc[6] ? bc[6] : '';
+      $('ver').textContent = stats.version ? ('v'+stats.version) : '';
+      const p = stats.process || {}; const pb = [];
+      if (p.appName) pb.push('<span><b>'+escapeHTML(p.appName)+'</b></span>');
+      if (p.bundleId) pb.push('<span>'+escapeHTML(p.bundleId)+'</span>');
+      if (p.pid) pb.push('<span>PID <b>'+p.pid+'</b></span>');
+      if (p.systemVersion) pb.push('<span>iOS <b>'+escapeHTML(p.systemVersion)+'</b></span>');
+      if (p.deviceModel) pb.push('<span>'+escapeHTML(p.deviceModel)+'</span>');
+      if (p.physicalMemoryMB) pb.push('<span>RAM <b>'+p.physicalMemoryMB+' MB</b></span>');
+      $('procinfo').innerHTML = pb.length ? pb.join('') : '<span class="none">进程信息不可用</span>';
+      const hb=$('healthbar'); const h=stats.health||{};
+      if (h.summary) { hb.style.display='block'; hb.textContent='失效: '+h.summary; } else { hb.style.display='none'; }
+      updateToolbar();
+    } catch(e) { $('stats').textContent = e.message; }
+  }
+  async function refreshList() {
+    const q = $('q').value.trim(), minSize = $('minSize').value;
+    const url = '/api/logs?cat='+encodeURIComponent(curCat())+'&q='+encodeURIComponent(q)+'&minSize='+encodeURIComponent(minSize)+'&limit=500';
+    let entries = [];
+    try { entries = await fetchJSON(url); }
+    catch(e) { $('list').innerHTML = '<div class="empty">'+escapeHTML(e.message)+'</div>'; return; }
+    $('count').textContent = entries.length+' / '+(stats.total||0);
+    if (!entries.length) { $('list').innerHTML = '<div class="empty">该分类还没有记录…<br>在 App 里触发对应操作看看?</div>'; return; }
+    const out = [];
+    for (const e of entries) {
+      const cls = CAT_CLS[e.category]||'other', cname = CAT_NAMES[e.category]||'其它';
+      const sel = (selectedSeq===e.seq) ? ' selected' : '';
+      const meta = e.detail ? escapeHTML(e.detail) : ('in:'+(e.inLen||0)+'B · out:'+(e.outLen||0)+'B');
+      out.push(
+        '<div class="row'+sel+'" data-seq="'+e.seq+'">' +
+        '  <div class="top">' +
+        '    <span class="seq">#'+e.seq+'</span>' +
+        '    <span class="pill '+cls+'">'+cname+'</span>' +
+        '    <span class="algo">'+escapeHTML(e.algorithm)+'</span>' +
+        '    <span class="op">'+escapeHTML(e.operation)+'</span>' +
+        '    <span class="ts">'+escapeHTML(e.timestamp)+'</span>' +
+        '  </div>' +
+        '  <div class="lens">'+meta+'</div>' +
+        (e.preview ? '<div class="preview">'+escapeHTML(e.preview)+'</div>' : '') +
+        '</div>'
+      );
+    }
+    $('list').innerHTML = out.join('');
+  }
+  function ioKV(label, byteLen, hex) {
+    return '<div class="io-section kv-card"><div class="io-label kv">'+label+' ('+byteLen+' bytes)</div>' +
+      '<pre class="hex">'+escapeHTML(hex||'')+'</pre>' +
+      '<div class="row-actions"><button data-copy="hex-'+label+'">复制 Hex</button></div></div>';
+  }
+  function ioBody(byteLen, hex, utf8, dump, label) {
+    let b = '<div class="io-meta">'+byteLen+' bytes</div>';
+    if (utf8) b += '<h3>UTF-8</h3><pre>'+escapeHTML(utf8)+'</pre>';
+    b += '<h3>Hex</h3><pre class="hex">'+escapeHTML(hex||'')+'</pre>';
+    if (dump) b += '<h3>HexDump</h3><pre class="hex">'+escapeHTML(dump)+'</pre>';
+    b += '<div class="row-actions"><button data-copy="hex-'+label+'">复制 Hex</button>'+(utf8?'<button data-copy="utf8-'+label+'">复制 UTF-8</button>':'')+'</div>';
+    return b;
+  }
+  function renderDetailPane(d) {
+    if (!d) return EMPTY;
+    let h = '<div class="detail-head"><h2>#'+d.seq+'  '+escapeHTML(d.algorithm)+'</h2>' +
+      '<div class="sub">'+escapeHTML(d.operation)+' · '+escapeHTML(d.timestamp)+(d.publicKeyInfo?' · '+escapeHTML(d.publicKeyInfo):'')+'</div></div>';
+    if (d.detail) h += '<div class="io-section kv-card"><div class="io-label kv">详情</div><pre>'+escapeHTML(d.detail)+'</pre></div>';
+    if (d.key) h += ioKV('KEY', d.key, d.keyHex);
+    if (d.iv)  h += ioKV('IV', d.iv, d.ivHex);
+    if (d.input)  h += '<div class="io-section in-card"><div class="io-label in">输入 / INPUT</div>'+ioBody(d.input, d.inputHex, d.inputUtf8, d.inputDump, 'INPUT')+'</div>';
+    if (d.output) h += '<div class="io-section out-card"><div class="io-label out">输出 / OUTPUT</div>'+ioBody(d.output, d.outputHex, d.outputUtf8, d.outputDump, 'OUTPUT')+'</div>';
+    if (d.callStack) h += '<div class="io-section"><h3>调用栈</h3><pre>'+escapeHTML(d.callStack)+'</pre></div>';
+    h += '<div class="row-actions"><button data-copyall="'+d.seq+'">复制整条</button></div>';
+    return h;
+  }
+  async function selectRow(seq) {
+    selectedSeq = seq;
+    document.querySelectorAll('.row').forEach(r => r.classList.toggle('selected', parseInt(r.dataset.seq,10)===seq));
+    if (!detailCache[seq]) {
+      $('detail').innerHTML = '<div class="detail-empty">加载中…</div>';
+      try { detailCache[seq] = await fetchJSON('/api/logs/'+seq); }
+      catch(e) { $('detail').innerHTML = '<div class="detail-empty">加载失败: '+escapeHTML(e.message)+'</div>'; return; }
+    }
+    $('detail').innerHTML = renderDetailPane(detailCache[seq]);
+  }
+  function switchTab(name) {
+    activeTab = name;
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab===name));
+    const isDump = (name==='dump');
+    $('dumpPane').style.display = isDump ? 'flex' : 'none';
+    document.querySelector('.workspace').style.display = isDump ? 'none' : 'flex';
+    $('toolbar').style.display = isDump ? 'none' : 'flex';
+    if (isDump) { loadDumpImages(); pollDump(); return; }
+    $('catWrap').style.display = (name==='crypto') ? '' : 'none';
+    $('minWrap').style.display = (name==='crypto') ? '' : 'none';
+    $('q').value = (tabState[name]||{}).q || '';
+    buildCapture(name); updateToolbar();
+    selectedSeq = null; $('detail').innerHTML = EMPTY;
+    refreshList();
+  }
+  let dumpPolling = null;
+  function fmtSize(n){ n=+n||0; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(1)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
+  async function loadDumpImages(){
+    try {
+      const d = await fetchJSON('/api/dump/images');
+      const rows = (d.images||[]).map(im =>
+        '<tr><td>'+escapeHTML(im.name)+'</td><td>'+(im.kind==='main'?'主程序':'Framework')+'</td>'+
+        '<td class="'+(im.encrypted?'enc':'plain')+'">'+(im.encrypted?('加密 · cryptid='+im.cryptid):'未加密')+'</td>'+
+        '<td>'+fmtSize(im.size)+'</td></tr>');
+      $('dumpImgBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" style="color:#6e7681;">未发现本 App 镜像</td></tr>';
+      if ((d.encryptedCount||0)===0) toast('未检测到加密镜像 (cryptid=1)');
+    } catch(e){ $('dumpImgBody').innerHTML = '<tr><td colspan="4">'+escapeHTML(e.message)+'</td></tr>'; }
+  }
+  async function startDump(mode){
+    $('dumpBin').disabled = true; $('dumpIpa').disabled = true;
+    $('dumpDone').style.display='none';
+    $('dumpProg').style.display='block'; $('dumpBarFill').style.width='0'; $('dumpStage').textContent='发起中…';
+    try {
+      const r = await fetch('/api/dump?mode='+encodeURIComponent(mode), {method:'POST'});
+      if (r.status===409) { toast('已有砸壳任务在进行'); }
+      else if (!r.ok) { throw new Error(r.status+' '+r.statusText); }
+    } catch(e){ toast('发起失败: '+e.message); $('dumpBin').disabled=false; $('dumpIpa').disabled=false; }
+    if (dumpPolling) clearInterval(dumpPolling);
+    dumpPolling = setInterval(pollDump, 800); pollDump();
+  }
+  async function pollDump(){
+    let s; try { s = await fetchJSON('/api/dump/status'); } catch(e){ return; }
+    if (s.state==='running'){
+      $('dumpProg').style.display='block';
+      $('dumpBarFill').style.width=(s.progress||0)+'%';
+      $('dumpStage').textContent=(s.progress||0)+'% · '+(s.stage||'');
+    } else if (s.state==='done'){
+      if (dumpPolling){ clearInterval(dumpPolling); dumpPolling=null; }
+      $('dumpProg').style.display='block'; $('dumpBarFill').style.width='100%'; $('dumpStage').textContent='完成';
+      $('dumpBin').disabled=false; $('dumpIpa').disabled=false;
+      const links=[];
+      if (s.binReady) links.push('<a class="dl-link" href="/api/dump/download?kind=bin">⬇ 下载 '+escapeHTML(s.binName||'二进制.zip')+'</a>');
+      if (s.ipaReady) links.push('<a class="dl-link" href="/api/dump/download?kind=ipa">⬇ 下载 '+escapeHTML(s.ipaName||'IPA')+'</a>');
+      $('dumpDone').innerHTML = links.length ? links.join('') : '已完成';
+      $('dumpDone').style.display='block';
+    } else if (s.state==='error'){
+      if (dumpPolling){ clearInterval(dumpPolling); dumpPolling=null; }
+      $('dumpProg').style.display='none';
+      $('dumpBin').disabled=false; $('dumpIpa').disabled=false;
+      toast('砸壳失败: '+(s.error||'未知错误'));
+    }
+  }
+  document.addEventListener('click', async (ev) => {
+    const tab = ev.target.closest('.tab');
+    if (tab) { switchTab(tab.dataset.tab); return; }
+    const copyHex = ev.target.dataset && ev.target.dataset.copy;
+    if (copyHex) {
+      ev.stopPropagation(); const d = detailCache[selectedSeq]; if (!d) return;
+      const [kind, ...rest] = copyHex.split('-'); const label = rest.join('-');
+      const field = label==='KEY'?'key':label==='IV'?'iv':label==='INPUT'?'input':'output';
+      copyText((kind==='hex' ? d[field+'Hex'] : d[field+'Utf8'])||''); return;
+    }
+    const copyAll = ev.target.dataset && ev.target.dataset.copyall;
+    if (copyAll) {
+      ev.stopPropagation(); const d = detailCache[copyAll]; if (!d) return;
+      const lines = ['序号: '+d.seq, '时间: '+d.timestamp, '算法: '+d.algorithm, '操作: '+d.operation];
+      if (d.detail) lines.push('详情: '+d.detail);
+      if (d.publicKeyInfo) lines.push('密钥信息: '+d.publicKeyInfo);
+      for (const f of ['key','iv','input','output']) { if (d[f]) { lines.push(''); lines.push('=== '+f.toUpperCase()+' ('+d[f].length+' bytes) ==='); lines.push(d[f+'Hex']); if (d[f+'Utf8']) { lines.push('-- UTF-8 --'); lines.push(d[f+'Utf8']); } } }
+      if (d.callStack) { lines.push(''); lines.push('=== CallStack ==='); lines.push(d.callStack); }
+      copyText(lines.join('\n')); return;
+    }
+    const row = ev.target.closest('.row');
+    if (row) selectRow(parseInt(row.dataset.seq, 10));
+  });
+  $('catSel').addEventListener('change', refreshList);
+  $('minSize').addEventListener('change', refreshList);
+  let qTimer; $('q').addEventListener('input', () => { (tabState[activeTab]||{}).q = $('q').value; clearTimeout(qTimer); qTimer=setTimeout(refreshList,200); });
+  $('tabPauseBtn').addEventListener('click', async () => { const c=tabCat(); const paused = activeTab==='crypto' ? ((stats.pausedByCat||[])[0]) : ((stats.pausedByCat||[])[c]); await fetch('/api/pause?cat='+c+'&paused='+(paused?'0':'1'),{method:'POST'}); await refreshStats(); refreshList(); });
+  $('tabDownloadBtn').addEventListener('click', () => { window.open('/api/logs/download?cat='+tabCat(), '_blank'); });
+  $('tabClearBtn').addEventListener('click', async () => { if(!confirm('确定清空本板块日志?')) return; await fetch('/api/clear?cat='+tabCat(),{method:'POST'}); detailCache={}; selectedSeq=null; $('detail').innerHTML=EMPTY; refreshStats(); refreshList(); });
+  $('captureWrap').addEventListener('change', async (ev) => { const cb=ev.target; if(!cb.dataset||!cb.dataset.sub) return; await fetch('/api/capture?sub='+encodeURIComponent(cb.dataset.sub)+'&on='+(cb.checked?'1':'0'),{method:'POST'}); refreshStats(); });
+  $('diagBtn').addEventListener('click', openDiag);
+  $('diagClose').addEventListener('click', () => $('diagMask').classList.remove('show'));
+  $('diagRefresh').addEventListener('click', loadDiag);
+  $('diagCopy').addEventListener('click', () => copyText($('diagBody').textContent||''));
+  $('diagDownload').addEventListener('click', () => window.open('/api/diag/download?board='+diagBoard, '_blank'));
+  $('diagBoards').addEventListener('click', (e) => { const b=e.target.dataset && e.target.dataset.board; if(b===undefined||b==='') return; diagBoard=parseInt(b,10); buildDiagBoards(); loadDiag(); });
+  $('diagMask').addEventListener('click', (e) => { if(e.target===$('diagMask')) $('diagMask').classList.remove('show'); });
+  $('dumpRefresh').addEventListener('click', loadDumpImages);
+  $('dumpBin').addEventListener('click', () => startDump('bin'));
+  $('dumpIpa').addEventListener('click', () => startDump('ipa'));
+  (function(){
+    const sp=$('splitter'), lp=$('list'), wsEl=document.querySelector('.workspace'); let dragging=false;
+    sp.addEventListener('mousedown', e => { dragging=true; sp.classList.add('dragging'); document.body.style.userSelect='none'; e.preventDefault(); });
+    document.addEventListener('mousemove', e => { if(!dragging) return; const rect=wsEl.getBoundingClientRect(); lp.style.width=Math.max(220, Math.min(rect.width-260, e.clientX-rect.left))+'px'; });
+    document.addEventListener('mouseup', () => { if(dragging){ dragging=false; sp.classList.remove('dragging'); document.body.style.userSelect=''; } });
+  })();
+  setInterval(() => { if(!$('autoRefresh').checked) return; refreshStats(); if(activeTab!=='dump') refreshList(); }, 1500);
+  buildCapture('crypto'); refreshStats(); refreshList();
+</script>
+</body>
+</html>

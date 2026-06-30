@@ -9,6 +9,7 @@ echo "SDK: $IOS_SDK"
 SRCS=(
   src/core/fishhook.c
   src/core/dh_health.c
+  src/core/dh_capture.c
   src/core/log_store.m
   src/hooks/crypto/hook_digest.m
   src/hooks/crypto/hook_hmac.m

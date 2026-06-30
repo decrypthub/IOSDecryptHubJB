@@ -5,12 +5,14 @@
 #import <Foundation/Foundation.h>
 #import "fishhook.h"
 #import "log_store.h"
+#define DH_BOARD DH_DIAG_SYS
 #import "dh_health.h"
+#import "dh_capture.h"
 
 static void *(*orig_dlopen)(const char *, int);
 static void *hooked_dlopen(const char *path, int mode) {
     void *h = orig_dlopen(path, mode);
-    if (!dh_in_hook && path && *path) {
+    if (!dh_in_hook && path && *path && dh_capture_sub_enabled(DH_CAP_SYS_DLOPEN)) {
         dh_in_hook = 1;
         DHLogEntry *e = [DHLogEntry new];
         e.category  = DHCategorySystem;
@@ -31,5 +33,5 @@ void dh_install_system_hooks(void) {
     };
     rebind_symbols(r, sizeof(r)/sizeof(r[0]));
     for (size_t k = 0; k < sizeof(r)/sizeof(r[0]); k++)
-        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(r[k].name);
+        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(DH_DIAG_SYS, r[k].name);
 }

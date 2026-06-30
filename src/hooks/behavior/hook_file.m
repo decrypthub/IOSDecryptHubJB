@@ -11,7 +11,9 @@
 #import <stdarg.h>
 #import "fishhook.h"
 #import "log_store.h"
+#define DH_BOARD DH_DIAG_FILE
 #import "dh_health.h"
+#import "dh_capture.h"
 
 static BOOL dh_is_app_file(const char *p) {
     if (!p || !*p) return NO;
@@ -62,9 +64,9 @@ static int hooked_open(const char *path, int flags, ...) {
         dh_in_hook = 1;
         file_state_init();
         dispatch_semaphore_wait(gFdLock, DISPATCH_TIME_FOREVER);
-        gFdPath[@(fd)] = [NSString stringWithUTF8String:path] ?: @"?";
+        gFdPath[@(fd)] = [NSString stringWithUTF8String:path] ?: @"?";   // fd 映射始终维护(write 需要)
         dispatch_semaphore_signal(gFdLock);
-        file_log(@"open", path, flags_desc(flags));
+        if (dh_capture_sub_enabled(DH_CAP_FILE_OPEN)) file_log(@"open", path, flags_desc(flags));
         dh_in_hook = 0;
     }
     return fd;
@@ -79,7 +81,7 @@ static ssize_t hooked_write(int fd, const void *buf, size_t n) {
         dispatch_semaphore_wait(gFdLock, DISPATCH_TIME_FOREVER);
         NSString *path = gFdPath[@(fd)];
         dispatch_semaphore_signal(gFdLock);
-        if (path && r > 0) {
+        if (path && r > 0 && dh_capture_sub_enabled(DH_CAP_FILE_WRITE)) {
             DHLogEntry *e = [DHLogEntry new];
             e.category  = DHCategoryFile;
             e.algorithm = @"write";
@@ -109,7 +111,7 @@ static int hooked_close(int fd) {
 static int (*orig_unlink)(const char *);
 static int hooked_unlink(const char *path) {
     int r = orig_unlink(path);
-    if (!dh_in_hook && dh_is_app_file(path)) {
+    if (!dh_in_hook && dh_is_app_file(path) && dh_capture_sub_enabled(DH_CAP_FILE_UNLINK)) {
         dh_in_hook = 1; file_log(@"unlink", path, @"删除"); dh_in_hook = 0;
     }
     return r;
@@ -118,7 +120,7 @@ static int hooked_unlink(const char *path) {
 static int (*orig_rename)(const char *, const char *);
 static int hooked_rename(const char *from, const char *to) {
     int r = orig_rename(from, to);
-    if (!dh_in_hook && (dh_is_app_file(from) || dh_is_app_file(to))) {
+    if (!dh_in_hook && (dh_is_app_file(from) || dh_is_app_file(to)) && dh_capture_sub_enabled(DH_CAP_FILE_RENAME)) {
         dh_in_hook = 1;
         file_log(@"rename", to, [NSString stringWithFormat:@"%s -> %s", from ?: "?", to ?: "?"]);
         dh_in_hook = 0;
@@ -136,5 +138,5 @@ void dh_install_file_hooks(void) {
     };
     rebind_symbols(r, sizeof(r)/sizeof(r[0]));
     for (size_t k = 0; k < sizeof(r)/sizeof(r[0]); k++)
-        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(r[k].name);
+        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(DH_DIAG_FILE, r[k].name);
 }

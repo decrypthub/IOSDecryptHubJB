@@ -26,6 +26,7 @@
 #import "log_store.h"
 #import "web_index_html.h"
 #import "dh_health.h"
+#import "dh_capture.h"
 #import "ui_float.h"
 #import "dump_manager.h"
 
@@ -219,6 +220,9 @@ static void handle_stats(int fd) {
         @([s countForCategory:DHCategorySystem]),
         @([s countForCategory:DHCategoryOther]),
     ];
+    NSMutableDictionary *capture = [NSMutableDictionary dictionary];
+    for (int i = 0; i < DH_CAP_SUB_COUNT; i++)
+        capture[[NSString stringWithUTF8String:dh_capture_sub_name((dh_cap_sub)i)]] = @(dh_capture_sub_enabled((dh_cap_sub)i));
     NSArray *pausedByCat = @[
         @([s isPausedForCategory:DHCategoryDigest]),
         @([s isPausedForCategory:DHCategoryHMAC]),
@@ -235,6 +239,7 @@ static void handle_stats(int fd) {
         @"paused":      @(s.paused),
         @"byCategory":  byCat,
         @"pausedByCat": pausedByCat,
+        @"capture":     capture,
         @"port":        @(gPort),
         @"version":     @DH_HTTP_VERSION,
         @"process":     [s processInfo],
@@ -274,17 +279,22 @@ static void handle_log_detail(int fd, NSString *seqStr) {
     send_json(fd, 200, entry_detail(e));
 }
 
-static void handle_clear(int fd) {
-    [[DHLogStore shared] clearAll];
+static void handle_clear(int fd, NSDictionary *q) {
+    if (q[@"cat"]) [[DHLogStore shared] clearCategory:[q[@"cat"] integerValue]];   // 清空本类
+    else           [[DHLogStore shared] clearAll];                                 // 清空全部(含落盘)
     send_json(fd, 200, @{@"ok": @YES});
 }
 
 static void handle_pause(int fd, NSDictionary *q) {
     BOOL p = [(q[@"paused"] ?: @"1") isEqualToString:@"1"];
     DHLogStore *s = [DHLogStore shared];
-    if (q[@"cat"]) {                                    // 暂停某一分类(文件类等高频)
+    if (q[@"cat"]) {
         NSInteger cat = [q[@"cat"] integerValue];
-        [s setPaused:p forCategory:(DHCategory)cat];
+        if (cat == -2) {                                // 加密组(摘要/HMAC/对称/非对称)
+            for (int c = DHCategoryDigest; c <= DHCategoryAsymmetric; c++) [s setPaused:p forCategory:(DHCategory)c];
+        } else {                                        // 单类(网络/文件/系统等)
+            [s setPaused:p forCategory:(DHCategory)cat];
+        }
         send_json(fd, 200, @{@"paused": @(p), @"cat": @(cat)});
     } else {                                            // 全局总开关
         s.paused = p;
@@ -292,8 +302,45 @@ static void handle_pause(int fd, NSDictionary *q) {
     }
 }
 
-// 审查日志(诊断): 进程信息 + hook 安装结果 + 错误事件时间线, 纯文本便于一键复制溯源。
-static void handle_diag(int fd) {
+// 捕获开关 —— 哪些子类型被记录(持久化在沙箱)。
+static void handle_capture_get(int fd) {
+    NSMutableDictionary *d = [NSMutableDictionary dictionary];
+    for (int i = 0; i < DH_CAP_SUB_COUNT; i++)
+        d[[NSString stringWithUTF8String:dh_capture_sub_name((dh_cap_sub)i)]] = @(dh_capture_sub_enabled((dh_cap_sub)i));
+    send_json(fd, 200, d);
+}
+static void handle_capture_set(int fd, NSDictionary *q) {
+    NSString *sub = q[@"sub"];
+    if (!sub) { send_json(fd, 400, @{@"error": @"missing sub"}); return; }
+    int idx = -1;
+    for (int i = 0; i < DH_CAP_SUB_COUNT; i++)
+        if ([sub isEqualToString:[NSString stringWithUTF8String:dh_capture_sub_name((dh_cap_sub)i)]]) { idx = i; break; }
+    if (idx < 0) { send_json(fd, 400, @{@"error": @"unknown sub"}); return; }
+    BOOL on = [(q[@"on"] ?: @"1") isEqualToString:@"1"];
+    dh_capture_set_sub((dh_cap_sub)idx, on ? 1 : 0);
+    send_json(fd, 200, @{@"sub": sub, @"on": @(on)});
+}
+
+// 按板块下载: 把某分类(或 -2 加密组)的内存日志导出为纯文本附件。
+static void handle_logs_download(int fd, NSDictionary *q) {
+    NSInteger cat = q[@"cat"] ? [q[@"cat"] integerValue] : -1;
+    NSString *text = [[DHLogStore shared] exportTextForCategory:cat];
+    NSData *body = [text dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+    NSMutableString *headers = [NSMutableString string];
+    [headers appendString:@"HTTP/1.1 200 OK\r\n"];
+    [headers appendString:@"Content-Type: text/plain; charset=utf-8\r\n"];
+    [headers appendFormat:@"Content-Length: %lu\r\n", (unsigned long)body.length];
+    [headers appendFormat:@"Content-Disposition: attachment; filename=iosdecrypthub-cat%ld.log\r\n", (long)cat];
+    [headers appendString:@"Cache-Control: no-store\r\n"];
+    [headers appendString:@"Connection: close\r\n\r\n"];
+    NSData *hd = [headers dataUsingEncoding:NSUTF8StringEncoding];
+    if (!write_all(fd, hd.bytes, hd.length)) return;
+    write_all(fd, body.bytes, body.length);
+}
+
+// 审查日志(诊断): 进程信息 + hook 安装结果 + 按板块的错误事件时间线。board<0=全部板块。
+// 注意: NSString 的 %s 按系统默认 C 编码解释 UTF-8 会乱码, 含中文的 C 串先 stringWithUTF8String 再 %@。
+static NSString *diag_text(NSInteger board) {
     DHLogStore *s = [DHLogStore shared];
     NSDictionary *pi = [s processInfo];
     NSMutableString *t = [NSMutableString string];
@@ -306,16 +353,32 @@ static void handle_diag(int fd) {
     const char *unh = dh_health_hook_unhooked();
     if (unh && unh[0])
         [t appendFormat:@"未挂上的符号(多为该 App 未调用此 API, 属正常): %s\n", unh];   // 符号名为 ASCII
-    // 注意: NSString 的 %s 按系统默认 C 编码解释, 会把 UTF-8 中文当 MacRoman → 乱码;
-    // 含中文的 C 串必须先用 stringWithUTF8String 转成 NSString 再用 %@。
     const char *hsum = dh_health_summary();
     NSString *hs = (hsum && hsum[0]) ? [NSString stringWithUTF8String:hsum] : nil;
     [t appendFormat:@"健康摘要: %@\n", hs ?: @"正常"];
-    [t appendString:@"---- 事件时间线 ----\n"];
-    NSString *timeline = [NSString stringWithUTF8String:dh_diag_dump()];
+    [t appendFormat:@"---- 事件时间线 (%@) ----\n", board < 0 ? @"全部板块" : @"本板块"];
+    NSString *timeline = [NSString stringWithUTF8String:dh_diag_dump((int)board)];
     [t appendString:timeline ?: @""];
     [t appendString:@"==== END ====\n"];
-    send_text(fd, 200, t);
+    return t;
+}
+static void handle_diag(int fd, NSDictionary *q) {
+    NSInteger board = q[@"board"] ? [q[@"board"] integerValue] : -1;
+    send_text(fd, 200, diag_text(board));
+}
+static void handle_diag_download(int fd, NSDictionary *q) {
+    NSInteger board = q[@"board"] ? [q[@"board"] integerValue] : -1;
+    NSData *body = [diag_text(board) dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+    NSMutableString *headers = [NSMutableString string];
+    [headers appendString:@"HTTP/1.1 200 OK\r\n"];
+    [headers appendString:@"Content-Type: text/plain; charset=utf-8\r\n"];
+    [headers appendFormat:@"Content-Length: %lu\r\n", (unsigned long)body.length];
+    [headers appendFormat:@"Content-Disposition: attachment; filename=iosdecrypthub-diag-%ld.log\r\n", (long)board];
+    [headers appendString:@"Cache-Control: no-store\r\n"];
+    [headers appendString:@"Connection: close\r\n\r\n"];
+    NSData *hd = [headers dataUsingEncoding:NSUTF8StringEncoding];
+    if (!write_all(fd, hd.bytes, hd.length)) return;
+    write_all(fd, body.bytes, body.length);
 }
 
 static void handle_download(int fd) {
@@ -418,7 +481,7 @@ static void handle_dump_download(int fd, NSDictionary *q) {
 }
 
 static void handle_index(int fd) {
-    NSData *body = [NSData dataWithBytes:kDHIndexHTML length:strlen(kDHIndexHTML)];
+    NSData *body = [NSData dataWithBytes:kDHIndexHTML length:kDHIndexHTML_len];   // 字节数组, 非 NUL 结尾
     send_response(fd, 200, @"OK", @"text/html; charset=utf-8", body);
 }
 
@@ -465,6 +528,10 @@ static void handle_connection(int fd) {
                 handle_stats(fd);
             } else if ([path isEqualToString:@"/api/logs"]) {
                 handle_logs_list(fd, q);
+            } else if ([path isEqualToString:@"/api/logs/download"]) {
+                handle_logs_download(fd, q);
+            } else if ([path isEqualToString:@"/api/capture"]) {
+                handle_capture_get(fd);
             } else if ([path hasPrefix:@"/api/logs/"]) {
                 handle_log_detail(fd, [path substringFromIndex:[@"/api/logs/" length]]);
             } else if ([path isEqualToString:@"/download"]) {
@@ -478,7 +545,9 @@ static void handle_connection(int fd) {
             } else if ([path isEqualToString:@"/api/appicon"]) {
                 handle_appicon(fd);
             } else if ([path isEqualToString:@"/api/diag"]) {
-                handle_diag(fd);
+                handle_diag(fd, q);
+            } else if ([path isEqualToString:@"/api/diag/download"]) {
+                handle_diag_download(fd, q);
             } else if ([path isEqualToString:@"/favicon.ico"]) {
                 send_response(fd, 204, @"No Content", @"image/x-icon", [NSData data]);
             } else {
@@ -486,9 +555,11 @@ static void handle_connection(int fd) {
             }
         } else if ([method isEqualToString:@"POST"]) {
             if ([path isEqualToString:@"/api/clear"]) {
-                handle_clear(fd);
+                handle_clear(fd, q);
             } else if ([path isEqualToString:@"/api/pause"]) {
                 handle_pause(fd, q);
+            } else if ([path isEqualToString:@"/api/capture"]) {
+                handle_capture_set(fd, q);
             } else if ([path isEqualToString:@"/api/dump"]) {
                 handle_dump_start(fd, q);
             } else {

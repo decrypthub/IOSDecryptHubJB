@@ -12,7 +12,9 @@
 #import <CommonCrypto/CommonDigest.h>
 #import "fishhook.h"
 #import "log_store.h"
+#define DH_BOARD DH_DIAG_CRYPTO
 #import "dh_health.h"
+#import "dh_capture.h"
 
 // =================== ctx <-> buffer 关联 ===================
 static NSMapTable *gCtxBuffers = nil;     // weak->strong 不合适 (ctx 是裸指针), 用 strong->strong with manual cleanup
@@ -59,6 +61,7 @@ static NSData *digest_ctx_take(void *ctx) {
 
 // =================== 通用记录函数 ===================
 static void log_digest(NSString *algo, NSData *input, const void *md, size_t mdLen) {
+    if (!dh_capture_sub_enabled(DH_CAP_DIGEST)) return;   // 捕获开关: 摘要族关闭则源头不记
     DHLogEntry *e = [DHLogEntry new];
     e.category   = DHCategoryDigest;
     e.algorithm  = algo;
@@ -165,6 +168,6 @@ void dh_install_digest_hooks(void) {
     // 它们没挂上是系统行为而非我们的失效, 不纳入告警 —— 否则常态化误报会淹没真正的告警(狼来了).
     for (size_t k = 0; k < sizeof(r)/sizeof(r[0]); k++) {
         if (strstr(r[k].name, "MD2") || strstr(r[k].name, "MD4")) continue;
-        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(r[k].name);
+        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(DH_DIAG_CRYPTO, r[k].name);
     }
 }

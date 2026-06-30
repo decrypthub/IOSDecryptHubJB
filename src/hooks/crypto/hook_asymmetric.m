@@ -9,7 +9,9 @@
 #import <Security/Security.h>
 #import "fishhook.h"
 #import "log_store.h"
+#define DH_BOARD DH_DIAG_CRYPTO
 #import "dh_health.h"
+#import "dh_capture.h"
 
 static NSString *describe_key(SecKeyRef key) {
     if (!key) return @"(null)";
@@ -53,6 +55,7 @@ static CFDataRef (*orig_SecKeyCreateSignature)(SecKeyRef, SecKeyAlgorithm, CFDat
 static CFDataRef hooked_SecKeyCreateSignature(SecKeyRef key, SecKeyAlgorithm algorithm,
                                               CFDataRef dataToSign, CFErrorRef *error) {
     CFDataRef out = orig_SecKeyCreateSignature(key, algorithm, dataToSign, error);
+    if (!dh_capture_sub_enabled(DH_CAP_ASYMMETRIC)) return out;
     DHLogEntry *e = [DHLogEntry new];
     e.category   = DHCategoryAsymmetric;
     e.algorithm  = [NSString stringWithFormat:@"SIGN-%@", (__bridge NSString *)algorithm];
@@ -72,6 +75,7 @@ static Boolean hooked_SecKeyVerifySignature(SecKeyRef key, SecKeyAlgorithm algor
                                             CFDataRef signedData, CFDataRef signature,
                                             CFErrorRef *error) {
     Boolean ok = orig_SecKeyVerifySignature(key, algorithm, signedData, signature, error);
+    if (!dh_capture_sub_enabled(DH_CAP_ASYMMETRIC)) return ok;
     DHLogEntry *e = [DHLogEntry new];
     e.category   = DHCategoryAsymmetric;
     e.algorithm  = [NSString stringWithFormat:@"VERIFY-%@", (__bridge NSString *)algorithm];
@@ -90,6 +94,7 @@ static CFDataRef (*orig_SecKeyCreateEncryptedData)(SecKeyRef, SecKeyAlgorithm, C
 static CFDataRef hooked_SecKeyCreateEncryptedData(SecKeyRef key, SecKeyAlgorithm algorithm,
                                                   CFDataRef plaintext, CFErrorRef *error) {
     CFDataRef out = orig_SecKeyCreateEncryptedData(key, algorithm, plaintext, error);
+    if (!dh_capture_sub_enabled(DH_CAP_ASYMMETRIC)) return out;
     DHLogEntry *e = [DHLogEntry new];
     e.category   = DHCategoryAsymmetric;
     e.algorithm  = [NSString stringWithFormat:@"ENC-%@", (__bridge NSString *)algorithm];
@@ -108,6 +113,7 @@ static CFDataRef (*orig_SecKeyCreateDecryptedData)(SecKeyRef, SecKeyAlgorithm, C
 static CFDataRef hooked_SecKeyCreateDecryptedData(SecKeyRef key, SecKeyAlgorithm algorithm,
                                                   CFDataRef ciphertext, CFErrorRef *error) {
     CFDataRef out = orig_SecKeyCreateDecryptedData(key, algorithm, ciphertext, error);
+    if (!dh_capture_sub_enabled(DH_CAP_ASYMMETRIC)) return out;
     DHLogEntry *e = [DHLogEntry new];
     e.category   = DHCategoryAsymmetric;
     e.algorithm  = [NSString stringWithFormat:@"DEC-%@", (__bridge NSString *)algorithm];

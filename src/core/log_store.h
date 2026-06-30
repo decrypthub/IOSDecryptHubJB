@@ -65,9 +65,14 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 
 // 清空 (内存 + 文件)
 - (void)clearAll;
+// 仅清某分类的内存日志 (0..7 或 -2 加密组), 不动落盘文件
+- (void)clearCategory:(NSInteger)cat;
 
 // 日志文件路径 (落盘文件用于 share/导出)
 - (NSString *)logFilePath;
+
+// 把某分类(0..7, 或 -2=加密组, -1=全部)的内存日志导出成可读文本, 供「按板块下载」。
+- (NSString *)exportTextForCategory:(NSInteger)cat;
 
 // 当前宿主进程信息 (pid/进程名/bundle/系统版本/设备型号), 一次性采集并缓存
 - (NSDictionary *)processInfo;

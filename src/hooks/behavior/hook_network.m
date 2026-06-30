@@ -13,14 +13,16 @@
 #import <arpa/inet.h>
 #import "fishhook.h"
 #import "log_store.h"
+#define DH_BOARD DH_DIAG_NET
 #import "dh_health.h"
+#import "dh_capture.h"
 
 #define DH_NET_MAX 8192
 
 static int (*orig_connect)(int, const struct sockaddr *, socklen_t);
 static int hooked_connect(int fd, const struct sockaddr *addr, socklen_t len) {
     int r = orig_connect(fd, addr, len);
-    if (!dh_in_hook && addr && addr->sa_family == AF_INET) {
+    if (!dh_in_hook && addr && addr->sa_family == AF_INET && dh_capture_sub_enabled(DH_CAP_NET_CONNECT)) {
         dh_in_hook = 1;
         const struct sockaddr_in *s = (const struct sockaddr_in *)addr;
         char ip[INET_ADDRSTRLEN] = {0};
@@ -41,7 +43,7 @@ static int hooked_connect(int fd, const struct sockaddr *addr, socklen_t len) {
 static int (*orig_SSL_write)(void *, const void *, int);
 static int hooked_SSL_write(void *ssl, const void *buf, int num) {
     int r = orig_SSL_write(ssl, buf, num);
-    if (!dh_in_hook && buf && num > 0) {
+    if (!dh_in_hook && buf && num > 0 && dh_capture_sub_enabled(DH_CAP_NET_SSL_WRITE)) {
         dh_in_hook = 1;
         int n = num > DH_NET_MAX ? DH_NET_MAX : num;
         DHLogEntry *e = [DHLogEntry new];
@@ -61,7 +63,7 @@ static int hooked_SSL_write(void *ssl, const void *buf, int num) {
 static int (*orig_SSL_read)(void *, void *, int);
 static int hooked_SSL_read(void *ssl, void *buf, int num) {
     int r = orig_SSL_read(ssl, buf, num);
-    if (!dh_in_hook && buf && r > 0) {
+    if (!dh_in_hook && buf && r > 0 && dh_capture_sub_enabled(DH_CAP_NET_SSL_READ)) {
         dh_in_hook = 1;
         int n = r > DH_NET_MAX ? DH_NET_MAX : r;
         DHLogEntry *e = [DHLogEntry new];
@@ -88,6 +90,6 @@ void dh_install_network_hooks(void) {
     // 自检: connect 属 libSystem 必有; SSL_* 是 best-effort(App 无 BoringSSL 则不存在), 不告警.
     for (size_t k = 0; k < sizeof(r)/sizeof(r[0]); k++) {
         if (strstr(r[k].name, "SSL_")) continue;
-        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(r[k].name);
+        if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(DH_DIAG_NET, r[k].name);
     }
 }

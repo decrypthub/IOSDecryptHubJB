@@ -159,7 +159,7 @@ static void perform_rebinding_with_section(struct rebindings_entry *rebindings,
           } else {
             // fail-loud: 找到了符号但 vm_protect 失败, 替换没写进去 = hook 未生效.
             // 上报健康中心(内部已写 stderr 并去重).
-            dh_health_hook_fail(cur->rebindings[j].name);
+            dh_health_hook_fail(DH_DIAG_GENERAL, cur->rebindings[j].name);
           }
           goto symbol_loop;
         }

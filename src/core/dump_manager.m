@@ -2,6 +2,7 @@
 #import "dump_manager.h"
 #import "macho_dump.h"
 #import "zip_writer.h"
+#define DH_BOARD DH_DIAG_DUMP
 #import "dh_health.h"
 
 @implementation DHDumpManager {

@@ -1,6 +1,7 @@
 // log_store.m
 #import "log_store.h"
 #import "dh_health.h"
+#import "dh_capture.h"
 #import <sys/sysctl.h>
 #import <errno.h>
 
@@ -9,7 +10,6 @@
 
 @interface DHLogStore () {
     NSMutableArray<DHLogEntry *> *_buckets[DHCategoryOther + 1];   // 每类独立环形缓冲, 互不挤占
-    BOOL                          _pausedCat[DHCategoryOther + 1]; // 每类暂停状态
     dispatch_queue_t              _queue;       // 写入串行队列
     NSUInteger                    _categoryCounts[DHCategoryOther + 1];
     uint64_t                      _seqCounter;
@@ -31,7 +31,7 @@ static const NSUInteger kMaxBlobLogged  = 64 * 1024;     // 单段 blob 落盘�
 
 - (instancetype)init {
     if ((self = [super init])) {
-        for (int c = 0; c <= DHCategoryOther; c++) { _buckets[c] = [NSMutableArray array]; _pausedCat[c] = NO; }
+        for (int c = 0; c <= DHCategoryOther; c++) _buckets[c] = [NSMutableArray array];
         _queue = dispatch_queue_create("com.decrypthelper.logstore", DISPATCH_QUEUE_SERIAL);
         _seqCounter = 0;
         memset(_categoryCounts, 0, sizeof(_categoryCounts));
@@ -46,8 +46,8 @@ static const NSUInteger kMaxBlobLogged  = 64 * 1024;     // 单段 blob 落盘�
 - (void)append:(DHLogEntry *)entry {
     if (self.paused || entry == nil) return;
     NSInteger ci = (entry.category >= 0 && entry.category <= DHCategoryOther) ? entry.category : DHCategoryOther;
+    if (dh_capture_cat_paused((int)ci)) return;            // 该分类已暂停(单一真相源在 dh_capture, 已持久化)
     dispatch_async(_queue, ^{
-        if (self->_pausedCat[ci]) return;                  // 该分类已暂停
         entry.seq = ++self->_seqCounter;
         NSMutableArray *b = self->_buckets[ci];
         [b addObject:entry];
@@ -60,13 +60,11 @@ static const NSUInteger kMaxBlobLogged  = 64 * 1024;     // 单段 blob 落盘�
 
 - (void)setPaused:(BOOL)paused forCategory:(DHCategory)cat {
     if (cat < 0 || cat > DHCategoryOther) return;
-    dispatch_async(_queue, ^{ self->_pausedCat[cat] = paused; });
+    dh_capture_set_cat_paused((int)cat, paused ? 1 : 0);   // 写入 dh_capture 并持久化
 }
 - (BOOL)isPausedForCategory:(DHCategory)cat {
     if (cat < 0 || cat > DHCategoryOther) return NO;
-    __block BOOL p = NO;
-    dispatch_sync(_queue, ^{ p = self->_pausedCat[cat]; });
-    return p;
+    return dh_capture_cat_paused((int)cat) ? YES : NO;
 }
 
 // 合并所有桶并按 seq 升序 (供「全部」视图 / 落盘快照)。须在 _queue 内调用。
@@ -93,7 +91,8 @@ static const NSUInteger kMaxBlobLogged  = 64 * 1024;     // 单段 blob 落盘�
     return [self _mergedAllLocked];
 }
 
-- (void)_persist:(DHLogEntry *)e {
+// 把一条日志格式化成可读文本块(落盘与「按板块下载」共用同一格式)。
+static NSMutableString *dh_entry_block(DHLogEntry *e) {
     NSMutableString *s = [NSMutableString string];
     [s appendString:@"========================================\n"];
     [s appendFormat:@"#%llu  [%@]  %@  %@\n",
@@ -127,7 +126,11 @@ static const NSUInteger kMaxBlobLogged  = 64 * 1024;     // 单段 blob 落盘�
         [s appendFormat:@"-- CallStack:\n%@\n", e.callStack];
     }
     [s appendString:@"\n"];
+    return s;
+}
 
+- (void)_persist:(DHLogEntry *)e {
+    NSMutableString *s = dh_entry_block(e);
     NSData *bytes = [s dataUsingEncoding:NSUTF8StringEncoding];
     if (!bytes) { DH_ERR(@"日志 UTF-8 编码失败, 丢弃 #%llu", (unsigned long long)e.seq); return; }
     // 关键: 落盘自身的 open/write(写 decrypt_helper.log) 不能被 file hook 再记录, 否则
@@ -229,6 +232,19 @@ static const NSUInteger kMaxBlobLogged  = 64 * 1024;     // 单段 blob 落盘�
     });
 }
 
+- (void)clearCategory:(NSInteger)cat {
+    dispatch_async(_queue, ^{
+        if (cat == -2) {            // 加密组
+            for (int c = DHCategoryDigest; c <= DHCategoryAsymmetric; c++) {
+                [self->_buckets[c] removeAllObjects]; self->_categoryCounts[c] = 0;
+            }
+        } else if (cat >= 0 && cat <= DHCategoryOther) {
+            [self->_buckets[cat] removeAllObjects]; self->_categoryCounts[cat] = 0;
+        }
+        // 仅清该类内存(落盘文件混所有类, 不动; 整体清空走 clearAll)
+    });
+}
+
 - (NSDictionary *)processInfo {
     static NSDictionary *info = nil;
     static dispatch_once_t once;
@@ -262,6 +278,15 @@ static const NSUInteger kMaxBlobLogged  = 64 * 1024;     // 单段 blob 落盘�
         NSUInteger maxLen = MAX(e.input.length, e.output.length);
         if (maxLen >= minBytes) [out addObject:e];
     }
+    return out;
+}
+
+- (NSString *)exportTextForCategory:(NSInteger)cat {
+    NSArray<DHLogEntry *> *entries = [self snapshotMatching:nil category:cat];   // 该类(或 -2 加密组)切片
+    NSMutableString *out = [NSMutableString string];
+    [out appendFormat:@"# IOSDecryptHub 日志导出  cat=%ld  共 %lu 条\n\n",
+        (long)cat, (unsigned long)entries.count];
+    for (DHLogEntry *e in entries) [out appendString:dh_entry_block(e)];
     return out;
 }
 
