@@ -133,7 +133,17 @@ $(TEST_BIN): tests/exercise_runner.m
 	      tests/exercise_runner.m -o $(TEST_BIN)
 	@echo "✅ test runner: $(TEST_BIN)"
 
-clean:
-	rm -f $(TARGET) $(MAC_TARGET) $(TEST_BIN)
+# ---------- 5) 发布产物: 带版本号的 dylib ----------
+# release 资产用带版本号的文件名, 方便区分不同版本的下载。
+# 文件名与 install_name(LC_ID) 都带版本; inject.sh 从文件名推导 LC_LOAD_DYLIB, 故注入仍自洽。
+# 主构建产物保持 decrypt_helper.dylib 不变(测试 IPA / inject 默认名不受影响)。
+DIST_DYLIB := decrypt_helper-$(VERSION).dylib
+dist: $(TARGET)
+	cp $(TARGET) $(DIST_DYLIB)
+	install_name_tool -id @executable_path/$(DIST_DYLIB) $(DIST_DYLIB)
+	@echo "✅ 发布产物: $(DIST_DYLIB)"
 
-.PHONY: all linux mac test-mac clean
+clean:
+	rm -f $(TARGET) $(MAC_TARGET) $(TEST_BIN) decrypt_helper-*.dylib
+
+.PHONY: all linux mac test-mac dist clean
