@@ -123,6 +123,16 @@
   .modal h3 button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
   .modal h3 button:hover { background:#30363d; }
   .modal pre { flex:1; overflow:auto; margin:0; padding:14px 16px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; color:#c9d1d9; }
+  .sym-h3 { font-size:13px; color:#c9d1d9; margin:0 0 8px; font-weight:600; }
+  .sym-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+  .sym-controls label { color:#8b949e; font-size:12px; }
+  .sym-controls select, .sym-controls input[type=search] { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:5px 8px; border-radius:6px; font-size:12px; }
+  .sym-controls input[type=search] { width:260px; }
+  .sym-controls button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:5px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
+  .sym-controls button:hover { background:#30363d; }
+  .dump-table td.sym-yes { color:#56d364; }
+  .dump-table td.sym-no  { color:#ffa198; }
+  .dump-table td.symname { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color:#c9d1d9; word-break:break-all; }
   .diag-boards { display:flex; gap:4px; flex-wrap:wrap; }
   .diag-boards button { background:#0d1117; color:#8b949e; border:1px solid #30363d; padding:3px 9px; border-radius:6px; font-size:12px; cursor:pointer; }
   .diag-boards button.active { background:#1b2231; color:#c9d1d9; border-color:#388bfd; }
@@ -146,6 +156,7 @@
   <button class='tab' data-tab='net'>网络<span class='n' id='n-net'></span></button>
   <button class='tab' data-tab='file'>文件<span class='n' id='n-file'></span></button>
   <button class='tab' data-tab='sys'>系统<span class='n' id='n-sys'></span></button>
+  <button class='tab' data-tab='symbols'>符号</button>
   <button class='tab' data-tab='dump'>砸壳</button>
 </nav>
 <div class='filters' id='toolbar'>
@@ -194,6 +205,30 @@
       <tbody id='dumpImgBody'><tr><td colspan='4' style='color:#6e7681;'>点击「刷新镜像」加载…</td></tr></tbody></table>
   </div>
 </div>
+<div id='symPane' class='dumppane' style='display:none;'>
+  <div class='dumpwrap'>
+    <h2>符号导入表 (可 hook 观测)</h2>
+    <div class='note'>fishhook 只能改<b>导入符号表</b> —— 即本 image 调用其它 dylib 导出的符号。凡在下表出现的, 都是 fishhook 候选; 被<b>静态链接</b>进主二进制的符号不在导入表里, fishhook 无法拦截, 需改用 inline hook。</div>
+    <h3 class='sym-h3'>TLS 明文接口探测 (r0capture 核心点)</h3>
+    <div class='note' style='margin-bottom:8px;'>这几个是抓 TLS 明文最值得 hook 的点。「可 hook=是」表示该符号在本进程某个 image 的导入表里、fishhook 能拦截; 全为「否」基本说明目标静态链接了 TLS 库。</div>
+    <table class='dump-table'>
+      <thead><tr><th>符号</th><th>可 hook</th><th>已接入</th><th>所在 image (导入方)</th></tr></thead>
+      <tbody id='symTlsBody'><tr><td colspan='4' style='color:#6e7681;'>探测中…</td></tr></tbody>
+    </table>
+    <h3 class='sym-h3' style='margin-top:20px;'>按 image 浏览导入符号</h3>
+    <div class='sym-controls'>
+      <label>image</label>
+      <select id='symImgSel'></select>
+      <input id='symQ' type='search' placeholder='过滤符号 (子串, 如 SSL / CC / open)…'>
+      <button id='symRefresh'>刷新</button>
+      <span id='symCount' style='color:#6e7681; font-size:11px;'></span>
+    </div>
+    <table class='dump-table'>
+      <thead><tr><th style='width:48px;'>#</th><th>导入符号</th><th style='width:120px;'>状态</th></tr></thead>
+      <tbody id='symListBody'><tr><td colspan='3' style='color:#6e7681;'>加载中…</td></tr></tbody>
+    </table>
+  </div>
+</div>
 <div class='modal-mask' id='diagMask'>
   <div class='modal'>
     <h3>审查日志<span class='diag-boards' id='diagBoards'></span><span class='spacer'></span>
@@ -206,6 +241,7 @@
   const CAT_NAMES = ['摘要','HMAC','对称','非对称','网络','文件','系统','其它'];
   const CAT_CLS   = ['digest','hmac','sym','asym','net','file','sys','other'];
   const TAB_CAT   = { crypto:-2, net:4, file:5, sys:6 };
+  const LOG_TABS  = ['crypto','net','file','sys'];   // 走日志 master-detail 的 tab; 符号/砸壳是独立面板
   const TAB_SUBS = {
     crypto: [['DIGEST','摘要'],['HMAC','HMAC'],['SYMMETRIC','对称'],['ASYMMETRIC','非对称'],['KDF','KDF']],
     net:    [['NET_CONNECT','connect'],['NET_SSL_WRITE','SSL_write'],['NET_SSL_READ','SSL_read']],
@@ -229,7 +265,7 @@
       '<label class="cap-chip"><input type="checkbox" data-sub="'+sub+'" checked> '+escapeHTML(lab)+'</label>').join('');
   }
   function updateToolbar() {
-    if (activeTab==='dump') return;
+    if (!LOG_TABS.includes(activeTab)) return;
     const cap=(stats&&stats.capture)||{}, pbc=(stats&&stats.pausedByCat)||[];
     const paused = activeTab==='crypto' ? !!pbc[0] : !!pbc[TAB_CAT[activeTab]];
     const pb=$('tabPauseBtn'); if(pb){ pb.textContent = paused?'继续':'暂停'; pb.classList.toggle('danger', paused); }
@@ -336,11 +372,13 @@
   function switchTab(name) {
     activeTab = name;
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab===name));
-    const isDump = (name==='dump');
-    $('dumpPane').style.display = isDump ? 'flex' : 'none';
-    document.querySelector('.workspace').style.display = isDump ? 'none' : 'flex';
-    $('toolbar').style.display = isDump ? 'none' : 'flex';
-    if (isDump) { loadDumpImages(); pollDump(); return; }
+    const isLog = LOG_TABS.includes(name);
+    $('dumpPane').style.display = (name==='dump') ? 'flex' : 'none';
+    $('symPane').style.display  = (name==='symbols') ? 'flex' : 'none';
+    document.querySelector('.workspace').style.display = isLog ? 'flex' : 'none';
+    $('toolbar').style.display = isLog ? 'flex' : 'none';
+    if (name==='dump') { loadDumpImages(); pollDump(); return; }
+    if (name==='symbols') { loadSymbols(); return; }
     $('catWrap').style.display = (name==='crypto') ? '' : 'none';
     $('minWrap').style.display = (name==='crypto') ? '' : 'none';
     $('q').value = (tabState[name]||{}).q || '';
@@ -395,6 +433,46 @@
       toast('砸壳失败: '+(s.error||'未知错误'));
     }
   }
+  // ---- 符号导入表 ----
+  async function loadSymbols(){ loadTlsProbe(); await loadSymImages(); }
+  async function loadTlsProbe(){
+    try {
+      const d = await fetchJSON('/api/symbols/tls');
+      const rows = (d.symbols||[]).map(s =>
+        '<tr><td class="symname">'+escapeHTML(s.name)+'</td>'+
+        '<td class="'+(s.present?'sym-yes':'sym-no')+'">'+(s.present?'是':'否')+'</td>'+
+        '<td>'+(s.hooked?'<span class="pill net">已接入</span>':'<span style="color:#6e7681;">-</span>')+'</td>'+
+        '<td style="color:#8b949e;">'+escapeHTML((s.images||[]).join(', ')||'—')+'</td></tr>');
+      $('symTlsBody').innerHTML = rows.join('') || '<tr><td colspan="4" style="color:#6e7681;">无数据</td></tr>';
+    } catch(e){ $('symTlsBody').innerHTML = '<tr><td colspan="4">'+escapeHTML(e.message)+'</td></tr>'; }
+  }
+  let symImages = [];
+  async function loadSymImages(){
+    try {
+      const d = await fetchJSON('/api/symbols/images');
+      symImages = d.images||[];
+      const prev = $('symImgSel').value;
+      $('symImgSel').innerHTML = symImages.map(im =>
+        '<option value="'+im.idx+'">'+escapeHTML(im.name)+(im.main?' [主程序]':'')+' · '+im.imports+'</option>').join('');
+      if (prev && symImages.some(im=>String(im.idx)===prev)) { $('symImgSel').value = prev; }
+      else { const m = symImages.find(x=>x.main); if (m) $('symImgSel').value = m.idx; }
+      loadSymList();
+    } catch(e){ $('symListBody').innerHTML = '<tr><td colspan="3">'+escapeHTML(e.message)+'</td></tr>'; }
+  }
+  async function loadSymList(){
+    const idx = $('symImgSel').value, q = $('symQ').value.trim();
+    if (idx==='' || idx===undefined) return;
+    try {
+      const d = await fetchJSON('/api/symbols?img='+encodeURIComponent(idx)+'&q='+encodeURIComponent(q)+'&limit=500');
+      const hooked = new Set(d.hooked||[]);
+      const rows = (d.symbols||[]).map((nm,i) =>
+        '<tr><td style="color:#6e7681;">'+(i+1)+'</td><td class="symname">'+escapeHTML(nm)+'</td>'+
+        '<td>'+(hooked.has(nm)?'<span class="pill net">已 hook</span>':'<span style="color:#6e7681;">可 hook</span>')+'</td></tr>');
+      $('symListBody').innerHTML = rows.join('') || '<tr><td colspan="3" style="color:#6e7681;">无匹配符号</td></tr>';
+      $('symCount').textContent = d.shown+' / '+d.total+' 个导入符号'+(d.total>d.shown?' (已截断, 用过滤缩小)':'');
+    } catch(e){ $('symListBody').innerHTML = '<tr><td colspan="3">'+escapeHTML(e.message)+'</td></tr>'; }
+  }
+
   document.addEventListener('click', async (ev) => {
     const tab = ev.target.closest('.tab');
     if (tab) { switchTab(tab.dataset.tab); return; }
@@ -435,13 +513,16 @@
   $('dumpRefresh').addEventListener('click', loadDumpImages);
   $('dumpBin').addEventListener('click', () => startDump('bin'));
   $('dumpIpa').addEventListener('click', () => startDump('ipa'));
+  $('symRefresh').addEventListener('click', loadSymbols);
+  $('symImgSel').addEventListener('change', loadSymList);
+  let symQTimer; $('symQ').addEventListener('input', () => { clearTimeout(symQTimer); symQTimer=setTimeout(loadSymList,200); });
   (function(){
     const sp=$('splitter'), lp=$('list'), wsEl=document.querySelector('.workspace'); let dragging=false;
     sp.addEventListener('mousedown', e => { dragging=true; sp.classList.add('dragging'); document.body.style.userSelect='none'; e.preventDefault(); });
     document.addEventListener('mousemove', e => { if(!dragging) return; const rect=wsEl.getBoundingClientRect(); lp.style.width=Math.max(220, Math.min(rect.width-260, e.clientX-rect.left))+'px'; });
     document.addEventListener('mouseup', () => { if(dragging){ dragging=false; sp.classList.remove('dragging'); document.body.style.userSelect=''; } });
   })();
-  setInterval(() => { if(!$('autoRefresh').checked) return; refreshStats(); if(activeTab!=='dump') refreshList(); }, 1500);
+  setInterval(() => { if(!$('autoRefresh').checked) return; refreshStats(); if(LOG_TABS.includes(activeTab)) refreshList(); }, 1500);
   buildCapture('crypto'); refreshStats(); refreshList();
 </script>
 </body>

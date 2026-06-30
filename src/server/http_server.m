@@ -29,6 +29,7 @@
 #import "dh_capture.h"
 #import "ui_float.h"
 #import "dump_manager.h"
+#import "dh_symtab.h"
 
 #define DH_HTTP_PORT_FIRST  8088
 #define DH_HTTP_PORT_LAST   8108
@@ -480,6 +481,91 @@ static void handle_dump_download(int fd, NSDictionary *q) {
     [fh closeFile];
 }
 
+// ---- 符号导入表(可 hook 观测) ----
+// fishhook 只能改导入符号表 —— 这几个端点把各 image 的导入(undefined)符号暴露给面板, 让使用者
+// 当场看清「哪些可被 fishhook 拦截」, 尤其 TLS 明文接口是否在导入表里(不在=多半静态链接)。
+static NSArray *dh_hooked_net_syms(void) {
+    return @[@"connect", @"SSL_write", @"SSL_read", @"SSL_write_ex", @"SSL_read_ex", @"SSLWrite", @"SSLRead"];
+}
+
+// C 回调把 image 短名收进 NSMutableArray(去重)。
+static void sym_image_collect_cb(const char *name, void *ctx) {
+    NSMutableArray *a = (__bridge NSMutableArray *)ctx;
+    NSString *s = name ? [NSString stringWithUTF8String:name] : nil;
+    if (s && ![a containsObject:s]) [a addObject:s];
+}
+// C 回调把符号名收进 NSMutableArray。
+static void sym_name_collect_cb(const char *name, void *ctx) {
+    NSMutableArray *a = (__bridge NSMutableArray *)ctx;
+    if (name) [a addObject:[NSString stringWithUTF8String:name] ?: @"?"];
+}
+
+// GET /api/symbols/tls —— 探测 r0capture 关心的 TLS 明文接口在本进程导入表里是否存在 + 是否已被我们 hook。
+static void handle_symbols_tls(int fd) {
+    NSArray *curated = dh_hooked_net_syms();   // 这几个正好都是我们接入 hook 的
+    NSMutableArray *arr = [NSMutableArray array];
+    for (NSString *nm in curated) {
+        NSMutableArray *imgs = [NSMutableArray array];
+        int cnt = dh_symtab_find_import(nm.UTF8String, sym_image_collect_cb, (__bridge void *)imgs);
+        [arr addObject:@{
+            @"name":    nm,
+            @"present": @(cnt > 0),
+            @"hooked":  @YES,
+            @"images":  imgs,
+        }];
+    }
+    send_json(fd, 200, @{@"symbols": arr});
+}
+
+// GET /api/symbols/images —— 列出有导入符号的 image(主程序优先), 给「符号」页下拉用。
+static void handle_symbols_images(int fd) {
+    int n = dh_symtab_image_count();
+    NSMutableArray *arr = [NSMutableArray array];
+    for (int i = 0; i < n; i++) {
+        char nm[256]; int isMain = 0;
+        dh_symtab_image_name(i, nm, sizeof(nm), &isMain);
+        int imports = dh_symtab_imports(i, NULL, 0, NULL, NULL);   // 只计数
+        if (imports <= 0) continue;
+        [arr addObject:@{
+            @"idx":     @(i),
+            @"name":    [NSString stringWithUTF8String:nm] ?: @"?",
+            @"main":    isMain ? @YES : @NO,
+            @"imports": @(imports),
+        }];
+    }
+    [arr sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        BOOL am = [a[@"main"] boolValue], bm = [b[@"main"] boolValue];
+        if (am != bm) return am ? NSOrderedAscending : NSOrderedDescending;   // 主程序排最前
+        return [a[@"name"] caseInsensitiveCompare:b[@"name"]];
+    }];
+    send_json(fd, 200, @{@"images": arr});
+}
+
+// GET /api/symbols?img=N&q=&limit= —— 某 image 的导入符号列表(可子串过滤), hooked 集给前端高亮。
+static void handle_symbols(int fd, NSDictionary *q) {
+    int n = dh_symtab_image_count();
+    int idx = q[@"img"] ? [q[@"img"] intValue] : 0;
+    if (idx < 0 || idx >= n) { send_json(fd, 400, @{@"error": @"bad img index"}); return; }
+    NSString *kw = q[@"q"] ?: @"";
+    int limit = q[@"limit"] ? [q[@"limit"] intValue] : 300;
+    if (limit <= 0 || limit > 2000) limit = 300;
+
+    char nm[256]; int isMain = 0;
+    dh_symtab_image_name(idx, nm, sizeof(nm), &isMain);
+    NSMutableArray *syms = [NSMutableArray array];
+    const char *qc = kw.length ? kw.UTF8String : NULL;
+    int total = dh_symtab_imports(idx, qc, limit, sym_name_collect_cb, (__bridge void *)syms);
+    send_json(fd, 200, @{
+        @"idx":     @(idx),
+        @"name":    [NSString stringWithUTF8String:nm] ?: @"?",
+        @"main":    isMain ? @YES : @NO,
+        @"total":   @(total),
+        @"shown":   @(syms.count),
+        @"symbols": syms,
+        @"hooked":  dh_hooked_net_syms(),
+    });
+}
+
 static void handle_index(int fd) {
     NSData *body = [NSData dataWithBytes:kDHIndexHTML length:kDHIndexHTML_len];   // 字节数组, 非 NUL 结尾
     send_response(fd, 200, @"OK", @"text/html; charset=utf-8", body);
@@ -548,6 +634,12 @@ static void handle_connection(int fd) {
                 handle_diag(fd, q);
             } else if ([path isEqualToString:@"/api/diag/download"]) {
                 handle_diag_download(fd, q);
+            } else if ([path isEqualToString:@"/api/symbols/tls"]) {
+                handle_symbols_tls(fd);
+            } else if ([path isEqualToString:@"/api/symbols/images"]) {
+                handle_symbols_images(fd);
+            } else if ([path isEqualToString:@"/api/symbols"]) {
+                handle_symbols(fd, q);
             } else if ([path isEqualToString:@"/favicon.ico"]) {
                 send_response(fd, 204, @"No Content", @"image/x-icon", [NSData data]);
             } else {
