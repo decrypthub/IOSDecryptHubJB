@@ -24,7 +24,8 @@ dh_zip_writer *zw_open(const char *zip_path);
 
 // 把磁盘文件 src_path 以 zip 内路径 entry_name 加入 (store, 流式)。
 // unix_mode 例如 0644 / 0755, 写入 external attributes 以保留可执行权限。
-// 成功返回 0, 失败返回 -1。
+// 返回: 0 成功; 1 源文件打不开(local header 未写, zip 流仍完好, 调用方可安全跳过该文件);
+//      -1 写流失败(zip 已不可用, 调用方应 zw_abort)。
 int zw_add_file(dh_zip_writer *zw, const char *entry_name, const char *src_path, unsigned unix_mode);
 
 // 把内存数据以 zip 内路径 entry_name 加入。成功 0, 失败 -1。

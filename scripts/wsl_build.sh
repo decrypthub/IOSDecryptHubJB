@@ -32,7 +32,7 @@ OUT=decrypt_helper.dylib
   -isysroot "$IOS_SDK" \
   -dynamiclib \
   -install_name "@executable_path/$OUT" \
-  -Xlinker -current_version -Xlinker 1.8.0 \
+  -Xlinker -current_version -Xlinker 1.8.1 \
   -Xlinker -compatibility_version -Xlinker 1.0.0 \
   -ObjC -fobjc-arc \
   -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \

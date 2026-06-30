@@ -101,8 +101,6 @@
   .dump-table { width:100%; border-collapse:collapse; font-size:12px; margin-top:6px; }
   .dump-table th, .dump-table td { text-align:left; padding:6px 8px; border-bottom:1px solid #21262d; }
   .dump-table th { color:#8b949e; font-weight:600; }
-  .dump-table td.enc { color:#ffa198; }
-  .dump-table td.plain { color:#6e7681; }
   @media (max-width: 760px) {
     header { flex-wrap:wrap; } header .stats { width:100%; order:3; }
     .filters input[type=search] { flex:1; width:auto; }
@@ -201,8 +199,8 @@
       <div class='dump-bar'><div id='dumpBarFill'></div></div>
     </div>
     <div id='dumpDone' class='dump-done' style='display:none;'></div>
-    <table class='dump-table'><thead><tr><th>镜像</th><th>类型</th><th>状态</th><th>大小</th></tr></thead>
-      <tbody id='dumpImgBody'><tr><td colspan='4' style='color:#6e7681;'>点击「刷新镜像」加载…</td></tr></tbody></table>
+    <table class='dump-table'><thead><tr><th>镜像</th><th>类型</th><th>大小</th></tr></thead>
+      <tbody id='dumpImgBody'><tr><td colspan='3' style='color:#6e7681;'>点击「刷新镜像」加载…</td></tr></tbody></table>
   </div>
 </div>
 <div id='symPane' class='dumppane' style='display:none;'>
@@ -393,11 +391,9 @@
       const d = await fetchJSON('/api/dump/images');
       const rows = (d.images||[]).map(im =>
         '<tr><td>'+escapeHTML(im.name)+'</td><td>'+(im.kind==='main'?'主程序':'Framework')+'</td>'+
-        '<td class="'+(im.encrypted?'enc':'plain')+'">'+(im.encrypted?('加密 · cryptid='+im.cryptid):'未加密')+'</td>'+
         '<td>'+fmtSize(im.size)+'</td></tr>');
-      $('dumpImgBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" style="color:#6e7681;">未发现本 App 镜像</td></tr>';
-      if ((d.encryptedCount||0)===0) toast('未检测到加密镜像 (cryptid=1)');
-    } catch(e){ $('dumpImgBody').innerHTML = '<tr><td colspan="4">'+escapeHTML(e.message)+'</td></tr>'; }
+      $('dumpImgBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="3" style="color:#6e7681;">未发现本 App 镜像</td></tr>';
+    } catch(e){ $('dumpImgBody').innerHTML = '<tr><td colspan="3">'+escapeHTML(e.message)+'</td></tr>'; }
   }
   async function startDump(mode){
     $('dumpBin').disabled = true; $('dumpIpa').disabled = true;

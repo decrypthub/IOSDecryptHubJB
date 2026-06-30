@@ -158,7 +158,9 @@ int zw_add_data(dh_zip_writer *zw, const char *entry_name, const void *data, siz
 int zw_add_file(dh_zip_writer *zw, const char *entry_name, const char *src_path, unsigned unix_mode) {
     if (!zw || zw->failed) return -1;
     FILE *in = fopen(src_path, "rb");
-    if (!in) return -1;   // header 尚未写出, 调用方可决定跳过
+    // 源文件打不开(如 FairPlay SC_Info DRM 文件主进程无权读): 此刻 local header 尚未写出,
+    // zip 流仍完好。返回 1(可跳过), 区别于真正写流失败的 -1, 让调用方跳过该文件而非中止整包。
+    if (!in) return 1;
     uint32_t headerOffset;
     if (write_local_header(zw, entry_name, &headerOffset) != 0) { fclose(in); return -1; }
 

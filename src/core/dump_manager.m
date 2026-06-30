@@ -165,11 +165,10 @@ static NSString *docs_dir(void) {
             zw_abort(zw); [self cleanupTmp:tmpDir];
             [self failWith:[NSString stringWithFormat:@"%@: %@", im.name, err.localizedDescription]]; return;
         }
-        // zip 内用相对 bundle 的路径, 保证唯一且有结构
+        // zip 内用相对 bundle 的原始路径(不加 .decrypted 后缀, 保持原名), 保证唯一且有结构
         NSString *rel = ([im.path hasPrefix:bundlePath] && im.path.length > bundlePath.length + 1)
                       ? [im.path substringFromIndex:bundlePath.length + 1] : im.name;
-        NSString *entry = [rel stringByAppendingString:@".decrypted"];
-        int rc = zw_add_file(zw, entry.UTF8String, tmp.fileSystemRepresentation, 0755);
+        int rc = zw_add_file(zw, rel.UTF8String, tmp.fileSystemRepresentation, 0755);
         [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
         if (rc != 0) { zw_abort(zw); [self cleanupTmp:tmpDir]; [self failWith:@"写入 zip 失败"]; return; }
     }
@@ -180,6 +179,15 @@ static NSString *docs_dir(void) {
 
     [_lock lock]; _binPath = outPath; _state = @"done"; _progress = 100; _stage = @"完成"; [_lock unlock];
     NSLog(@"[IOSDecryptHub] 砸壳(bin)完成: %@", outPath);
+}
+
+// FairPlay / 签名残渣: 解密版 IPA 既不需要也无法使用它们(重签时本就会被工具剥掉),
+// 且 SC_Info/*.supf|.supp|.sinf 常对主进程不可读。打包时直接跳过, 不让一个无关 DRM
+// 文件中止整包(参考 frida-ios-dump / TrollDecrypt: 它们复制 bundle 时也不依赖这些)。
+static BOOL dh_is_signing_residue(NSString *sub) {
+    if ([sub rangeOfString:@"SC_Info/"].location != NSNotFound) return YES;
+    NSString *ext = sub.pathExtension.lowercaseString;
+    return [ext isEqualToString:@"supf"] || [ext isEqualToString:@"supp"] || [ext isEqualToString:@"sinf"];
 }
 
 // ============================================================
@@ -228,12 +236,16 @@ static NSString *docs_dir(void) {
 
     NSDirectoryEnumerator *en = [fm enumeratorAtPath:bundlePath];
     NSString *sub;
-    NSUInteger fileCount = 0;
+    NSUInteger fileCount = 0, skipped = 0;
     while ((sub = [en nextObject])) {
         NSString *full = [bundlePath stringByAppendingPathComponent:sub];
         BOOL isDir = NO;
         if (![fm fileExistsAtPath:full isDirectory:&isDir]) continue;
         if (isDir) continue;   // zip 不需显式目录项, unzip 会自动建
+        if (dh_is_signing_residue(sub)) {   // FairPlay/SC_Info 残渣: 解密 IPA 用不到, 跳过
+            skipped++;
+            continue;
+        }
 
         NSString *zipPath = [NSString stringWithFormat:@"Payload/%@/%@", appDirName, sub];
         NSString *decTmp = decFiles[full];
@@ -248,13 +260,26 @@ static NSString *docs_dir(void) {
             if (perm == 0) perm = 0644;
         }
         int rc = zw_add_file(zw, zipPath.UTF8String, srcPath, perm);
-        if (rc != 0) { zw_abort(zw); [self cleanupTmp:tmpDir]; [self failWith:[NSString stringWithFormat:@"打包失败: %@", sub]]; return; }
+        if (rc < 0) {   // 写流失败 -> zip 已不可用, 必须中止
+            zw_abort(zw); [self cleanupTmp:tmpDir];
+            [self failWith:[NSString stringWithFormat:@"打包失败(写流中断): %@", sub]]; return;
+        }
+        if (rc > 0) {   // 源文件读不了(权限/DRM): zip 流仍完好, 跳过该文件 + 记审查日志, 不中止整包
+            skipped++;
+            dh_diag_append(DH_DIAG_DUMP, "WARN",
+                [NSString stringWithFormat:@"打包跳过不可读文件: %@", sub].UTF8String);
+            continue;
+        }
 
         if ((++fileCount & 0x3F) == 0) {
             int p = 45 + MIN(50, (int)(fileCount / 20));
             [self progress:p stage:[NSString stringWithFormat:@"打包 %@", sub.lastPathComponent]];
         }
     }
+    if (skipped > 0)
+        dh_diag_append(DH_DIAG_DUMP, "INFO",
+            [NSString stringWithFormat:@"打包完成: 写入 %lu 个文件, 跳过 %lu 个(FairPlay/SC_Info 残渣或不可读, 不影响解密产物)",
+             (unsigned long)fileCount, (unsigned long)skipped].UTF8String);
 
     [self progress:97 stage:@"收尾打包"];
     if (zw_close(zw) != 0) { [self cleanupTmp:tmpDir]; [self failWith:@"ipa 收尾失败"]; return; }
