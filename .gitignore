@@ -8,6 +8,7 @@
 # 注入脚本中间产物
 work_*/
 hooked_*.ipa
+*-hooked.ipa
 
 # 系统/编辑器垃圾
 .DS_Store
