@@ -14,6 +14,9 @@ TARGET  := decrypt_helper.dylib
 SRC     := src/core/fishhook.c \
            src/core/dh_health.c \
            src/core/log_store.m \
+           src/core/zip_writer.c \
+           src/core/macho_dump.m \
+           src/core/dump_manager.m \
            src/hooks/crypto/hook_digest.m \
            src/hooks/crypto/hook_hmac.m \
            src/hooks/crypto/hook_symmetric.m \

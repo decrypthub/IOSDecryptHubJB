@@ -45,6 +45,23 @@ Web 面板多 tab 架构，四类监控共享同一套左右分栏 master-detail
 
 > 注：网络的 SSL_write/SSL_read 抓的是 App 自带 BoringSSL/OpenSSL 的明文（系统 Network.framework 的 TLS 不走这两个符号）；内存（malloc/free）因高频且记录路径自身会触发 malloc 易递归，暂不纳入。
 
+## 砸壳（脱壳 / dump）
+
+除监控外，Web 面板的「砸壳」tab 可在目标进程内对已被内核解密的 Mach-O 做脱壳，**按需触发**（不点按钮就不跑，零额外开销）。FairPlay 加密的 `__TEXT` 在运行时已被内核解密进内存，砸壳就是把这段已解密的页写回一份磁盘镜像副本，并将 `LC_ENCRYPTION_INFO_64` 的 `cryptid` 置 0。
+
+两种产物（面板两个按钮）：
+
+- **导出裸解密二进制**：每个加密镜像产出一个 `*.decrypted`，多个时打成 `<App>-decrypted.zip`，供 IDA / Ghidra / class-dump 静态分析。
+- **重打包可重签 IPA**：把脱壳后的二进制塞回 `.app`，打包成 `<App>-decrypted.ipa`，用 Sideloadly / AltStore 重签即可安装运行。
+
+覆盖范围为**主程序 + App 自带、已加载、`cryptid=1` 的 Frameworks/.dylib**。zip 打包为自实现的 store-only 写入器，**不引入 libz，维持零依赖**。
+
+能力边界（务必了解）：
+
+- 只能砸**当前进程已加载进内存**的镜像。`PlugIns/*.appex`（Share/Widget 等扩展）是独立进程、主进程未加载，无法在此砸到，IPA 里保持原样。
+- 砸壳对象是 **App Store FairPlay 加密版（`cryptid=1`）** 的程序，需能注入 dylib；实际使用场景通常是越狱设备注入。
+- **仅限授权安全测试与自有 App**：砸壳并分发受版权保护的程序可能违法。
+
 ## 性能与实现要点
 
 - 日志写入走独立串行队列异步落盘，不阻塞被 hook 的调用方（宿主 App）。
@@ -72,6 +89,10 @@ hook 框架最怕「时好时坏」：某个符号没挂上、服务端口被占
 | POST /api/clear | 清空内存与文件 |
 | POST /api/pause?paused=1 | 暂停 / 恢复 |
 | GET /download | 下载日志文件 |
+| GET /api/dump/images | 已加载且属于本 App 的镜像清单（含 cryptid 加密状态） |
+| POST /api/dump?mode=bin\|ipa | 发起砸壳任务（裸二进制 zip / 可重签 IPA） |
+| GET /api/dump/status | 砸壳任务状态（state / progress / stage / 产物就绪） |
+| GET /api/dump/download?kind=bin\|ipa | 下载砸壳产物 |
 
 ## 编译
 

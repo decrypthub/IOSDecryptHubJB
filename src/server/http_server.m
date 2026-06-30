@@ -27,6 +27,7 @@
 #import "web_index_html.h"
 #import "dh_health.h"
 #import "ui_float.h"
+#import "dump_manager.h"
 
 #define DH_HTTP_PORT_FIRST  8088
 #define DH_HTTP_PORT_LAST   8108
@@ -320,6 +321,58 @@ static void handle_appicon(int fd) {
     send_response(fd, 200, @"OK", @"image/png", png);
 }
 
+// ---- 砸壳 (dump / 脱壳) ----
+static void handle_dump_images(int fd) {
+    send_json(fd, 200, [[DHDumpManager shared] listImagesDict]);
+}
+
+static void handle_dump_start(int fd, NSDictionary *q) {
+    NSString *mode = q[@"mode"] ?: @"ipa";
+    BOOL ok = [[DHDumpManager shared] startDump:mode];
+    if (!ok) { send_json(fd, 409, @{@"started": @NO, @"error": @"已有任务在进行或 mode 非法"}); return; }
+    send_json(fd, 200, @{@"started": @YES, @"mode": mode});
+}
+
+static void handle_dump_status(int fd) {
+    send_json(fd, 200, [[DHDumpManager shared] statusDict]);
+}
+
+static void handle_dump_download(int fd, NSDictionary *q) {
+    NSString *kind = [q[@"kind"] isEqualToString:@"bin"] ? @"bin" : @"ipa";
+    NSString *path = [[DHDumpManager shared] artifactPathForKind:kind];
+    if (!path) { send_text(fd, 404, @"砸壳产物尚未就绪"); return; }
+    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+    if (!attrs) { send_text(fd, 404, @"产物文件丢失"); return; }
+    unsigned long long total = [(NSNumber *)attrs[NSFileSize] unsignedLongLongValue];
+
+    // 复用 handle_download 的分块流式写法, 仅换 Content-Type / 文件名
+    NSMutableString *headers = [NSMutableString string];
+    [headers appendString:@"HTTP/1.1 200 OK\r\n"];
+    [headers appendString:@"Content-Type: application/octet-stream\r\n"];
+    [headers appendFormat:@"Content-Length: %llu\r\n", total];
+    [headers appendFormat:@"Content-Disposition: attachment; filename=%@\r\n", [path lastPathComponent]];
+    [headers appendString:@"Cache-Control: no-store\r\n"];
+    [headers appendString:@"Connection: close\r\n\r\n"];
+    NSData *hd = [headers dataUsingEncoding:NSUTF8StringEncoding];
+    if (!write_all(fd, hd.bytes, hd.length)) return;
+
+    NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
+    if (!fh) { DH_ERR(@"砸壳下载: 无法读取产物 %@, 连接将中断", path); return; }
+    @try {
+        while (1) {
+            NSData *chunk = [fh readDataOfLength:64 * 1024];
+            if (chunk.length == 0) break;
+            if (!write_all(fd, chunk.bytes, chunk.length)) {
+                DH_ERR(@"砸壳下载: 发送数据块失败(客户端可能已断开)");
+                break;
+            }
+        }
+    } @catch (NSException *e) {
+        DH_ERR(@"砸壳下载: 读取产物异常: %@", e.reason);
+    }
+    [fh closeFile];
+}
+
 static void handle_index(int fd) {
     NSData *body = [NSData dataWithBytes:kDHIndexHTML length:strlen(kDHIndexHTML)];
     send_response(fd, 200, @"OK", @"text/html; charset=utf-8", body);
@@ -372,6 +425,12 @@ static void handle_connection(int fd) {
                 handle_log_detail(fd, [path substringFromIndex:[@"/api/logs/" length]]);
             } else if ([path isEqualToString:@"/download"]) {
                 handle_download(fd);
+            } else if ([path isEqualToString:@"/api/dump/images"]) {
+                handle_dump_images(fd);
+            } else if ([path isEqualToString:@"/api/dump/status"]) {
+                handle_dump_status(fd);
+            } else if ([path isEqualToString:@"/api/dump/download"]) {
+                handle_dump_download(fd, q);
             } else if ([path isEqualToString:@"/api/appicon"]) {
                 handle_appicon(fd);
             } else if ([path isEqualToString:@"/favicon.ico"]) {
@@ -384,6 +443,8 @@ static void handle_connection(int fd) {
                 handle_clear(fd);
             } else if ([path isEqualToString:@"/api/pause"]) {
                 handle_pause(fd, q);
+            } else if ([path isEqualToString:@"/api/dump"]) {
+                handle_dump_start(fd, q);
             } else {
                 send_text(fd, 404, @"not found");
             }
