@@ -33,7 +33,7 @@
 #define DH_HTTP_PORT_LAST   8108
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
-#define DH_HTTP_VERSION     "1.5.0"
+#define DH_HTTP_VERSION     "1.6.0"
 
 static int        gListenFD = -1;
 static uint16_t   gPort     = 0;
