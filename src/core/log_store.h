@@ -70,6 +70,16 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 // 日志文件路径 (落盘文件用于 share/导出)
 - (NSString *)logFilePath;
 
+// ===== 日志保留/落盘配置 (持久化到沙箱 .dh_logcfg.conf, 重启/重注入仍生效) =====
+// 每类内存保留条数 (替代旧的写死 2000)。setter 立即裁剪各桶并存盘。
+- (NSUInteger)maxPerCategory;
+- (void)setMaxPerCategory:(NSUInteger)n;
+// 单个落盘文件滚动上限 (字节); 0 = 不限。超限滚动为 .1/.2/.3 (最多 3 个备份)。setter 存盘。
+- (unsigned long long)maxLogFileBytes;
+- (void)setMaxLogFileBytes:(unsigned long long)bytes;
+// 当前落盘总字节 = 当前段 + 所有滚动备份段之和 (供 /api/stats 与设置页展示)。
+- (unsigned long long)totalLogBytes;
+
 // 把某分类(0..7, 或 -2=加密组, -1=全部)的内存日志导出成可读文本, 供「按板块下载」。
 - (NSString *)exportTextForCategory:(NSInteger)cat;
 

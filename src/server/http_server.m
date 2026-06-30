@@ -35,7 +35,7 @@
 #define DH_HTTP_PORT_LAST   8108
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
-#define DH_HTTP_VERSION     "1.9.1"
+#define DH_HTTP_VERSION     "1.10.0"
 
 static int        gListenFD = -1;
 static uint16_t   gPort     = 0;
@@ -163,11 +163,20 @@ static void send_text(int fd, int status, NSString *msg) {
 static NSDictionary *entry_summary(DHLogEntry *e) {
     NSString *preview = nil;
     if (e.input.length) {
-        NSData *d = e.input.length > 32 ? [e.input subdataWithRange:NSMakeRange(0, 32)] : e.input;
-        NSString *u = DHUTF8FromData(d);
-        if (![u isEqualToString:@"(非UTF-8)"]) {
-            preview = u.length > 80 ? [[u substringToIndex:80] stringByAppendingString:@"…"] : u;
+        // 预览取前 256 字节足以填满一整行(前端单行 + 按可见宽度自动省略);
+        // 整体解码后按字符截断, 避免在多字节 UTF-8 中点切断导致整体回退成乱码
+        NSUInteger cap = MIN(e.input.length, (NSUInteger)256);
+        NSString *u = nil;
+        for (NSUInteger n = cap; n >= (cap > 3 ? cap - 3 : 1); n--) {   // 末尾多字节字符可能被切断, 回退最多 3 字节
+            u = [[NSString alloc] initWithData:[e.input subdataWithRange:NSMakeRange(0, n)] encoding:NSUTF8StringEncoding];
+            if (u) break;
+        }
+        if (u.length) {
+            BOOL more = e.input.length > cap || u.length > 200;
+            if (u.length > 200) u = [u substringToIndex:200];
+            preview = more ? [u stringByAppendingString:@"…"] : u;
         } else {
+            NSData *d = e.input.length > 32 ? [e.input subdataWithRange:NSMakeRange(0, 32)] : e.input;
             preview = DHHexFromData(d);
         }
     }
@@ -233,10 +242,8 @@ static void handle_stats(int fd) {
     ];
     const char *hsum = dh_health_summary();
     // 落盘日志字节数: 每条日志已实时写入沙箱文件(App 闪退/被检测杀掉后, 重启仍可经 /download 取全量),
-    // 前端据此提示「数据已落盘」并标出可下载大小, 形成崩溃可闭环的取证链路。
-    unsigned long long logBytes = 0;
-    NSDictionary *la = [[NSFileManager defaultManager] attributesOfItemAtPath:[s logFilePath] error:nil];
-    if (la) logBytes = [(NSNumber *)la[NSFileSize] unsignedLongLongValue];
+    // 前端据此提示「数据已落盘」并标出可下载大小, 形成崩溃可闭环的取证链路。含已滚动归档的备份段。
+    unsigned long long logBytes = [s totalLogBytes];
     send_json(fd, 200, @{
         @"total":       @(s.totalCount),
         @"paused":      @(s.paused),
@@ -258,19 +265,21 @@ static void handle_stats(int fd) {
 }
 
 static void handle_logs_list(int fd, NSDictionary *q) {
-    NSInteger cat   = q[@"cat"]   ? [q[@"cat"] integerValue] : -1;
-    NSString *kw    = q[@"q"]     ?: @"";
-    uint64_t  since = q[@"since"] ? (uint64_t)[q[@"since"] longLongValue] : 0;
-    NSInteger lim   = q[@"limit"] ? [q[@"limit"] integerValue] : 500;
+    NSInteger cat    = q[@"cat"]    ? [q[@"cat"] integerValue] : -1;
+    NSString *kw     = q[@"q"]      ?: @"";
+    uint64_t  since  = q[@"since"]  ? (uint64_t)[q[@"since"] longLongValue]  : 0;   // 仅取 seq > since (键集分页: 增量取新)
+    uint64_t  before = q[@"before"] ? (uint64_t)[q[@"before"] longLongValue] : 0;   // 仅取 seq < before (键集分页: 翻更早)
+    NSInteger lim    = q[@"limit"]  ? [q[@"limit"] integerValue] : 500;
     if (lim <= 0 || lim > 5000) lim = 500;
     NSUInteger minSize = q[@"minSize"] ? (NSUInteger)[q[@"minSize"] integerValue] : 0;
 
     NSArray *src = [[DHLogStore shared] snapshotMatching:kw category:cat minSize:minSize];
-    // 最新在前
+    // 最新在前; since/before 为游标, 二者择一 (前端不会同时传)
     NSMutableArray *out = [NSMutableArray array];
     for (NSInteger i = (NSInteger)src.count - 1; i >= 0 && (NSInteger)out.count < lim; i--) {
         DHLogEntry *e = src[i];
-        if (since && e.seq <= since) continue;
+        if (since  && e.seq <= since)  continue;
+        if (before && e.seq >= before) continue;
         [out addObject:entry_summary(e)];
     }
     send_json(fd, 200, out);
@@ -323,6 +332,29 @@ static void handle_capture_set(int fd, NSDictionary *q) {
     BOOL on = [(q[@"on"] ?: @"1") isEqualToString:@"1"];
     dh_capture_set_sub((dh_cap_sub)idx, on ? 1 : 0);
     send_json(fd, 200, @{@"sub": sub, @"on": @(on)});
+}
+
+// 日志保留/落盘配置 —— 每类内存保留条数 + 单文件滚动上限。持久化在沙箱 .dh_logcfg.conf。
+static void handle_config_get(int fd) {
+    DHLogStore *s = [DHLogStore shared];
+    send_json(fd, 200, @{
+        @"maxEntries":   @([s maxPerCategory]),     // 每类内存保留条数
+        @"maxFileBytes": @([s maxLogFileBytes]),    // 单文件滚动上限, 0=不限
+        @"backups":      @(3),                       // 额外保留的滚动备份段数 (固定)
+        @"logBytes":     @([s totalLogBytes]),       // 当前落盘总大小 (含备份)
+    });
+}
+static void handle_config_set(int fd, NSDictionary *q) {
+    DHLogStore *s = [DHLogStore shared];
+    if (q[@"maxEntries"]) {
+        NSInteger n = [q[@"maxEntries"] integerValue];
+        if (n > 0) [s setMaxPerCategory:(NSUInteger)n];
+    }
+    if (q[@"maxFileBytes"]) {
+        long long n = [q[@"maxFileBytes"] longLongValue];
+        if (n >= 0) [s setMaxLogFileBytes:(unsigned long long)n];   // 0=不限
+    }
+    handle_config_get(fd);   // 回当前(已更新)配置
 }
 
 // 按板块下载: 把某分类(或 -2 加密组)的内存日志导出为纯文本附件。
@@ -386,13 +418,22 @@ static void handle_diag_download(int fd, NSDictionary *q) {
 }
 
 static void handle_download(int fd) {
-    NSString *path = [[DHLogStore shared] logFilePath];
-    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
-    if (!attrs) {
-        send_text(fd, 404, @"log file not present yet");
-        return;
+    NSString *base = [[DHLogStore shared] logFilePath];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    // 按时序拼接: 最旧的滚动备份 .3 → .2 → .1 → 当前段。只收实际存在的段。
+    NSMutableArray<NSString *> *segs = [NSMutableArray array];
+    for (int i = 3; i >= 1; i--) {
+        NSString *p = [base stringByAppendingFormat:@".%d", i];
+        if ([fm fileExistsAtPath:p]) [segs addObject:p];
     }
-    unsigned long long total = [(NSNumber *)attrs[NSFileSize] unsignedLongLongValue];
+    if ([fm fileExistsAtPath:base]) [segs addObject:base];
+    if (segs.count == 0) { send_text(fd, 404, @"log file not present yet"); return; }
+
+    unsigned long long total = 0;
+    for (NSString *p in segs) {
+        NSDictionary *a = [fm attributesOfItemAtPath:p error:nil];
+        if (a) total += [(NSNumber *)a[NSFileSize] unsignedLongLongValue];
+    }
 
     NSMutableString *headers = [NSMutableString string];
     [headers appendString:@"HTTP/1.1 200 OK\r\n"];
@@ -404,26 +445,29 @@ static void handle_download(int fd) {
     NSData *hd = [headers dataUsingEncoding:NSUTF8StringEncoding];
     if (!write_all(fd, hd.bytes, hd.length)) return;
 
-    // 64KB 分块, 避免一次性把整个日志文件吃进内存
-    NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
-    if (!fh) {
-        // fail-loud: header(含 Content-Length) 已发出但打不开文件, 连接会被中断而非静默补 0.
-        DH_ERR(@"下载: 无法读取日志文件 %@, 连接将中断", path);
-        return;
-    }
-    @try {
-        while (1) {
-            NSData *chunk = [fh readDataOfLength:64 * 1024];
-            if (chunk.length == 0) break;
-            if (!write_all(fd, chunk.bytes, chunk.length)) {
-                DH_ERR(@"下载: 发送数据块失败(客户端可能已断开), 连接中断");
-                break;
-            }
+    // 64KB 分块, 逐段串流, 避免一次性把整个日志文件吃进内存
+    for (NSString *path in segs) {
+        NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
+        if (!fh) {
+            // fail-loud: header(含 Content-Length) 已发出但某段打不开, 连接会被中断而非静默补 0。
+            DH_ERR(@"下载: 无法读取日志段 %@, 连接将中断", path);
+            return;
         }
-    } @catch (NSException *e) {
-        DH_ERR(@"下载: 读取日志文件异常: %@", e.reason);
+        @try {
+            while (1) {
+                NSData *chunk = [fh readDataOfLength:64 * 1024];
+                if (chunk.length == 0) break;
+                if (!write_all(fd, chunk.bytes, chunk.length)) {
+                    DH_ERR(@"下载: 发送数据块失败(客户端可能已断开), 连接中断");
+                    [fh closeFile];
+                    return;
+                }
+            }
+        } @catch (NSException *e) {
+            DH_ERR(@"下载: 读取日志段异常: %@", e.reason);
+        }
+        [fh closeFile];
     }
-    [fh closeFile];
 }
 
 static void handle_appicon(int fd) {
@@ -593,6 +637,8 @@ static void handle_connection(int fd) {
                 handle_logs_download(fd, q);
             } else if ([path isEqualToString:@"/api/capture"]) {
                 handle_capture_get(fd);
+            } else if ([path isEqualToString:@"/api/config"]) {
+                handle_config_get(fd);
             } else if ([path hasPrefix:@"/api/logs/"]) {
                 handle_log_detail(fd, [path substringFromIndex:[@"/api/logs/" length]]);
             } else if ([path isEqualToString:@"/download"]) {
@@ -625,6 +671,8 @@ static void handle_connection(int fd) {
                 handle_pause(fd, q);
             } else if ([path isEqualToString:@"/api/capture"]) {
                 handle_capture_set(fd, q);
+            } else if ([path isEqualToString:@"/api/config"]) {
+                handle_config_set(fd, q);
             } else if ([path isEqualToString:@"/api/dump"]) {
                 handle_dump_start(fd, q);
             } else {

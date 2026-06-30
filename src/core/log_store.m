@@ -14,13 +14,20 @@
     NSUInteger                    _categoryCounts[DHCategoryOther + 1];
     uint64_t                      _seqCounter;
     NSString                     *_filePath;
+    NSString                     *_cfgPath;     // .dh_logcfg.conf
+    NSFileHandle                 *_logFH;       // 常开 append 句柄 (避免每条 open/close); 仅 _queue 内访问
+    unsigned long long            _logBytes;    // 当前段已写字节 (用于滚动判断); 仅 _queue 内访问
+    NSUInteger                    _maxPerCategory;   // 仅 _queue 内写, append 内读
+    unsigned long long            _maxLogFileBytes;  // 仅 _queue 内写, _persist 内读
 }
 @end
 
 @implementation DHLogStore
 
-static const NSUInteger kMaxPerCategory = 2000;          // 每个分类最多保留 2000 条 (各自独立)
-static const NSUInteger kMaxBlobLogged  = 64 * 1024;     // 单段 blob 落盘上限 64KB
+static const NSUInteger kMaxBlobLogged    = 64 * 1024;     // 单段 blob 落盘上限 64KB
+static const int        kMaxRotatedBackups = 3;            // 滚动归档最多保留 .1/.2/.3 (总占用 ≤ 单文件上限 ×4)
+static const NSUInteger kDefaultMaxPerCategory = 2000;     // 每类内存保留默认值
+static const unsigned long long kDefaultMaxLogFileBytes = 50ULL * 1024 * 1024;  // 单文件默认 50MB
 
 + (instancetype)shared {
     static DHLogStore *s = nil;
@@ -37,11 +44,72 @@ static const NSUInteger kMaxBlobLogged  = 64 * 1024;     // 单段 blob 落盘�
         memset(_categoryCounts, 0, sizeof(_categoryCounts));
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         _filePath = [[paths firstObject] stringByAppendingPathComponent:@"decrypt_helper.log"];
+        _cfgPath  = [[paths firstObject] stringByAppendingPathComponent:@".dh_logcfg.conf"];
+        _maxPerCategory  = kDefaultMaxPerCategory;
+        _maxLogFileBytes = kDefaultMaxLogFileBytes;
+        [self _loadCfg];
     }
     return self;
 }
 
 - (NSString *)logFilePath { return _filePath; }
+
+// 第 i(1..3) 个滚动备份段路径; 0 = 当前段。
+- (NSString *)_segPath:(int)i { return i == 0 ? _filePath : [_filePath stringByAppendingFormat:@".%d", i]; }
+
+// ===== 配置加载/存盘 (格式: "maxPerCategory maxLogFileBytes" 一行) =====
+- (void)_loadCfg {
+    int saved = dh_in_hook; dh_in_hook = 1;   // 读配置文件不应被 file hook 记录
+    NSString *txt = [NSString stringWithContentsOfFile:_cfgPath encoding:NSUTF8StringEncoding error:nil];
+    dh_in_hook = saved;
+    if (!txt) return;
+    NSArray *parts = [[txt stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]
+                      componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSMutableArray *nums = [NSMutableArray array];
+    for (NSString *p in parts) if (p.length) [nums addObject:p];
+    if (nums.count >= 2) {
+        NSInteger mpc = [nums[0] integerValue];
+        long long  mfb = [nums[1] longLongValue];
+        if (mpc > 0)  _maxPerCategory  = (NSUInteger)mpc;
+        if (mfb >= 0) _maxLogFileBytes = (unsigned long long)mfb;   // 0=不限
+    }
+}
+- (void)_saveCfg {   // 须在 _queue 内调用
+    NSString *txt = [NSString stringWithFormat:@"%lu %llu", (unsigned long)_maxPerCategory, _maxLogFileBytes];
+    int saved = dh_in_hook; dh_in_hook = 1;
+    [txt writeToFile:_cfgPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    dh_in_hook = saved;
+}
+
+- (NSUInteger)maxPerCategory {
+    __block NSUInteger n; dispatch_sync(_queue, ^{ n = self->_maxPerCategory; }); return n;
+}
+- (void)setMaxPerCategory:(NSUInteger)n {
+    if (n == 0) return;
+    dispatch_async(_queue, ^{
+        self->_maxPerCategory = n;
+        for (int c = 0; c <= DHCategoryOther; c++) {   // 立即按新上限裁剪各桶
+            NSMutableArray *b = self->_buckets[c];
+            if (b.count > n) [b removeObjectsInRange:NSMakeRange(0, b.count - n)];
+        }
+        [self _saveCfg];
+    });
+}
+- (unsigned long long)maxLogFileBytes {
+    __block unsigned long long n; dispatch_sync(_queue, ^{ n = self->_maxLogFileBytes; }); return n;
+}
+- (void)setMaxLogFileBytes:(unsigned long long)bytes {
+    dispatch_async(_queue, ^{ self->_maxLogFileBytes = bytes; [self _saveCfg]; });
+}
+- (unsigned long long)totalLogBytes {
+    unsigned long long total = 0;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (int i = 0; i <= kMaxRotatedBackups; i++) {
+        NSDictionary *a = [fm attributesOfItemAtPath:[self _segPath:i] error:nil];
+        if (a) total += [(NSNumber *)a[NSFileSize] unsignedLongLongValue];
+    }
+    return total;
+}
 
 - (void)append:(DHLogEntry *)entry {
     if (self.paused || entry == nil) return;
@@ -51,8 +119,8 @@ static const NSUInteger kMaxBlobLogged  = 64 * 1024;     // 单段 blob 落盘�
         entry.seq = ++self->_seqCounter;
         NSMutableArray *b = self->_buckets[ci];
         [b addObject:entry];
-        if (b.count > kMaxPerCategory)
-            [b removeObjectsInRange:NSMakeRange(0, b.count - kMaxPerCategory)];
+        if (b.count > self->_maxPerCategory)
+            [b removeObjectsInRange:NSMakeRange(0, b.count - self->_maxPerCategory)];
         self->_categoryCounts[ci]++;
         [self _persist:entry];
     });
@@ -129,39 +197,59 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
     return s;
 }
 
+// 建立/恢复常开 append 句柄 (须在 _queue 内 + dh_in_hook 已置位)。文件不存在则创建。
+- (void)_openLogHandleLocked {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:_filePath]) {
+        [fm createFileAtPath:_filePath contents:nil attributes:nil];
+        _logBytes = 0;
+    } else {
+        NSDictionary *a = [fm attributesOfItemAtPath:_filePath error:nil];
+        _logBytes = a ? [(NSNumber *)a[NSFileSize] unsignedLongLongValue] : 0;
+    }
+    _logFH = [NSFileHandle fileHandleForWritingAtPath:_filePath];
+    [_logFH seekToEndOfFile];
+}
+
+// 滚动归档 (须在 _queue 内 + dh_in_hook 已置位): 删最旧 .3, 依次 .2→.3 / .1→.2 / 当前→.1, 下次写入重建当前段。
+- (void)_rotateLocked {
+    [_logFH closeFile]; _logFH = nil;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath:[self _segPath:kMaxRotatedBackups] error:nil];
+    for (int i = kMaxRotatedBackups - 1; i >= 0; i--) {
+        NSString *from = [self _segPath:i], *to = [self _segPath:i + 1];
+        if ([fm fileExistsAtPath:from]) [fm moveItemAtPath:from toPath:to error:nil];
+    }
+    _logBytes = 0;
+}
+
 - (void)_persist:(DHLogEntry *)e {
     NSMutableString *s = dh_entry_block(e);
     NSData *bytes = [s dataUsingEncoding:NSUTF8StringEncoding];
     if (!bytes) { DH_ERR(@"日志 UTF-8 编码失败, 丢弃 #%llu", (unsigned long long)e.seq); return; }
     // 关键: 落盘自身的 open/write(写 decrypt_helper.log) 不能被 file hook 再记录, 否则
-    // write -> 记录 -> append -> _persist -> write 无限自我循环. 落盘期间置 dh_in_hook.
-    dh_in_hook = 1;
+    // write -> 记录 -> append -> _persist -> write 无限自我循环. 落盘期间置 dh_in_hook。
+    // 性能: 保持常开句柄, 每条只 write() 不 open/close; 进程崩溃时内核仍会落盘, 不破坏「实时落盘」取证保证。
+    int saved = dh_in_hook; dh_in_hook = 1;
     @try {
-        NSFileManager *fm = [NSFileManager defaultManager];
-        if (![fm fileExistsAtPath:_filePath]) {
-            NSError *werr = nil;
-            if (![bytes writeToFile:_filePath options:NSDataWritingAtomic error:&werr]) {
-                dh_health_persist_fail((int)werr.code);
-                DH_ERR(@"日志落盘失败(创建 %@): %@", _filePath, werr.localizedDescription);
-            }
-        } else {
-            NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:_filePath];
-            if (!fh) {
-                dh_health_persist_fail(errno);
-                DH_ERR(@"日志落盘失败: 无法打开 %@ (errno=%d)", _filePath, errno);
-            } else {
-                @try {
-                    [fh seekToEndOfFile];
-                    [fh writeData:bytes];
-                    [fh closeFile];
-                } @catch (NSException *ex) {
-                    dh_health_persist_fail(errno);
-                    DH_ERR(@"日志落盘失败(追加): %@", ex.reason);
-                }
-            }
+        if (!_logFH) [self _openLogHandleLocked];
+        if (!_logFH) {
+            dh_health_persist_fail(errno);
+            DH_ERR(@"日志落盘失败: 无法打开 %@ (errno=%d)", _filePath, errno);
+            return;   // @finally 仍会复位 dh_in_hook
         }
+        @try {
+            [_logFH writeData:bytes];
+            _logBytes += bytes.length;
+        } @catch (NSException *ex) {
+            dh_health_persist_fail(errno);
+            DH_ERR(@"日志落盘失败(追加): %@", ex.reason);
+            [_logFH closeFile]; _logFH = nil;   // 句柄可能已坏, 丢弃, 下条重开
+            return;
+        }
+        if (_maxLogFileBytes > 0 && _logBytes >= _maxLogFileBytes) [self _rotateLocked];
     } @finally {
-        dh_in_hook = 0;
+        dh_in_hook = saved;
     }
 }
 
@@ -225,10 +313,12 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
         for (int c = 0; c <= DHCategoryOther; c++) [self->_buckets[c] removeAllObjects];
         self->_seqCounter = 0;
         memset(self->_categoryCounts, 0, sizeof(self->_categoryCounts));
+        int saved = dh_in_hook; dh_in_hook = 1;
+        [self->_logFH closeFile]; self->_logFH = nil; self->_logBytes = 0;
         NSFileManager *fm = [NSFileManager defaultManager];
-        if ([fm fileExistsAtPath:self->_filePath]) {
-            [fm removeItemAtPath:self->_filePath error:nil];
-        }
+        for (int i = 0; i <= kMaxRotatedBackups; i++)   // 当前段 + 所有滚动备份段
+            [fm removeItemAtPath:[self _segPath:i] error:nil];
+        dh_in_hook = saved;
     });
 }
 
