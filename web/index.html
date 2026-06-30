@@ -24,6 +24,7 @@
   .procinfo b { color:#8b949e; font-weight:600; }
   .procinfo .none { color:#484f58; }
   .healthbar { display:none; padding:7px 14px; background:#3d1417; border-bottom:1px solid #5a1d1d; color:#ffa198; font-size:12px; font-weight:600; }
+  .offlinebar { display:none; padding:7px 14px; background:#3d2c0a; border-bottom:1px solid #5d4310; color:#e3b341; font-size:12px; font-weight:600; flex-shrink:0; }
   .tabbar { display:flex; gap:2px; padding:0 10px; background:#161b22; border-bottom:1px solid #30363d; overflow-x:auto; }
   .tab { background:none; border:none; color:#8b949e; padding:10px 16px; font-size:13px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
   .tab:hover { color:#c9d1d9; }
@@ -139,6 +140,7 @@
   <div class='stats' id='stats'>加载中…</div>
   <div class='spacer'></div>
   <label style='color:#8b949e;font-size:12px;'><input type='checkbox' id='autoRefresh' checked> 自动刷新</label>
+  <a class='btn' id='dlAll' href='/download' target='_blank' title='下载完整落盘日志 — 每条都已实时写入设备沙箱, App 闪退/被检测杀掉后重启仍可取全量(含崩溃前), 用于离线排查闭环'>下载全部日志</a>
   <button id='diagBtn' title='查看内部诊断/审查日志, 便于排查与复现'>审查日志</button>
 </header>
 <div class='procbar'>
@@ -146,6 +148,7 @@
   <div class='procinfo' id='procinfo'></div>
 </div>
 <div class='healthbar' id='healthbar'></div>
+<div class='offlinebar' id='offlinebar'></div>
 <nav class='tabbar' id='tabbar'>
   <button class='tab active' data-tab='crypto'>加解密<span class='n' id='n-crypto'></span></button>
   <button class='tab' data-tab='file'>文件<span class='n' id='n-file'></span></button>
@@ -239,6 +242,19 @@
   function tabCat(){ return activeTab==='crypto' ? -2 : TAB_CAT[activeTab]; }
   const EMPTY = '<div class="detail-empty">← 选择左侧一条记录查看详情</div>';
   let selectedSeq = null, detailCache = {}, stats = {}, activeTab = 'crypto';
+  let listLive = false;   // 本会话当前 tab 是否已渲染过实时数据(用于断连时决定是否回退缓存)
+
+  // 服务不可达(App 闪退/被检测拦截/网络断): 绝不清屏, 只挂横幅。数据已落盘, 引导用「下载全部日志」取全量。
+  function setOffline(on) {
+    const b = $('offlinebar');
+    if (on) { b.style.display = 'block';
+      b.textContent = '服务不可达 — App 可能已闪退或被检测拦截。已显示数据保留未清除;数据均已落盘,点右上「下载全部日志」可取完整记录(含崩溃前),离线排查闭环。'; }
+    else b.style.display = 'none';
+  }
+  // 把本类最近一次实时日志镜像到 localStorage, 浏览器刷新/重开后即便服务已死也能看到断连前数据。
+  function cacheKey(cat) { return 'dh_logs_'+activeTab+'_'+cat; }
+  function saveCache(cat, entries) { try { localStorage.setItem(cacheKey(cat), JSON.stringify(entries)); } catch(e){} }
+  function loadCache(cat) { try { return JSON.parse(localStorage.getItem(cacheKey(cat))||'null'); } catch(e){ return null; } }
 
   function $(id) { return document.getElementById(id); }
   function toast(msg) { const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'),1400); }
@@ -287,16 +303,29 @@
       $('procinfo').innerHTML = pb.length ? pb.join('') : '<span class="none">进程信息不可用</span>';
       const hb=$('healthbar'); const h=stats.health||{};
       if (h.summary) { hb.style.display='block'; hb.textContent='失效: '+h.summary; } else { hb.style.display='none'; }
+      const dl=$('dlAll'); if(dl) dl.textContent = '下载全部日志'+(stats.logBytes ? ' ('+fmtSize(stats.logBytes)+')' : '');
+      setOffline(false);
       updateToolbar();
-    } catch(e) { $('stats').textContent = e.message; }
+    } catch(e) { setOffline(true); /* 不覆盖 stats: 保留最后一次可见数据 */ }
   }
   async function refreshList() {
-    const q = $('q').value.trim(), minSize = $('minSize').value;
-    const url = '/api/logs?cat='+encodeURIComponent(curCat())+'&q='+encodeURIComponent(q)+'&minSize='+encodeURIComponent(minSize)+'&limit=500';
-    let entries = [];
+    const cat = curCat(), q = $('q').value.trim(), minSize = $('minSize').value;
+    const url = '/api/logs?cat='+encodeURIComponent(cat)+'&q='+encodeURIComponent(q)+'&minSize='+encodeURIComponent(minSize)+'&limit=500';
+    let entries;
     try { entries = await fetchJSON(url); }
-    catch(e) { $('list').innerHTML = '<div class="empty">'+escapeHTML(e.message)+'</div>'; return; }
-    $('count').textContent = entries.length+' / '+(stats.total||0);
+    catch(e) {
+      // 断连绝不清空已显示日志。本会话还没拿到过实时数据时, 用 localStorage 缓存兜底显示。
+      setOffline(true);
+      if (!listLive) { const c = loadCache(cat); if (c && c.length) renderList(c, true); }
+      return;
+    }
+    setOffline(false);
+    listLive = true;
+    saveCache(cat, entries);
+    renderList(entries, false);
+  }
+  function renderList(entries, cached) {
+    $('count').textContent = entries.length+' / '+(stats.total||0)+(cached?' · 断连前缓存':'');
     if (!entries.length) { $('list').innerHTML = '<div class="empty">该分类还没有记录…<br>在 App 里触发对应操作看看?</div>'; return; }
     const out = [];
     for (const e of entries) {
@@ -317,7 +346,7 @@
         '</div>'
       );
     }
-    $('list').innerHTML = out.join('');
+    $('list').innerHTML = (cached ? '<div class="empty" style="padding:9px 14px;color:#e3b341;text-align:left;border-bottom:1px solid #21262d;">服务不可达 — 以下为浏览器缓存的断连前数据</div>' : '') + out.join('');
   }
   function ioKV(label, byteLen, hex) {
     return '<div class="io-section kv-card"><div class="io-label kv">'+label+' ('+byteLen+' bytes)</div>' +
@@ -370,6 +399,7 @@
     $('q').value = (tabState[name]||{}).q || '';
     buildCapture(name); updateToolbar();
     selectedSeq = null; $('detail').innerHTML = EMPTY;
+    listLive = false;   // 切到新 tab: 还没拿到该类实时数据, 断连时回退该类缓存
     refreshList();
   }
   let dumpPolling = null;

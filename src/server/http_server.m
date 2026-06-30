@@ -35,7 +35,7 @@
 #define DH_HTTP_PORT_LAST   8108
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
-#define DH_HTTP_VERSION     "1.9.0"
+#define DH_HTTP_VERSION     "1.9.1"
 
 static int        gListenFD = -1;
 static uint16_t   gPort     = 0;
@@ -232,6 +232,11 @@ static void handle_stats(int fd) {
         @([s isPausedForCategory:DHCategoryOther]),
     ];
     const char *hsum = dh_health_summary();
+    // 落盘日志字节数: 每条日志已实时写入沙箱文件(App 闪退/被检测杀掉后, 重启仍可经 /download 取全量),
+    // 前端据此提示「数据已落盘」并标出可下载大小, 形成崩溃可闭环的取证链路。
+    unsigned long long logBytes = 0;
+    NSDictionary *la = [[NSFileManager defaultManager] attributesOfItemAtPath:[s logFilePath] error:nil];
+    if (la) logBytes = [(NSNumber *)la[NSFileSize] unsignedLongLongValue];
     send_json(fd, 200, @{
         @"total":       @(s.totalCount),
         @"paused":      @(s.paused),
@@ -240,6 +245,7 @@ static void handle_stats(int fd) {
         @"capture":     capture,
         @"port":        @(gPort),
         @"version":     @DH_HTTP_VERSION,
+        @"logBytes":    @(logBytes),
         @"process":     [s processInfo],
         @"health":      @{
             @"hookFails":     @(dh_health_hook_fail_count()),
