@@ -21,7 +21,6 @@ extern void dh_install_hmac_hooks(void);
 extern void dh_install_symmetric_hooks(void);
 extern void dh_install_asymmetric_hooks(void);
 extern void dh_install_kdf_hooks(void);
-extern void dh_install_network_hooks(void);
 extern void dh_install_file_hooks(void);
 extern void dh_install_system_hooks(void);
 
@@ -31,7 +30,6 @@ static void dh_install_all_hooks(void) {
     dh_install_symmetric_hooks();
     dh_install_asymmetric_hooks();
     dh_install_kdf_hooks();
-    dh_install_network_hooks();
     dh_install_file_hooks();
     dh_install_system_hooks();
 }

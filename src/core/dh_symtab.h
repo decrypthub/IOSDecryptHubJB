@@ -33,11 +33,6 @@ void dh_symtab_image_name(int idx, char *buf, size_t buflen, int *isMain);
 // 返回匹配到的导入符号总数。
 int  dh_symtab_imports(int idx, const char *q, int limit, dh_sym_cb cb, void *ctx);
 
-// 在所有已加载 image 的导入表里精确查找符号 name(不含前导下划线)。
-// 每个「导入了该符号」的 image, 用其短名回调一次 cb(cb 可为 NULL 只计数)。
-// 返回命中的 image 数。
-int  dh_symtab_find_import(const char *name, dh_sym_cb cb, void *ctx);
-
 #ifdef __cplusplus
 }
 #endif

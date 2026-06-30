@@ -17,7 +17,6 @@ extern "C" {
 typedef enum {
     DH_DIAG_GENERAL = 0,   // 启动 / 服务 / 落盘 等通用
     DH_DIAG_CRYPTO,        // 加解密
-    DH_DIAG_NET,           // 网络
     DH_DIAG_FILE,          // 文件
     DH_DIAG_SYS,           // 系统
     DH_DIAG_DUMP,          // 砸壳

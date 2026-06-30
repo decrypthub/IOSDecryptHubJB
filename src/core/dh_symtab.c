@@ -91,29 +91,3 @@ int dh_symtab_imports(int idx, const char *q, int limit, dh_sym_cb cb, void *ctx
     }
     return matched;
 }
-
-int dh_symtab_find_import(const char *name, dh_sym_cb cb, void *ctx) {
-    if (!name || !name[0]) return 0;
-    int hits = 0;
-    int n = (int)_dyld_image_count();
-    for (int idx = 0; idx < n; idx++) {
-        const struct nlist_64 *st = NULL; const char *str = NULL; uint32_t nsyms = 0, strsize = 0;
-        if (!image_symtab(idx, &st, &str, &nsyms, &strsize, NULL)) continue;
-        int found = 0;
-        for (uint32_t i = 0; i < nsyms && !found; i++) {
-            const char *nm = NULL;
-            if (!undef_name(&st[i], str, strsize, &nm)) continue;
-            if (strcmp(nm, name) == 0) found = 1;
-        }
-        if (found) {
-            hits++;
-            if (cb) {
-                char b[256];
-                const char *path = _dyld_get_image_name(idx);
-                strncpy(b, basename_of(path), sizeof(b) - 1); b[sizeof(b) - 1] = '\0';
-                cb(b, ctx);
-            }
-        }
-    }
-    return hits;
-}

@@ -17,7 +17,6 @@ SRCS=(
   src/hooks/crypto/hook_symmetric.m
   src/hooks/crypto/hook_asymmetric.m
   src/hooks/crypto/hook_kdf.m
-  src/hooks/behavior/hook_network.m
   src/hooks/behavior/hook_file.m
   src/hooks/behavior/hook_system.m
   src/server/http_server.m
@@ -32,7 +31,7 @@ OUT=decrypt_helper.dylib
   -isysroot "$IOS_SDK" \
   -dynamiclib \
   -install_name "@executable_path/$OUT" \
-  -Xlinker -current_version -Xlinker 1.8.1 \
+  -Xlinker -current_version -Xlinker 1.9.0 \
   -Xlinker -compatibility_version -Xlinker 1.0.0 \
   -ObjC -fobjc-arc \
   -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \

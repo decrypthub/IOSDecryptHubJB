@@ -22,14 +22,11 @@ typedef enum {
     DH_CAP_FILE_WRITE,
     DH_CAP_FILE_UNLINK,
     DH_CAP_FILE_RENAME,
-    DH_CAP_NET_CONNECT,
-    DH_CAP_NET_SSL_WRITE,
-    DH_CAP_NET_SSL_READ,
     DH_CAP_SYS_DLOPEN,
     DH_CAP_SUB_COUNT
 } dh_cap_sub;
 
-#define DH_CAP_CAT_COUNT 8   // = DHCategoryOther + 1
+#define DH_CAP_CAT_COUNT 7   // = DHCategoryOther + 1
 
 // 从沙箱加载持久化配置(应在安装 hook 之前调用)。confPath = .dh_capture.conf 绝对路径;
 // 文件不存在或格式不符则用「全部开启 / 不暂停」的默认值。

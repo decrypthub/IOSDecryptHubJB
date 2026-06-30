@@ -32,8 +32,8 @@ static int  g_diag_head[DH_DIAG_BOARD_COUNT]  = {0};
 static int  g_diag_count[DH_DIAG_BOARD_COUNT] = {0};
 static char g_diag_out[DH_DIAG_BOARD_COUNT * DIAG_LINES * DIAG_LINE_LEN + 1024];   // dump 拼接缓冲
 static char g_diag_dir[1024] = {0};
-static const char *kBoardKey[DH_DIAG_BOARD_COUNT]  = { "general", "crypto", "net", "file", "sys", "dump" };
-static const char *kBoardName[DH_DIAG_BOARD_COUNT] = { "通用", "加解密", "网络", "文件", "系统", "砸壳" };
+static const char *kBoardKey[DH_DIAG_BOARD_COUNT]  = { "general", "crypto", "file", "sys", "dump" };
+static const char *kBoardName[DH_DIAG_BOARD_COUNT] = { "通用", "加解密", "文件", "系统", "砸壳" };
 
 // 把某板块落盘文件的内容回填进内存环(保留最后 DIAG_LINES 行)。须在持锁时调用。
 static void diag_load_board_locked(int board) {

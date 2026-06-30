@@ -38,7 +38,6 @@
   .pill.hmac   { background:#0c2e4a; color:#58a6ff; }
   .pill.sym    { background:#3c2410; color:#f0a35c; }
   .pill.asym   { background:#3a1140; color:#d2a8ff; }
-  .pill.net    { background:#0c302c; color:#3fd0c9; }
   .pill.file   { background:#2e2a0c; color:#d4c95a; }
   .pill.sys    { background:#241a3a; color:#b89aff; }
   .pill.other  { background:#21262d; color:#8b949e; }
@@ -128,8 +127,6 @@
   .sym-controls input[type=search] { width:260px; }
   .sym-controls button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:5px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
   .sym-controls button:hover { background:#30363d; }
-  .dump-table td.sym-yes { color:#56d364; }
-  .dump-table td.sym-no  { color:#ffa198; }
   .dump-table td.symname { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color:#c9d1d9; word-break:break-all; }
   .diag-boards { display:flex; gap:4px; flex-wrap:wrap; }
   .diag-boards button { background:#0d1117; color:#8b949e; border:1px solid #30363d; padding:3px 9px; border-radius:6px; font-size:12px; cursor:pointer; }
@@ -151,7 +148,6 @@
 <div class='healthbar' id='healthbar'></div>
 <nav class='tabbar' id='tabbar'>
   <button class='tab active' data-tab='crypto'>加解密<span class='n' id='n-crypto'></span></button>
-  <button class='tab' data-tab='net'>网络<span class='n' id='n-net'></span></button>
   <button class='tab' data-tab='file'>文件<span class='n' id='n-file'></span></button>
   <button class='tab' data-tab='sys'>系统<span class='n' id='n-sys'></span></button>
   <button class='tab' data-tab='symbols'>符号</button>
@@ -207,13 +203,7 @@
   <div class='dumpwrap'>
     <h2>符号导入表 (可 hook 观测)</h2>
     <div class='note'>fishhook 只能改<b>导入符号表</b> —— 即本 image 调用其它 dylib 导出的符号。凡在下表出现的, 都是 fishhook 候选; 被<b>静态链接</b>进主二进制的符号不在导入表里, fishhook 无法拦截, 需改用 inline hook。</div>
-    <h3 class='sym-h3'>TLS 明文接口探测 (r0capture 核心点)</h3>
-    <div class='note' style='margin-bottom:8px;'>这几个是抓 TLS 明文最值得 hook 的点。「可 hook=是」表示该符号在本进程某个 image 的导入表里、fishhook 能拦截; 全为「否」基本说明目标静态链接了 TLS 库。</div>
-    <table class='dump-table'>
-      <thead><tr><th>符号</th><th>可 hook</th><th>已接入</th><th>所在 image (导入方)</th></tr></thead>
-      <tbody id='symTlsBody'><tr><td colspan='4' style='color:#6e7681;'>探测中…</td></tr></tbody>
-    </table>
-    <h3 class='sym-h3' style='margin-top:20px;'>按 image 浏览导入符号</h3>
+    <h3 class='sym-h3'>按 image 浏览导入符号</h3>
     <div class='sym-controls'>
       <label>image</label>
       <select id='symImgSel'></select>
@@ -222,8 +212,8 @@
       <span id='symCount' style='color:#6e7681; font-size:11px;'></span>
     </div>
     <table class='dump-table'>
-      <thead><tr><th style='width:48px;'>#</th><th>导入符号</th><th style='width:120px;'>状态</th></tr></thead>
-      <tbody id='symListBody'><tr><td colspan='3' style='color:#6e7681;'>加载中…</td></tr></tbody>
+      <thead><tr><th style='width:48px;'>#</th><th>导入符号 (均为 fishhook 候选)</th></tr></thead>
+      <tbody id='symListBody'><tr><td colspan='2' style='color:#6e7681;'>加载中…</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -236,17 +226,16 @@
 </div>
 <div class='toast' id='toast'></div>
 <script>
-  const CAT_NAMES = ['摘要','HMAC','对称','非对称','网络','文件','系统','其它'];
-  const CAT_CLS   = ['digest','hmac','sym','asym','net','file','sys','other'];
-  const TAB_CAT   = { crypto:-2, net:4, file:5, sys:6 };
-  const LOG_TABS  = ['crypto','net','file','sys'];   // 走日志 master-detail 的 tab; 符号/砸壳是独立面板
+  const CAT_NAMES = ['摘要','HMAC','对称','非对称','文件','系统','其它'];
+  const CAT_CLS   = ['digest','hmac','sym','asym','file','sys','other'];
+  const TAB_CAT   = { crypto:-2, file:4, sys:5 };
+  const LOG_TABS  = ['crypto','file','sys'];   // 走日志 master-detail 的 tab; 符号/砸壳是独立面板
   const TAB_SUBS = {
     crypto: [['DIGEST','摘要'],['HMAC','HMAC'],['SYMMETRIC','对称'],['ASYMMETRIC','非对称'],['KDF','KDF']],
-    net:    [['NET_CONNECT','connect'],['NET_SSL_WRITE','SSL_write'],['NET_SSL_READ','SSL_read']],
     file:   [['FILE_OPEN','open'],['FILE_WRITE','write'],['FILE_UNLINK','unlink'],['FILE_RENAME','rename']],
     sys:    [['SYS_DLOPEN','dlopen']],
   };
-  const tabState = { crypto:{q:''}, net:{q:''}, file:{q:''}, sys:{q:''} };
+  const tabState = { crypto:{q:''}, file:{q:''}, sys:{q:''} };
   function tabCat(){ return activeTab==='crypto' ? -2 : TAB_CAT[activeTab]; }
   const EMPTY = '<div class="detail-empty">← 选择左侧一条记录查看详情</div>';
   let selectedSeq = null, detailCache = {}, stats = {}, activeTab = 'crypto';
@@ -269,7 +258,7 @@
     const pb=$('tabPauseBtn'); if(pb){ pb.textContent = paused?'继续':'暂停'; pb.classList.toggle('danger', paused); }
     document.querySelectorAll('#captureWrap input[data-sub]').forEach(cb => { if(cap[cb.dataset.sub]!==undefined) cb.checked = cap[cb.dataset.sub]!==0; });
   }
-  const DIAG_BOARDS = [[-1,'全部'],[0,'通用'],[1,'加解密'],[2,'网络'],[3,'文件'],[4,'系统'],[5,'砸壳']];
+  const DIAG_BOARDS = [[-1,'全部'],[0,'通用'],[1,'加解密'],[2,'文件'],[3,'系统'],[4,'砸壳']];
   let diagBoard = -1;
   function buildDiagBoards(){
     $('diagBoards').innerHTML = DIAG_BOARDS.map(([b,lab]) =>
@@ -285,9 +274,8 @@
       $('stats').innerHTML = '<span>'+sp+'</span><span>总: <b>'+stats.total+'</b></span>';
       const cryptoN = (bc[0]||0)+(bc[1]||0)+(bc[2]||0)+(bc[3]||0);
       $('n-crypto').textContent = cryptoN ? cryptoN : '';
-      $('n-net').textContent = bc[4] ? bc[4] : '';
-      $('n-file').textContent = bc[5] ? bc[5] : '';
-      $('n-sys').textContent = bc[6] ? bc[6] : '';
+      $('n-file').textContent = bc[4] ? bc[4] : '';
+      $('n-sys').textContent = bc[5] ? bc[5] : '';
       $('ver').textContent = stats.version ? ('v'+stats.version) : '';
       const p = stats.process || {}; const pb = [];
       if (p.appName) pb.push('<span><b>'+escapeHTML(p.appName)+'</b></span>');
@@ -430,18 +418,7 @@
     }
   }
   // ---- 符号导入表 ----
-  async function loadSymbols(){ loadTlsProbe(); await loadSymImages(); }
-  async function loadTlsProbe(){
-    try {
-      const d = await fetchJSON('/api/symbols/tls');
-      const rows = (d.symbols||[]).map(s =>
-        '<tr><td class="symname">'+escapeHTML(s.name)+'</td>'+
-        '<td class="'+(s.present?'sym-yes':'sym-no')+'">'+(s.present?'是':'否')+'</td>'+
-        '<td>'+(s.hooked?'<span class="pill net">已接入</span>':'<span style="color:#6e7681;">-</span>')+'</td>'+
-        '<td style="color:#8b949e;">'+escapeHTML((s.images||[]).join(', ')||'—')+'</td></tr>');
-      $('symTlsBody').innerHTML = rows.join('') || '<tr><td colspan="4" style="color:#6e7681;">无数据</td></tr>';
-    } catch(e){ $('symTlsBody').innerHTML = '<tr><td colspan="4">'+escapeHTML(e.message)+'</td></tr>'; }
-  }
+  async function loadSymbols(){ await loadSymImages(); }
   let symImages = [];
   async function loadSymImages(){
     try {
@@ -453,20 +430,18 @@
       if (prev && symImages.some(im=>String(im.idx)===prev)) { $('symImgSel').value = prev; }
       else { const m = symImages.find(x=>x.main); if (m) $('symImgSel').value = m.idx; }
       loadSymList();
-    } catch(e){ $('symListBody').innerHTML = '<tr><td colspan="3">'+escapeHTML(e.message)+'</td></tr>'; }
+    } catch(e){ $('symListBody').innerHTML = '<tr><td colspan="2">'+escapeHTML(e.message)+'</td></tr>'; }
   }
   async function loadSymList(){
     const idx = $('symImgSel').value, q = $('symQ').value.trim();
     if (idx==='' || idx===undefined) return;
     try {
       const d = await fetchJSON('/api/symbols?img='+encodeURIComponent(idx)+'&q='+encodeURIComponent(q)+'&limit=500');
-      const hooked = new Set(d.hooked||[]);
       const rows = (d.symbols||[]).map((nm,i) =>
-        '<tr><td style="color:#6e7681;">'+(i+1)+'</td><td class="symname">'+escapeHTML(nm)+'</td>'+
-        '<td>'+(hooked.has(nm)?'<span class="pill net">已 hook</span>':'<span style="color:#6e7681;">可 hook</span>')+'</td></tr>');
-      $('symListBody').innerHTML = rows.join('') || '<tr><td colspan="3" style="color:#6e7681;">无匹配符号</td></tr>';
+        '<tr><td style="color:#6e7681;">'+(i+1)+'</td><td class="symname">'+escapeHTML(nm)+'</td></tr>');
+      $('symListBody').innerHTML = rows.join('') || '<tr><td colspan="2" style="color:#6e7681;">无匹配符号</td></tr>';
       $('symCount').textContent = d.shown+' / '+d.total+' 个导入符号'+(d.total>d.shown?' (已截断, 用过滤缩小)':'');
-    } catch(e){ $('symListBody').innerHTML = '<tr><td colspan="3">'+escapeHTML(e.message)+'</td></tr>'; }
+    } catch(e){ $('symListBody').innerHTML = '<tr><td colspan="2">'+escapeHTML(e.message)+'</td></tr>'; }
   }
 
   document.addEventListener('click', async (ev) => {

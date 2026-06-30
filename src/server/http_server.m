@@ -35,7 +35,7 @@
 #define DH_HTTP_PORT_LAST   8108
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
-#define DH_HTTP_VERSION     "1.8.1"
+#define DH_HTTP_VERSION     "1.9.0"
 
 static int        gListenFD = -1;
 static uint16_t   gPort     = 0;
@@ -102,7 +102,6 @@ static const char *category_name(NSInteger c) {
         case DHCategoryHMAC:       return "hmac";
         case DHCategorySymmetric:  return "sym";
         case DHCategoryAsymmetric: return "asym";
-        case DHCategoryNetwork:    return "net";
         case DHCategoryFile:       return "file";
         case DHCategorySystem:     return "sys";
         default: return "other";
@@ -216,7 +215,6 @@ static void handle_stats(int fd) {
         @([s countForCategory:DHCategoryHMAC]),
         @([s countForCategory:DHCategorySymmetric]),
         @([s countForCategory:DHCategoryAsymmetric]),
-        @([s countForCategory:DHCategoryNetwork]),
         @([s countForCategory:DHCategoryFile]),
         @([s countForCategory:DHCategorySystem]),
         @([s countForCategory:DHCategoryOther]),
@@ -229,7 +227,6 @@ static void handle_stats(int fd) {
         @([s isPausedForCategory:DHCategoryHMAC]),
         @([s isPausedForCategory:DHCategorySymmetric]),
         @([s isPausedForCategory:DHCategoryAsymmetric]),
-        @([s isPausedForCategory:DHCategoryNetwork]),
         @([s isPausedForCategory:DHCategoryFile]),
         @([s isPausedForCategory:DHCategorySystem]),
         @([s isPausedForCategory:DHCategoryOther]),
@@ -484,37 +481,10 @@ static void handle_dump_download(int fd, NSDictionary *q) {
 // ---- 符号导入表(可 hook 观测) ----
 // fishhook 只能改导入符号表 —— 这几个端点把各 image 的导入(undefined)符号暴露给面板, 让使用者
 // 当场看清「哪些可被 fishhook 拦截」, 尤其 TLS 明文接口是否在导入表里(不在=多半静态链接)。
-static NSArray *dh_hooked_net_syms(void) {
-    return @[@"connect", @"SSL_write", @"SSL_read", @"SSL_write_ex", @"SSL_read_ex", @"SSLWrite", @"SSLRead"];
-}
-
-// C 回调把 image 短名收进 NSMutableArray(去重)。
-static void sym_image_collect_cb(const char *name, void *ctx) {
-    NSMutableArray *a = (__bridge NSMutableArray *)ctx;
-    NSString *s = name ? [NSString stringWithUTF8String:name] : nil;
-    if (s && ![a containsObject:s]) [a addObject:s];
-}
 // C 回调把符号名收进 NSMutableArray。
 static void sym_name_collect_cb(const char *name, void *ctx) {
     NSMutableArray *a = (__bridge NSMutableArray *)ctx;
     if (name) [a addObject:[NSString stringWithUTF8String:name] ?: @"?"];
-}
-
-// GET /api/symbols/tls —— 探测 r0capture 关心的 TLS 明文接口在本进程导入表里是否存在 + 是否已被我们 hook。
-static void handle_symbols_tls(int fd) {
-    NSArray *curated = dh_hooked_net_syms();   // 这几个正好都是我们接入 hook 的
-    NSMutableArray *arr = [NSMutableArray array];
-    for (NSString *nm in curated) {
-        NSMutableArray *imgs = [NSMutableArray array];
-        int cnt = dh_symtab_find_import(nm.UTF8String, sym_image_collect_cb, (__bridge void *)imgs);
-        [arr addObject:@{
-            @"name":    nm,
-            @"present": @(cnt > 0),
-            @"hooked":  @YES,
-            @"images":  imgs,
-        }];
-    }
-    send_json(fd, 200, @{@"symbols": arr});
 }
 
 // GET /api/symbols/images —— 列出有导入符号的 image(主程序优先), 给「符号」页下拉用。
@@ -541,7 +511,7 @@ static void handle_symbols_images(int fd) {
     send_json(fd, 200, @{@"images": arr});
 }
 
-// GET /api/symbols?img=N&q=&limit= —— 某 image 的导入符号列表(可子串过滤), hooked 集给前端高亮。
+// GET /api/symbols?img=N&q=&limit= —— 某 image 的导入符号列表(可子串过滤)。出现在导入表里的都是 fishhook 候选。
 static void handle_symbols(int fd, NSDictionary *q) {
     int n = dh_symtab_image_count();
     int idx = q[@"img"] ? [q[@"img"] intValue] : 0;
@@ -562,7 +532,6 @@ static void handle_symbols(int fd, NSDictionary *q) {
         @"total":   @(total),
         @"shown":   @(syms.count),
         @"symbols": syms,
-        @"hooked":  dh_hooked_net_syms(),
     });
 }
 
@@ -634,8 +603,6 @@ static void handle_connection(int fd) {
                 handle_diag(fd, q);
             } else if ([path isEqualToString:@"/api/diag/download"]) {
                 handle_diag_download(fd, q);
-            } else if ([path isEqualToString:@"/api/symbols/tls"]) {
-                handle_symbols_tls(fd);
             } else if ([path isEqualToString:@"/api/symbols/images"]) {
                 handle_symbols_images(fd);
             } else if ([path isEqualToString:@"/api/symbols"]) {
