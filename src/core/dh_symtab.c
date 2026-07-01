@@ -31,9 +31,14 @@ static int image_symtab(int idx,
 
     const struct symtab_command *sym = NULL;
     const struct segment_command_64 *linkedit = NULL;
-    const uint8_t *p = (const uint8_t *)mh + sizeof(struct mach_header_64);
+    const uint8_t *cmds = (const uint8_t *)mh + sizeof(struct mach_header_64);
+    const uint8_t *end  = cmds + mh->sizeofcmds;   // 加载命令区上界, 防越界遍历
+    const uint8_t *p = cmds;
     for (uint32_t i = 0; i < mh->ncmds; i++) {
+        if (p + sizeof(struct load_command) > end) break;
         const struct load_command *lc = (const struct load_command *)p;
+        if (lc->cmdsize < sizeof(struct load_command)) break;   // 含 cmdsize==0: 防死循环/越界
+        if (p + lc->cmdsize > end) break;
         if (lc->cmd == LC_SYMTAB) {
             sym = (const struct symtab_command *)lc;
         } else if (lc->cmd == LC_SEGMENT_64) {
@@ -43,6 +48,15 @@ static int image_symtab(int idx,
         p += lc->cmdsize;
     }
     if (!sym || !linkedit) return 0;
+
+    // symtab/strtab 必须整体落在 __LINKEDIT 的文件范围内, 否则按损坏处理放弃该 image
+    // —— 否则下面用 base+symoff/stroff 直接读裸内存, 字段被污染会 OOB。
+    uint64_t le_lo = linkedit->fileoff, le_hi = (uint64_t)linkedit->fileoff + linkedit->filesize;
+    uint64_t sym_hi = (uint64_t)sym->symoff + (uint64_t)sym->nsyms * sizeof(struct nlist_64);
+    uint64_t str_hi = (uint64_t)sym->stroff + (uint64_t)sym->strsize;
+    if (sym->symoff < le_lo || sym_hi > le_hi) return 0;
+    if (sym->stroff < le_lo || str_hi > le_hi) return 0;
+
     uintptr_t base = (uintptr_t)slide + (uintptr_t)linkedit->vmaddr - (uintptr_t)linkedit->fileoff;
     if (symsOut)    *symsOut    = (const struct nlist_64 *)(base + sym->symoff);
     if (strOut)     *strOut     = (const char *)(base + sym->stroff);
@@ -54,6 +68,7 @@ static int image_symtab(int idx,
 // 是否为「导入(undefined external)」符号; 是则回填去过下划线的名字指针。
 static int undef_name(const struct nlist_64 *s, const char *strtab, uint32_t strsize, const char **nameOut) {
     if (s->n_type & N_STAB) return 0;                 // 调试符号
+    if (!(s->n_type & N_EXT)) return 0;               // 导入必为 external; 排除本地未定义符号
     if ((s->n_type & N_TYPE) != N_UNDF) return 0;     // 只要未定义(导入)
     uint32_t strx = s->n_un.n_strx;
     if (strx == 0 || strx >= strsize) return 0;
