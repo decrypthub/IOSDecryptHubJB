@@ -63,7 +63,7 @@ static DHFloatingController *gFloat = nil;
 
 - (void)build {
     CGRect screen = [UIScreen mainScreen].bounds;
-    CGFloat W = 252, H = 188;
+    CGFloat W = 252, H = 208;
     // 初始贴右上, 顶部避开灵动岛/刘海 (保守安全值, 拖动后随用户)
     CGRect frame = CGRectMake(screen.size.width - W - 12, 64, W, H);
     self.expandedFrame = frame;
@@ -135,14 +135,14 @@ static DHFloatingController *gFloat = nil;
     [icon addGestureRecognizer:iconTap];
 
     // 统计文本
-    self.statsLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 48, W - 28, 40)];
+    self.statsLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 48, W - 28, 52)];
     self.statsLabel.numberOfLines = 0;
     self.statsLabel.textColor = [UIColor colorWithWhite:0.92 alpha:1.0];
     self.statsLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
     [root addSubview:self.statsLabel];
 
     // URL 一行: http://ip:port  (点击复制)
-    self.urlLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 92, W - 28, 40)];
+    self.urlLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 104, W - 28, 36)];
     self.urlLabel.numberOfLines = 2;
     self.urlLabel.textColor = [UIColor colorWithRed:0.45 green:0.85 blue:1.0 alpha:1.0];
     self.urlLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
@@ -156,7 +156,7 @@ static DHFloatingController *gFloat = nil;
     [root addSubview:self.urlLabel];
 
     // 操作按钮区 (44pt 触控高度, 玻璃按钮)
-    CGFloat by = 138, bw = 70, bh = 40, bx = 12, gap = 9;
+    CGFloat by = 148, bw = 70, bh = 40, bx = 12, gap = 9;
     self.openBtn  = [self makeButton:@"日志" color:[UIColor colorWithRed:0.36 green:0.65 blue:1.00 alpha:1.0]
                                frame:CGRectMake(bx, by, bw, bh) action:@selector(onOpenLog)];
     self.pauseBtn = [self makeButton:@"暂停" color:[UIColor colorWithRed:0.95 green:0.75 blue:0.30 alpha:1.0]
@@ -201,11 +201,15 @@ static DHFloatingController *gFloat = nil;
     NSUInteger h = [s countForCategory:DHCategoryHMAC];
     NSUInteger sym = [s countForCategory:DHCategorySymmetric];
     NSUInteger asym = [s countForCategory:DHCategoryAsymmetric];
+    NSUInteger file = [s countForCategory:DHCategoryFile];
+    NSUInteger sys = [s countForCategory:DHCategorySystem];
+    NSUInteger noise = [s noiseCount];
     NSString *state = s.paused ? @"已暂停" : @"运行中";
     self.statsLabel.text = [NSString stringWithFormat:
-        @"%@   总 %lu   摘要 %lu\nHMAC %lu  对称 %lu  RSA %lu",
+        @"%@  总 %lu\n摘要 %lu  HMAC %lu  对称 %lu  RSA %lu\n文件 %lu  系统 %lu  噪声 %lu",
         state, (unsigned long)[s totalCount],
-        (unsigned long)d, (unsigned long)h, (unsigned long)sym, (unsigned long)asym];
+        (unsigned long)d, (unsigned long)h, (unsigned long)sym, (unsigned long)asym,
+        (unsigned long)file, (unsigned long)sys, (unsigned long)noise];
 
     // fail-loud: 把健康状态显示出来 —— 服务失败/hook未挂上/落盘失败都用红字明示,
     // 而不是恒显"启动中…"假装一切正常.

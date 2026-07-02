@@ -98,7 +98,8 @@
 @property (nonatomic, strong) NSArray<DHLogEntry *> *data;
 @property (nonatomic, strong) NSTimer *autoRefreshTimer;
 @property (nonatomic, copy)   NSString *searchKw;
-@property (nonatomic, assign) NSInteger filterCategory; // -1 = all
+@property (nonatomic, assign) NSInteger filterCategory; // -1=全部 -2=加密组 4=文件 5=系统
+@property (nonatomic, assign) BOOL filterNoise;
 @end
 
 @implementation DHLogListVC
@@ -108,6 +109,7 @@
     self.title = @"IOSDecryptHub - 日志";
     self.view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1.0];
     self.filterCategory = -1;
+    self.filterNoise = NO;
     self.searchKw = @"";
 
     self.navigationItem.leftBarButtonItem =
@@ -120,7 +122,7 @@
                                         target:self action:@selector(reload)],
     ];
 
-    self.segment = [[UISegmentedControl alloc] initWithItems:@[@"全部", @"摘要", @"HMAC", @"对称", @"RSA"]];
+    self.segment = [[UISegmentedControl alloc] initWithItems:@[@"全部", @"加密", @"文件", @"系统", @"噪声"]];
     self.segment.selectedSegmentIndex = 0;
     [self.segment addTarget:self action:@selector(onSegment:) forControlEvents:UIControlEventValueChanged];
     self.segment.translatesAutoresizingMaskIntoConstraints = NO;
@@ -171,11 +173,11 @@
 
 - (void)onSegment:(UISegmentedControl *)sc {
     NSInteger i = sc.selectedSegmentIndex;
+    self.filterNoise = (i == 4);
     if (i == 0) self.filterCategory = -1;
-    else if (i == 1) self.filterCategory = DHCategoryDigest;
-    else if (i == 2) self.filterCategory = DHCategoryHMAC;
-    else if (i == 3) self.filterCategory = DHCategorySymmetric;
-    else if (i == 4) self.filterCategory = DHCategoryAsymmetric;
+    else if (i == 1) self.filterCategory = -2;
+    else if (i == 2) self.filterCategory = DHCategoryFile;
+    else if (i == 3) self.filterCategory = DHCategorySystem;
     [self reload];
 }
 
@@ -189,7 +191,11 @@
 }
 
 - (void)reload {
-    NSArray *src = [[DHLogStore shared] snapshotMatching:self.searchKw category:self.filterCategory];
+    NSArray *src;
+    if (self.filterNoise)
+        src = [[DHLogStore shared] snapshotNoiseMatching:self.searchKw];
+    else
+        src = [[DHLogStore shared] snapshotMatching:self.searchKw category:self.filterCategory];
     // 最新的在最上面
     self.data = [[src reverseObjectEnumerator] allObjects];
     [self.table reloadData];
@@ -240,6 +246,8 @@
         case DHCategoryHMAC:       catColor = [UIColor colorWithRed:0.4 green:0.75 blue:0.95 alpha:1.0]; break;
         case DHCategorySymmetric:  catColor = [UIColor colorWithRed:0.95 green:0.65 blue:0.35 alpha:1.0]; break;
         case DHCategoryAsymmetric: catColor = [UIColor colorWithRed:0.95 green:0.55 blue:0.85 alpha:1.0]; break;
+        case DHCategoryFile:       catColor = [UIColor colorWithRed:0.85 green:0.78 blue:0.35 alpha:1.0]; break;
+        case DHCategorySystem:     catColor = [UIColor colorWithRed:0.72 green:0.60 blue:0.98 alpha:1.0]; break;
         default: break;
     }
     NSMutableAttributedString *title = [[NSMutableAttributedString alloc] initWithString:
@@ -258,7 +266,8 @@
         if (preview.length > 60) preview = [[preview substringToIndex:60] stringByAppendingString:@"…"];
     }
     c.detailTextLabel.text = [NSString stringWithFormat:@"%@   in:%lu out:%lu\n%@",
-        e.timestamp, (unsigned long)inLen, (unsigned long)outLen, preview];
+        e.timestamp, (unsigned long)inLen, (unsigned long)outLen,
+        e.detail.length ? e.detail : preview];
     return c;
 }
 
