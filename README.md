@@ -1,14 +1,14 @@
 # IOSDecryptHub
 
-基于 fishhook 的 iOS App 行为监控平台。已实现四类监控：**加解密审计**（哈希 / HMAC / 对称 / 非对称 / KDF 的算法、Key、IV、明文、密文）、**网络抓包**（connect 目标 + SSL_write/SSL_read 的 TLS 明文请求与响应）、**文件监控**（open / write / unlink / rename 沙盒文件操作）、**系统模块**（dlopen 载入的动态库），每次调用都附应用层调用栈。Web 面板多 tab 架构，浏览器即可实时查看。
+基于 fishhook 的 iOS App 行为监控平台。已实现三类监控：**加解密审计**（哈希 / HMAC / 对称 / 非对称 / KDF 的算法、Key、IV、明文、密文）、**文件监控**（open / write / unlink / rename 沙盒文件操作）、**系统模块**（dlopen 载入的动态库），每次调用都附应用层调用栈。Web 面板多 tab 架构，浏览器即可实时查看。
 
 注入到目标 App 后，它自己调用系统加密 API 时，你能在旁边实时看到全部参数。
 
 ## 截图
 
-Web 面板多 tab（加解密 / 网络 / 文件 / 系统）+ 宿主 App 图标 + 左右分栏 master-detail，配交互式测试台、iOS 悬浮窗与全屏日志查看器。
+Web 面板多 tab（加解密 / 文件 / 系统 / 符号 / Dump）+ 宿主 App 图标 + 左右分栏 master-detail，配交互式测试台、iOS 悬浮窗与全屏日志查看器。
 
-| Web 网络抓包（SSL_write 明文请求 + connect 目标 IP） | 交互式测试台（分 tab 触发各类调用） |
+| Web 面板（加解密 master-detail） | 交互式测试台（分 tab 触发各类调用） |
 | --- | --- |
 | ![web-net](docs/screenshots/02-web-panel.png) | ![test-host](docs/screenshots/01-test-host.png) |
 | 悬浮窗（毛玻璃，可拖动、可收起成胶囊） | 全屏日志查看器（分类切换、搜索、详情展开） |
@@ -34,20 +34,19 @@ Web 面板多 tab（加解密 / 网络 / 文件 / 系统）+ 宿主 App 图标 +
 
 ## 监控能力
 
-Web 面板多 tab 架构，四类监控共享同一套左右分栏 master-detail（左列表 + 右详情，详情按类型自适应字段）：
+Web 面板多 tab 架构，三类监控共享同一套左右分栏 master-detail（左列表 + 右详情，详情按类型自适应字段）：
 
 | tab | hook 目标 | 能看到什么 |
 | --- | --- | --- |
 | 加解密 | CommonCrypto / SecKey | 算法 / Key / IV / 明文 / 密文 / 调用栈 |
-| 网络 | connect / SSL_write / SSL_read | 目标 IP:port / TLS 明文请求与响应 |
 | 文件 | open / write / unlink / rename | 沙盒文件读写、删除、重命名（过滤系统噪音） |
 | 系统 | dlopen | 运行时载入的动态库 |
 
-> 注：网络的 SSL_write/SSL_read 抓的是 App 自带 BoringSSL/OpenSSL 的明文（系统 Network.framework 的 TLS 不走这两个符号）；内存（malloc/free）因高频且记录路径自身会触发 malloc 易递归，暂不纳入。
+另有 **符号** tab（列出 fishhook 可 rebind 的导入符号）、**Dump** tab（按需脱壳）、工具栏 **查看噪声**（噪点过滤命中事件）。
 
 ## 砸壳（脱壳 / dump）
 
-除监控外，Web 面板的「砸壳」tab 可在目标进程内对已被内核解密的 Mach-O 做脱壳，**按需触发**（不点按钮就不跑，零额外开销）。FairPlay 加密的 `__TEXT` 在运行时已被内核解密进内存，砸壳就是把这段已解密的页写回一份磁盘镜像副本，并将 `LC_ENCRYPTION_INFO_64` 的 `cryptid` 置 0。
+除监控外，Web 面板的 **Dump** tab 可在目标进程内对已被内核解密的 Mach-O 做脱壳，**按需触发**（不点按钮就不跑，零额外开销）。FairPlay 加密的 `__TEXT` 在运行时已被内核解密进内存，砸壳就是把这段已解密的页写回一份磁盘镜像副本，并将 `LC_ENCRYPTION_INFO_64` 的 `cryptid` 置 0。
 
 两种产物（面板两个按钮）：
 
@@ -99,6 +98,8 @@ hook 框架最怕「时好时坏」：某个符号没挂上、服务端口被占
 ```
 make            # iOS 真机 (arm64, iPhoneOS SDK)
 make mac        # macOS 原生 (用于 Mac 灰度自测)
+make sim        # iOS 模拟器 dylib
+make sim-install # 编译 + 部署测试 App 到模拟器
 make linux      # Linux 交叉编译 (需 IOS_SDK 与 CROSS_CC 环境变量)
 ```
 
@@ -124,7 +125,17 @@ make test-mac
 
 编出 dylib 与一个命令行 exerciser，用 DYLD_INSERT_LIBRARIES 注入运行，浏览器开 http://127.0.0.1:8088 看结果。
 
-iOS 模拟器 / 真机：编出 sim_uitest 这个测试 App，注入 dylib 后安装运行，点界面上的按钮触发算法。该测试 App 还注册了 dhtest:// URL scheme，可用 xcrun simctl openurl <device> dhtest://md5 之类的命令模拟点击对应按钮，方便无人值守的自动化测试（可用的 key：md5 / sha1 / sha256 / sha512 / hmac / aes / 3des / des / rc4 / rsasign / rsaenc / pbkdf / big / all / log / https / tcp / ssl / fwrite / fread / fdel / frename / dlopen）。
+iOS 模拟器 / 真机：编出 sim_uitest 这个测试 App，注入 dylib 后安装运行，点界面上的按钮触发算法。该测试 App 还注册了 dhtest:// URL scheme，可用 xcrun simctl openurl <device> dhtest://md5 之类的命令模拟点击对应按钮，方便无人值守的自动化测试（可用的 key：md5 / sha1 / sha256 / sha512 / hmac / aes / 3des / des / rc4 / rsasign / rsaenc / pbkdf / big / all / log / fwrite / fread / fdel / frename / dlopen）。
+
+模拟器一键部署（推荐）：
+
+```
+make sim-install
+# 或
+./scripts/sim_install.sh --open
+```
+
+自动编译 `decrypt_helper.sim.dylib` + 测试宿主 App、注入、安装到已启动的模拟器并启动；`--open` 会顺带打开 http://127.0.0.1:8088。依赖 `insert_dylib`（`brew install insert_dylib`）。
 
 Release 附带一个已注入 dylib 的测试 IPA（未签名），重签后即可在真机上体验。
 
@@ -135,19 +146,31 @@ src/
   core/                 核心引擎
     fishhook.{c,h}      上游 fishhook (符号表重绑定)
     dh_health.{h,c}     健康状态中心 (fail-loud) + 递归保护 dh_in_hook
+    dh_capture.{c,h}    捕获子开关持久化
+    dh_noise.{h,m}      噪点特征串过滤
+    dh_symtab.{c,h}     导入符号枚举 (符号 tab)
+    dump_manager.{h,m}  砸壳任务管理
+    macho_dump.{h,m}    Mach-O 脱壳核心
+    zip_writer.{c,h}    零依赖 zip 写入 (IPA 打包)
     log_store.{h,m}     日志中心 (环形缓冲 + 异步落盘 + 分类计数 + 进程信息)
     main.m              注入入口 (构造函数, 安装所有 hook)
   hooks/
     crypto/             加解密 hook: digest / hmac / symmetric / asymmetric / kdf
-    behavior/           行为 hook: network(connect/SSL) / file(open/write/...) / system(dlopen)
+    behavior/           行为 hook: file(open/write/...) / system(dlopen)
   server/
     http_server.{h,m}   零依赖本地 HTTP 服务
-    web_index_html.h    内嵌单页前端 (多 tab master-detail)
+    web_index_html.h    内嵌单页前端 (由 web/index.html 生成)
   ui/
     ui_float.{h,m}      悬浮控制窗
     ui_logview.{h,m}    全屏日志查看器
-sim_uitest/             交互式测试宿主 App (分 tab + mock SSL)
-scripts/inject.sh       IPA 注入脚本
+web/index.html          Web 面板源文件
+tools/gen_web.py        前端 → C 头文件生成器
+sim_uitest/             交互式测试宿主 App
+tests/exercise_runner.m Mac 灰度命令行 exerciser
+scripts/
+  inject.sh             IPA 注入脚本
+  sim_install.sh        模拟器一键部署
+  wsl_setup_toolchain.sh / wsl_probe.sh  Linux/WSL 交叉编译辅助
 
 编译时 -Isrc/core -Isrc/server -Isrc/ui 提供头搜索路径, 故各文件 #import "xxx.h" 无需带目录前缀。
 ```

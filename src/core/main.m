@@ -49,8 +49,8 @@ static void dh_bootstrap(void) {
     dh_noise_load([docsDir stringByAppendingPathComponent:@".dh_noise.conf"]);
     // 安装 hook —— 尽早完成, 否则早期发生的加解密会漏抓.
     dh_install_all_hooks();
-    dh_diag_append(DH_DIAG_GENERAL, "INFO", "hook 安装完成 (Digest/HMAC/对称/非对称/KDF/网络/文件/系统)");
-    NSLog(@"[IOSDecryptHub] hook 已全部安装 (Digest / HMAC / 对称 / 非对称 / KDF / 网络 / 文件 / 系统)");
+    dh_diag_append(DH_DIAG_GENERAL, "INFO", "hook 安装完成 (Digest/HMAC/对称/非对称/KDF/文件/系统)");
+    NSLog(@"[IOSDecryptHub] hook 已全部安装 (Digest / HMAC / 对称 / 非对称 / KDF / 文件 / 系统)");
 
     // 启动本地 HTTP 服务 - 不依赖 UIApplication, 可以立刻起.
     dh_http_start();

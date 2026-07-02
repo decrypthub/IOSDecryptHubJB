@@ -1,5 +1,5 @@
 // sim_uitest/main.m — IOSDecryptHub 交互式测试台
-// 顶部 segment 分 tab(加解密 / 网络 / 文件 / 系统), 每个 tab 的按钮触发对应一类系统调用,
+// 顶部 segment 分 tab(加解密 / 文件 / 系统), 每个 tab 的按钮触发对应一类系统调用,
 // 便于在注入的 dylib 里逐个观察 hook 效果。不把所有按钮堆在一页。
 //
 // 自动化测试通道: 注册 URL scheme "dhtest", xcrun simctl openurl <dev> dhtest://md5
@@ -12,16 +12,7 @@
 #import <CommonCrypto/CommonKeyDerivation.h>
 #import <Security/Security.h>
 #import <dlfcn.h>
-#import <sys/socket.h>
-#import <netinet/in.h>
-#import <arpa/inet.h>
-#import <fcntl.h>
 #import <unistd.h>
-
-// 来自 libmock_ssl.dylib —— 提供可被 fishhook 重绑定的 SSL_write/SSL_read 导入符号
-// (真实 App 自带 BoringSSL/OpenSSL 时同理)。这里不是真 TLS, 仅为演示 SSL 明文抓包。
-extern int SSL_write(void *ssl, const void *buf, int num);
-extern int SSL_read(void *ssl, void *buf, int num);
 
 // 运行时从注入的 dylib 取真实服务地址(端口在 8088..8108 间自动顺延), 避免写死端口
 static NSString *gUrlHint = @"";
@@ -102,31 +93,6 @@ static void do_bigdata(void) {
     free(b); free(c);
 }
 
-// ==================== 网络触发(网络 tab) ====================
-static void do_tcp_connect(void) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return;
-    struct sockaddr_in a = {0};
-    a.sin_family = AF_INET; a.sin_port = htons(443);
-    inet_pton(AF_INET, "1.1.1.1", &a.sin_addr);
-    fcntl(fd, F_SETFL, O_NONBLOCK);          // 非阻塞, connect 调用本身即被 hook 记录
-    connect(fd, (struct sockaddr *)&a, sizeof(a));
-    close(fd);
-}
-static void do_ssl_capture(void) {
-    void *ssl = (void *)0x1;                 // mock 不解引用
-    const char *req = "POST /login HTTP/1.1\r\nHost: api.example.com\r\nContent-Type: application/json\r\n\r\n{\"user\":\"alice\",\"password\":\"my-secret-pwd\"}";
-    SSL_write(ssl, req, (int)strlen(req));    // 抓发送明文
-    char buf[512];
-    SSL_read(ssl, buf, sizeof(buf));          // 抓接收明文(mock 返回含 token 的响应)
-}
-static void do_https_request(void) {
-    // 真实 HTTPS(系统 NSURLSession): 实测 fishhook 能否抓到系统 TLS 的 connect 与明文.
-    NSURL *url = [NSURL URLWithString:@"https://httpbin.org/get?app=IOSDecryptHub"];
-    NSURLSession *sess = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration]];
-    [[sess dataTaskWithURL:url completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) { (void)d; (void)r; (void)e; }] resume];
-}
-
 // ==================== 文件触发(文件 tab) ====================
 static NSString *test_file_path(void) {
     NSArray *p = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
@@ -194,7 +160,7 @@ static void do_dlopen(void) {
     self.status.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.status];
 
-    self.seg = [[UISegmentedControl alloc] initWithItems:@[@"加解密", @"网络", @"文件", @"系统"]];
+    self.seg = [[UISegmentedControl alloc] initWithItems:@[@"加解密", @"文件", @"系统"]];
     self.seg.selectedSegmentIndex = 0;
     self.seg.translatesAutoresizingMaskIntoConstraints = NO;
     [self.seg addTarget:self action:@selector(onSeg:) forControlEvents:UIControlEventValueChanged];
@@ -219,7 +185,6 @@ static void do_dlopen(void) {
     UIColor *purple = [UIColor colorWithRed:0.82 green:0.66 blue:1.00 alpha:1.0];
     UIColor *mint   = [UIColor colorWithRed:0.36 green:0.92 blue:0.70 alpha:1.0];
     UIColor *red    = [UIColor colorWithRed:0.95 green:0.45 blue:0.45 alpha:1.0];
-    UIColor *teal   = [UIColor colorWithRed:0.25 green:0.80 blue:0.74 alpha:1.0];
 
     // --- tab 0: 加解密 ---
     UIStackView *t0 = [self addTabStack];
@@ -234,21 +199,14 @@ static void do_dlopen(void) {
     [self addGroup:t0 title:@"压测 / 综合" color:red buttons:@[@"128KB 大数据",@"全部跑一遍",@"打开日志"]
               sels:@[@"onBig",@"onAll",@"onLog"] keys:@[@"big",@"all",@"log"]];
 
-    // --- tab 1: 网络 ---
+    // --- tab 1: 文件 ---
     UIStackView *t1 = [self addTabStack];
-    [self addGroup:t1 title:@"真实请求(系统 TLS)" color:teal buttons:@[@"HTTPS 请求",@"TCP 连接"]
-              sels:@[@"onHTTPS",@"onTCP"] keys:@[@"https",@"tcp"]];
-    [self addGroup:t1 title:@"SSL 明文抓包(自带 BoringSSL 场景, mock 演示)" color:blue buttons:@[@"SSL 抓包(明文)"]
-              sels:@[@"onSSL"] keys:@[@"ssl"]];
-
-    // --- tab 2: 文件 ---
-    UIStackView *t2 = [self addTabStack];
-    [self addGroup:t2 title:@"文件操作" color:orange buttons:@[@"写文件",@"读文件",@"删除",@"重命名"]
+    [self addGroup:t1 title:@"文件操作" color:orange buttons:@[@"写文件",@"读文件",@"删除",@"重命名"]
               sels:@[@"onFWrite",@"onFRead",@"onFDel",@"onFRename"] keys:@[@"fwrite",@"fread",@"fdel",@"frename"]];
 
-    // --- tab 3: 系统 ---
-    UIStackView *t3 = [self addTabStack];
-    [self addGroup:t3 title:@"动态库" color:purple buttons:@[@"dlopen 模块"] sels:@[@"onDlopen"] keys:@[@"dlopen"]];
+    // --- tab 2: 系统 ---
+    UIStackView *t2 = [self addTabStack];
+    [self addGroup:t2 title:@"动态库" color:purple buttons:@[@"dlopen 模块"] sels:@[@"onDlopen"] keys:@[@"dlopen"]];
 
     self.tabScrolls[0].hidden = NO;   // 默认显示加解密
 
@@ -266,7 +224,7 @@ static void do_dlopen(void) {
     if ([[NSProcessInfo processInfo].environment[@"DH_AUTOTEST"] isEqualToString:@"1"]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             for (NSString *k in @[@"md5",@"sha256",@"hmac",@"aes",@"3des",@"rsasign",@"pbkdf",
-                                  @"ssl",@"tcp",@"fwrite",@"fread",@"fdel",@"frename",@"dlopen"])
+                                  @"fwrite",@"fread",@"fdel",@"frename",@"dlopen"])
                 [ws triggerByKey:k];
         });
     }
@@ -379,10 +337,6 @@ static void do_dlopen(void) {
     Class c = NSClassFromString(@"DHLogViewer");
     if (c && [c respondsToSelector:@selector(presentFromFloating)]) [c performSelector:@selector(presentFromFloating)];
 }
-// 网络
-- (void)onHTTPS { do_https_request(); [self flash:@"HTTPS 请求 httpbin.org"]; }
-- (void)onTCP { do_tcp_connect(); [self flash:@"TCP connect 1.1.1.1:443"]; }
-- (void)onSSL { do_ssl_capture(); [self flash:@"SSL 抓包(明文)"]; }
 // 文件
 - (void)onFWrite   { do_file_write();  [self flash:@"写文件"]; }
 - (void)onFRead    { do_file_read();   [self flash:@"读文件"]; }

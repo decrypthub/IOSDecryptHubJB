@@ -285,7 +285,7 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
         BOOL hit = NO;
         if ([[e.algorithm lowercaseString] containsString:kw]) hit = YES;
         else if ([[e.operation lowercaseString] containsString:kw]) hit = YES;
-        else if (e.detail && [[e.detail lowercaseString] containsString:kw]) hit = YES;   // 网络/文件/系统按地址/路径搜
+        else if (e.detail && [[e.detail lowercaseString] containsString:kw]) hit = YES;   // 文件/系统按路径搜
         else if (e.input && [[DHUTF8FromData(e.input) lowercaseString] containsString:kw]) hit = YES;
         else if (e.input && [[DHHexFromData(e.input) lowercaseString] containsString:kw]) hit = YES;
         else if (e.output && [[DHHexFromData(e.output) lowercaseString] containsString:kw]) hit = YES;

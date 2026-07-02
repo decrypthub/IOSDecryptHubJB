@@ -354,7 +354,7 @@ static void handle_pause(int fd, NSDictionary *q) {
         NSInteger cat = [q[@"cat"] integerValue];
         if (cat == -2) {                                // 加密组(摘要/HMAC/对称/非对称)
             for (int c = DHCategoryDigest; c <= DHCategoryAsymmetric; c++) [s setPaused:p forCategory:(DHCategory)c];
-        } else {                                        // 单类(网络/文件/系统等)
+        } else {                                        // 单类(文件/系统等)
             [s setPaused:p forCategory:(DHCategory)cat];
         }
         send_json(fd, 200, @{@"paused": @(p), @"cat": @(cat)});

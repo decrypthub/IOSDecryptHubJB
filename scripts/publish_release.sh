@@ -57,7 +57,8 @@ make
 
 # Linux / WSL
 bash scripts/wsl_setup_toolchain.sh   # 一次性, 无需 sudo
-bash scripts/wsl_build.sh
+source ~/dh-cross/env.sh
+make linux
 ```
 
 ### 已知限制

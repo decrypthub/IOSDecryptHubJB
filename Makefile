@@ -68,7 +68,8 @@ $(TARGET): $(WEB_HEADER) $(SRC) $(wildcard src/*/*.h)
 	@echo "✅ 编译完成: $(TARGET)"
 
 # ---------- 2) Linux 交叉编译 (WSL) ----------
-linux:
+.PHONY: linux
+linux: $(WEB_HEADER)
 	@if [ -z "$$IOS_SDK" ]; then echo "❌ 请先 export IOS_SDK=/path/to/iPhoneOS17.x.sdk"; exit 1; fi
 	@if [ -z "$$CROSS_CC" ]; then echo "❌ 请先 export CROSS_CC=/path/to/clang (支持 apple target)"; exit 1; fi
 	$$CROSS_CC \
@@ -107,9 +108,9 @@ MAC_CFLAGS := -arch $(MAC_ARCH) \
               $(INCLUDES) \
               $(MAC_FRAMEWORKS)
 
-mac: $(MAC_TARGET)
+mac: $(WEB_HEADER) $(MAC_TARGET)
 
-$(MAC_TARGET): $(SRC)
+$(MAC_TARGET): $(WEB_HEADER) $(SRC)
 	@if [ -z "$(MAC_SDK)" ]; then echo "❌ 没找到 macOS SDK, 请先装 Xcode 或 CommandLineTools"; exit 1; fi
 	@echo "[*] macOS 原生编译 (arch=$(MAC_ARCH), min=$(MAC_MIN))..."
 	$(CC) $(MAC_CFLAGS) $(SRC) -o $(MAC_TARGET)
@@ -132,7 +133,7 @@ SIM_CFLAGS := -target $(SIM_ARCH)-apple-ios$(SIM_MIN)-simulator \
 
 sim: $(WEB_HEADER) $(SIM_TARGET)
 
-$(SIM_TARGET): $(SRC)
+$(SIM_TARGET): $(WEB_HEADER) $(SRC)
 	@if [ -z "$(SIM_SDK)" ]; then echo "❌ 没找到 iPhoneSimulator SDK"; exit 1; fi
 	@echo "[*] iOS Simulator 编译 (arch=$(SIM_ARCH), min=$(SIM_MIN))..."
 	$(CC) $(SIM_CFLAGS) $(SRC) -o $(SIM_TARGET)
@@ -168,7 +169,13 @@ dist: $(TARGET)
 	install_name_tool -id @executable_path/$(DIST_DYLIB) $(DIST_DYLIB)
 	@echo "✅ 发布产物: $(DIST_DYLIB)"
 
+# ---------- 6) 模拟器一键部署 (sim_uitest + 注入 sim dylib) ----------
+sim-install:
+	@chmod +x scripts/sim_install.sh
+	./scripts/sim_install.sh
+
 clean:
 	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib
+	rm -rf build/sim
 
-.PHONY: all linux mac sim test-mac dist clean
+.PHONY: all linux mac sim test-mac sim-install dist clean

@@ -1,5 +1,9 @@
 # 构建产物
+build/
 *.dylib
+*.dSYM/
+default.profraw
+CryptoTestHost-hooked.ipa
 *.o
 *.a
 *.dSYM/
