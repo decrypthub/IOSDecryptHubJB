@@ -322,4 +322,36 @@ static BOOL dh_is_signing_residue(NSString *sub) {
     return nil;
 }
 
+// ============================================================
+// 单镜像即时下载 (无需跑整包任务)
+// ============================================================
+- (NSString *)decryptImageNamed:(NSString *)name error:(NSError **)error {
+    static NSString *const kErrDomain = @"com.decrypthelper.dump";
+    if (name.length == 0) {
+        if (error) *error = [NSError errorWithDomain:kErrDomain code:1 userInfo:@{NSLocalizedDescriptionKey: @"缺少 name 参数"}];
+        return nil;
+    }
+    DHDumpImage *target = nil;
+    for (DHDumpImage *im in dh_dump_list_images()) {
+        if ([im.name isEqualToString:name]) { target = im; break; }
+    }
+    if (!target) {
+        if (error) *error = [NSError errorWithDomain:kErrDomain code:2 userInfo:@{NSLocalizedDescriptionKey: @"未找到该镜像(可能已卸载, 请重新刷新列表)"}];
+        return nil;
+    }
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [docs_dir() stringByAppendingPathComponent:@".dump_tmp_single"];
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *outPath = [dir stringByAppendingPathComponent:
+                         [NSString stringWithFormat:@"%08x_%@", arc4random(), target.name]];
+
+    int saved = dh_in_hook;
+    dh_in_hook = 1;   // 解密涉及大量 open/read/write, 放行不记录、防递归
+    BOOL ok = dh_dump_decrypt_image_to_file(target, outPath.fileSystemRepresentation, error);
+    dh_in_hook = saved;
+    if (!ok) { [fm removeItemAtPath:outPath error:nil]; return nil; }
+    return outPath;
+}
+
 @end

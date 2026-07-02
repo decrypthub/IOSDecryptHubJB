@@ -112,8 +112,6 @@
     .splitter { display:none; }
   }
   .ver { color:#6e7681; font-size:11px; font-weight:400; margin-left:6px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-  .cap-group { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-  .cap-group .lab { color:#8b949e; font-size:12px; }
   .cap-chip { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:#c9d1d9; background:#0d1117; border:1px solid #30363d; padding:3px 8px; border-radius:6px; cursor:pointer; user-select:none; }
   .cap-chip input { margin:0; cursor:pointer; }
   .modal-mask { display:none; position:fixed; inset:0; background:rgba(1,4,9,0.7); z-index:100; align-items:center; justify-content:center; }
@@ -124,14 +122,25 @@
   .modal h3 button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
   .modal h3 button:hover { background:#30363d; }
   .modal pre { flex:1; overflow:auto; margin:0; padding:14px 16px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; color:#c9d1d9; }
-  .sym-h3 { font-size:13px; color:#c9d1d9; margin:0 0 8px; font-weight:600; }
-  .sym-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
-  .sym-controls label { color:#8b949e; font-size:12px; }
-  .sym-controls select, .sym-controls input[type=search] { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:5px 8px; border-radius:6px; font-size:12px; }
-  .sym-controls input[type=search] { width:260px; }
-  .sym-controls button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:5px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
-  .sym-controls button:hover { background:#30363d; }
+  .sym-workspace { flex:1; display:flex; min-height:0; }
+  .sym-img-pane { display:flex; flex-direction:column; overflow-y:hidden; }
+  .sym-img-head { padding:10px 14px; color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; border-bottom:1px solid #21262d; flex-shrink:0; }
+  .sym-img-head button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer; text-transform:none; letter-spacing:normal; }
+  .sym-img-head button:hover { background:#30363d; }
+  .sym-img-list { overflow-y:auto; flex:1; }
+  .sym-img-row .top { display:flex; gap:8px; align-items:center; font-size:12px; }
+  .sym-img-row .name { font-weight:600; color:#c9d1d9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sym-img-row .kind { color:#8b949e; font-size:11px; flex-shrink:0; }
+  .sym-img-row .n { color:#6e7681; font-size:11px; margin-top:2px; }
+  .sym-detail-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; position:sticky; top:0; background:#0d1117; padding:14px 0 10px; z-index:1; }
+  .sym-detail-controls input[type=search] { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:5px 8px; border-radius:6px; font-size:12px; width:260px; }
   .dump-table td.symname { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color:#c9d1d9; word-break:break-all; }
+  .cap-modal { width:min(560px,92vw); height:auto; max-height:min(86vh,640px); }
+  .cap-body { padding:16px 18px; overflow:auto; }
+  .cap-section { margin-bottom:16px; }
+  .cap-section:last-child { margin-bottom:0; }
+  .cap-section-title { color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px; }
+  .cap-section .cap-chip { margin:0 6px 6px 0; }
   .diag-boards { display:flex; gap:4px; flex-wrap:wrap; }
   .diag-boards button { background:#0d1117; color:#8b949e; border:1px solid #30363d; padding:3px 9px; border-radius:6px; font-size:12px; cursor:pointer; }
   .diag-boards button.active { background:#1b2231; color:#c9d1d9; border-color:#388bfd; }
@@ -161,6 +170,7 @@
   <label style='color:#8b949e;font-size:12px;'><input type='checkbox' id='autoRefresh' checked> 自动刷新</label>
   <a class='btn' id='dlAll' href='/download' target='_blank' title='下载完整落盘日志 — 每条都已实时写入设备沙箱, App 闪退/被检测杀掉后重启仍可取全量(含崩溃前), 用于离线排查闭环'>下载全部日志</a>
   <button id='diagBtn' title='查看内部诊断/审查日志, 便于排查与复现'>审查日志</button>
+  <button id='capBtn' title='集中管理全部捕获子开关, 按函数类别可选启停'>捕获</button>
   <button id='settingsBtn' title='日志保留条数 / 落盘文件上限 / 下载 / 清空'>⚙ 设置</button>
 </header>
 <div class='procbar'>
@@ -173,6 +183,7 @@
   <button class='tab active' data-tab='crypto'>加解密<span class='n' id='n-crypto'></span></button>
   <button class='tab' data-tab='file'>文件<span class='n' id='n-file'></span></button>
   <button class='tab' data-tab='sys'>系统<span class='n' id='n-sys'></span></button>
+  <button class='tab' data-tab='noise'>噪点<span class='n' id='n-noise'></span></button>
   <button class='tab' data-tab='symbols'>符号</button>
   <button class='tab' data-tab='dump'>砸壳</button>
 </nav>
@@ -196,7 +207,6 @@
   <button id='tabPauseBtn' class='warn'>暂停</button>
   <button id='tabDownloadBtn'>下载本类</button>
   <button id='tabClearBtn' class='danger'>清空本类</button>
-  <span class='cap-group'><span class='lab'>捕获</span><span id='captureWrap'></span></span>
   <span id='count' style='color:#6e7681; font-size:11px; margin-left:auto;'></span>
 </div>
 <div class='workspace'>
@@ -210,7 +220,6 @@
     <div class='note'>在目标进程内 dump 已被内核解密的 Mach-O。只能砸<b>当前进程已加载</b>的镜像(主程序 + 内嵌 Frameworks);PlugIns 扩展是独立进程,无法在此砸到。<br><span class='warn-note'>⚠ 仅限授权安全测试与自有 App;砸壳并分发受版权保护的程序可能违法。</span></div>
     <div class='dump-actions'>
       <button id='dumpRefresh'>刷新镜像</button>
-      <button id='dumpBin'>导出裸解密二进制 (zip)</button>
       <button id='dumpIpa' class='primary'>重打包为可重签 IPA</button>
     </div>
     <div id='dumpProg' class='dump-progress' style='display:none;'>
@@ -218,26 +227,22 @@
       <div class='dump-bar'><div id='dumpBarFill'></div></div>
     </div>
     <div id='dumpDone' class='dump-done' style='display:none;'></div>
-    <table class='dump-table'><thead><tr><th>镜像</th><th>类型</th><th>大小</th></tr></thead>
-      <tbody id='dumpImgBody'><tr><td colspan='3' style='color:#6e7681;'>点击「刷新镜像」加载…</td></tr></tbody></table>
+    <table class='dump-table'><thead><tr><th>镜像</th><th>类型</th><th>大小</th><th>操作</th></tr></thead>
+      <tbody id='dumpImgBody'><tr><td colspan='4' style='color:#6e7681;'>点击「刷新镜像」加载…</td></tr></tbody></table>
   </div>
 </div>
-<div id='symPane' class='dumppane' style='display:none;'>
-  <div class='dumpwrap'>
-    <h2>符号导入表 (可 hook 观测)</h2>
-    <div class='note'>fishhook 只能改<b>导入符号表</b> —— 即本 image 调用其它 dylib 导出的符号。凡在下表出现的, 都是 fishhook 候选; 被<b>静态链接</b>进主二进制的符号不在导入表里, fishhook 无法拦截, 需改用 inline hook。</div>
-    <h3 class='sym-h3'>按 image 浏览导入符号</h3>
-    <div class='sym-controls'>
-      <label>image</label>
-      <select id='symImgSel'></select>
+<div id='symPane' class='sym-workspace' style='display:none;'>
+  <aside class='list-pane sym-img-pane'>
+    <div class='sym-img-head'>image 列表 (导入符号均为 fishhook 候选) <button id='symRefresh' style='float:right;'>刷新</button></div>
+    <div id='symImgList' class='sym-img-list'><div class='empty'>加载中…</div></div>
+  </aside>
+  <div class='splitter' id='symSplitter'></div>
+  <div class='detail-pane'>
+    <div class='sym-detail-controls'>
       <input id='symQ' type='search' placeholder='过滤符号 (子串, 如 SSL / CC / open)…'>
-      <button id='symRefresh'>刷新</button>
       <span id='symCount' style='color:#6e7681; font-size:11px;'></span>
     </div>
-    <table class='dump-table'>
-      <thead><tr><th style='width:48px;'>#</th><th>导入符号 (均为 fishhook 候选)</th></tr></thead>
-      <tbody id='symListBody'><tr><td colspan='2' style='color:#6e7681;'>加载中…</td></tr></tbody>
-    </table>
+    <div id='symDetailBody'><div class='detail-empty'>← 选择左侧 image 查看导入符号<br><br><span style='font-size:11px;'>fishhook 只能改<b>导入符号表</b> —— 即本 image 调用其它 dylib 导出的符号。凡在此出现的, 都是 fishhook 候选; 被<b>静态链接</b>进主二进制的符号不在导入表里, fishhook 无法拦截, 需改用 inline hook。</span></div></div>
   </div>
 </div>
 <div class='modal-mask' id='diagMask'>
@@ -277,6 +282,15 @@
         <div class='lab'><b>当前落盘大小</b><span>含已滚动的备份段。无限增长已被上面的上限约束。</span></div>
         <span class='val' id='setLogBytes'>—</span>
       </div>
+      <div class='set-row' style='flex-direction:column; align-items:stretch; gap:8px;'>
+        <div class='lab'><b>噪点过滤</b><span>命中特征串的事件自动路由到「噪点」tab, 不进入主事件流(仍会照常落盘, 不丢数据)。仅影响之后新捕获的事件, 已有记录不会被重新分类。</span></div>
+        <label style='color:#8b949e;font-size:12px;'><input type='checkbox' id='setNoiseEnabled'> 启用噪点过滤</label>
+        <div id='noisePatterns' style='display:flex; flex-wrap:wrap; gap:6px;'></div>
+        <div style='display:flex; gap:8px;'>
+          <input id='noisePatternInput' type='text' placeholder='添加特征串, 如 MGCopyAnswer' style='flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:6px 9px; border-radius:6px; font-size:12px;'>
+          <button id='noisePatternAdd'>添加</button>
+        </div>
+      </div>
       <div class='set-actions'>
         <a class='btn' href='/download' target='_blank'>下载全部日志</a>
         <button id='setClearAll' class='danger'>清空全部日志</button>
@@ -284,18 +298,25 @@
     </div>
   </div>
 </div>
+<div class='modal-mask' id='capMask'>
+  <div class='modal cap-modal'>
+    <h3>捕获设置<span class='spacer'></span><button id='capClose'>关闭</button></h3>
+    <div class='cap-body' id='capBody'></div>
+  </div>
+</div>
 <div class='toast' id='toast'></div>
 <script>
   const CAT_NAMES = ['摘要','HMAC','对称','非对称','文件','系统','其它'];
   const CAT_CLS   = ['digest','hmac','sym','asym','file','sys','other'];
   const TAB_CAT   = { crypto:-2, file:4, sys:5 };
-  const LOG_TABS  = ['crypto','file','sys'];   // 走日志 master-detail 的 tab; 符号/砸壳是独立面板
-  const TAB_SUBS = {
-    crypto: [['DIGEST','摘要'],['HMAC','HMAC'],['SYMMETRIC','对称'],['ASYMMETRIC','非对称'],['KDF','KDF']],
-    file:   [['FILE_OPEN','open'],['FILE_WRITE','write'],['FILE_UNLINK','unlink'],['FILE_RENAME','rename']],
-    sys:    [['SYS_DLOPEN','dlopen']],
-  };
-  const tabState = { crypto:{q:''}, file:{q:''}, sys:{q:''} };
+  const LOG_TABS  = ['crypto','file','sys','noise'];   // 走日志 master-detail 的 tab; 符号/砸壳是独立面板
+  // 全部捕获子开关, 按类别分组一次性收纳进「捕获」小菜单(不再随 tab 切换)。
+  const CAP_GROUPS = [
+    ['加解密', [['DIGEST','摘要'],['HMAC','HMAC'],['SYMMETRIC','对称'],['ASYMMETRIC','非对称'],['KDF','KDF']]],
+    ['文件',   [['FILE_OPEN','open'],['FILE_WRITE','write'],['FILE_UNLINK','unlink'],['FILE_RENAME','rename']]],
+    ['系统',   [['SYS_DLOPEN','dlopen']]],
+  ];
+  const tabState = { crypto:{q:''}, file:{q:''}, sys:{q:''}, noise:{q:''} };
   function tabCat(){ return activeTab==='crypto' ? -2 : TAB_CAT[activeTab]; }
   const EMPTY = '<div class="detail-empty">← 选择左侧一条记录查看详情</div>';
   const LOADING = '<div class="loading"><span class="spinner"></span>加载中…</div>';
@@ -319,18 +340,22 @@
   function escapeHTML(s) { return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   async function copyText(t) { try { await navigator.clipboard.writeText(t); toast('已复制 '+t.length+' 字符'); } catch(e) { const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('已复制'); } }
   async function fetchJSON(url, opts) { const r=await fetch(url,opts); if(!r.ok) throw new Error(r.status+' '+r.statusText); return r.json(); }
-  function curCat() { return activeTab==='crypto' ? $('catSel').value : TAB_CAT[activeTab]; }
-  function buildCapture(tab) {
-    const subs = TAB_SUBS[tab] || [];
-    $('captureWrap').innerHTML = subs.map(([sub,lab]) =>
-      '<label class="cap-chip"><input type="checkbox" data-sub="'+sub+'" checked> '+escapeHTML(lab)+'</label>').join('');
+  function curCat() { return activeTab==='crypto' ? $('catSel').value : (activeTab==='noise' ? 'noise' : TAB_CAT[activeTab]); }
+  function buildCapMenu() {
+    $('capBody').innerHTML = CAP_GROUPS.map(([title,subs]) =>
+      '<div class="cap-section"><div class="cap-section-title">'+escapeHTML(title)+'</div>'
+      + subs.map(([sub,lab]) => '<label class="cap-chip"><input type="checkbox" data-sub="'+sub+'" checked> '+escapeHTML(lab)+'</label>').join('')
+      + '</div>').join('');
+  }
+  function syncCapCheckboxes() {
+    const cap=(stats&&stats.capture)||{};
+    document.querySelectorAll('#capBody input[data-sub]').forEach(cb => { if(cap[cb.dataset.sub]!==undefined) cb.checked = cap[cb.dataset.sub]!==0; });
   }
   function updateToolbar() {
     if (!LOG_TABS.includes(activeTab)) return;
-    const cap=(stats&&stats.capture)||{}, pbc=(stats&&stats.pausedByCat)||[];
+    const pbc=(stats&&stats.pausedByCat)||[];
     const paused = activeTab==='crypto' ? !!pbc[0] : !!pbc[TAB_CAT[activeTab]];
     const pb=$('tabPauseBtn'); if(pb){ pb.textContent = paused?'继续':'暂停'; pb.classList.toggle('danger', paused); }
-    document.querySelectorAll('#captureWrap input[data-sub]').forEach(cb => { if(cap[cb.dataset.sub]!==undefined) cb.checked = cap[cb.dataset.sub]!==0; });
   }
   const DIAG_BOARDS = [[-1,'全部'],[0,'通用'],[1,'加解密'],[2,'文件'],[3,'系统'],[4,'砸壳']];
   let diagBoard = -1;
@@ -369,6 +394,7 @@
       $('n-crypto').textContent = cryptoN ? cryptoN : '';
       $('n-file').textContent = bc[4] ? bc[4] : '';
       $('n-sys').textContent = bc[5] ? bc[5] : '';
+      $('n-noise').textContent = stats.noiseCount ? stats.noiseCount : '';
       $('ver').textContent = stats.version ? ('v'+stats.version) : '';
       const p = stats.process || {}; const pb = [];
       if (p.appName) pb.push('<span><b>'+escapeHTML(p.appName)+'</b></span>');
@@ -383,6 +409,7 @@
       const dl=$('dlAll'); if(dl) dl.textContent = '下载全部日志'+(stats.logBytes ? ' ('+fmtSize(stats.logBytes)+')' : '');
       setOffline(false);
       updateToolbar();
+      syncCapCheckboxes();
     } catch(e) { setOffline(true); /* 不覆盖 stats: 保留最后一次可见数据 */ }
   }
   // ===== 列表: 键集分页 + 窗口化 (避免每 1.5s 整表重建上千 DOM; 空闲轮询零 DOM 操作) =====
@@ -391,7 +418,9 @@
   let listMaxSeq = 0, listMinSeq = 0;   // 窗口内最高/最低 seq, 作键集游标
   let listHasMore = false;              // 是否可能还有更早记录 (决定「加载更早」按钮)
   function logsURL(extra){
-    const cat = curCat(), q = $('q').value.trim(), minSize = $('minSize').value;
+    const q = $('q').value.trim();
+    if (activeTab==='noise') return '/api/noise?q='+encodeURIComponent(q)+'&limit='+displayCap()+(extra||'');
+    const cat = curCat(), minSize = $('minSize').value;
     return '/api/logs?cat='+encodeURIComponent(cat)+'&q='+encodeURIComponent(q)
       +'&minSize='+encodeURIComponent(minSize)+'&limit='+displayCap()+(extra||'');
   }
@@ -520,8 +549,10 @@
     if (name==='symbols') { loadSymbols(); return; }
     $('catWrap').style.display = (name==='crypto') ? '' : 'none';
     $('minWrap').style.display = (name==='crypto') ? '' : 'none';
+    $('tabPauseBtn').style.display = (name==='noise') ? 'none' : '';
+    $('tabDownloadBtn').style.display = (name==='noise') ? 'none' : '';
     $('q').value = (tabState[name]||{}).q || '';
-    buildCapture(name); updateToolbar();
+    updateToolbar();
     selectedSeq = null; $('detail').innerHTML = EMPTY;
     listLive = false;   // 切到新 tab: 还没拿到该类实时数据, 断连时回退该类缓存
     $('list').innerHTML = LOADING;   // 立即清掉上一个 tab 的行, 避免短暂显示错类数据
@@ -530,24 +561,25 @@
   let dumpPolling = null;
   function fmtSize(n){ n=+n||0; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(1)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
   async function loadDumpImages(){
-    $('dumpImgBody').innerHTML = '<tr><td colspan="3" style="color:#8b949e;"><span class="spinner" style="margin-right:8px;"></span>加载镜像…</td></tr>';
+    $('dumpImgBody').innerHTML = '<tr><td colspan="4" style="color:#8b949e;"><span class="spinner" style="margin-right:8px;"></span>加载镜像…</td></tr>';
     try {
       const d = await fetchJSON('/api/dump/images');
       const rows = (d.images||[]).map(im =>
         '<tr><td>'+escapeHTML(im.name)+'</td><td>'+(im.kind==='main'?'主程序':'Framework')+'</td>'+
-        '<td>'+fmtSize(im.size)+'</td></tr>');
-      $('dumpImgBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="3" style="color:#6e7681;">未发现本 App 镜像</td></tr>';
-    } catch(e){ $('dumpImgBody').innerHTML = '<tr><td colspan="3">'+escapeHTML(e.message)+'</td></tr>'; }
+        '<td>'+fmtSize(im.size)+'</td>'+
+        '<td><a class="dl-link" href="/api/dump/image?name='+encodeURIComponent(im.name)+'">⬇ 下载</a></td></tr>');
+      $('dumpImgBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" style="color:#6e7681;">未发现本 App 镜像</td></tr>';
+    } catch(e){ $('dumpImgBody').innerHTML = '<tr><td colspan="4">'+escapeHTML(e.message)+'</td></tr>'; }
   }
   async function startDump(mode){
-    $('dumpBin').disabled = true; $('dumpIpa').disabled = true;
+    $('dumpIpa').disabled = true;
     $('dumpDone').style.display='none';
     $('dumpProg').style.display='block'; $('dumpBarFill').style.width='0'; $('dumpStage').textContent='发起中…';
     try {
       const r = await fetch('/api/dump?mode='+encodeURIComponent(mode), {method:'POST'});
       if (r.status===409) { toast('已有砸壳任务在进行'); }
       else if (!r.ok) { throw new Error(r.status+' '+r.statusText); }
-    } catch(e){ toast('发起失败: '+e.message); $('dumpBin').disabled=false; $('dumpIpa').disabled=false; }
+    } catch(e){ toast('发起失败: '+e.message); $('dumpIpa').disabled=false; }
     if (dumpPolling) clearInterval(dumpPolling);
     dumpPolling = setInterval(pollDump, 800); pollDump();
   }
@@ -560,45 +592,58 @@
     } else if (s.state==='done'){
       if (dumpPolling){ clearInterval(dumpPolling); dumpPolling=null; }
       $('dumpProg').style.display='block'; $('dumpBarFill').style.width='100%'; $('dumpStage').textContent='完成';
-      $('dumpBin').disabled=false; $('dumpIpa').disabled=false;
+      $('dumpIpa').disabled=false;
       const links=[];
-      if (s.binReady) links.push('<a class="dl-link" href="/api/dump/download?kind=bin">⬇ 下载 '+escapeHTML(s.binName||'二进制.zip')+'</a>');
       if (s.ipaReady) links.push('<a class="dl-link" href="/api/dump/download?kind=ipa">⬇ 下载 '+escapeHTML(s.ipaName||'IPA')+'</a>');
       $('dumpDone').innerHTML = links.length ? links.join('') : '已完成';
       $('dumpDone').style.display='block';
     } else if (s.state==='error'){
       if (dumpPolling){ clearInterval(dumpPolling); dumpPolling=null; }
       $('dumpProg').style.display='none';
-      $('dumpBin').disabled=false; $('dumpIpa').disabled=false;
+      $('dumpIpa').disabled=false;
       toast('砸壳失败: '+(s.error||'未知错误'));
     }
   }
-  // ---- 符号导入表 ----
+  // ---- 符号导入表: 左侧 image 列表 / 右侧详情(该 image 的导入符号), 与事件流主从布局同构 ----
   async function loadSymbols(){ await loadSymImages(); }
-  let symImages = [];
+  let symImages = [], selectedSymIdx = null;
   async function loadSymImages(){
     try {
       const d = await fetchJSON('/api/symbols/images');
       symImages = d.images||[];
-      const prev = $('symImgSel').value;
-      $('symImgSel').innerHTML = symImages.map(im =>
-        '<option value="'+im.idx+'">'+escapeHTML(im.name)+(im.main?' [主程序]':'')+' · '+im.imports+'</option>').join('');
-      if (prev && symImages.some(im=>String(im.idx)===prev)) { $('symImgSel').value = prev; }
-      else { const m = symImages.find(x=>x.main); if (m) $('symImgSel').value = m.idx; }
+      if (selectedSymIdx==null || !symImages.some(im=>String(im.idx)===String(selectedSymIdx))) {
+        const m = symImages.find(x=>x.main);
+        selectedSymIdx = m ? m.idx : (symImages[0] ? symImages[0].idx : null);
+      }
+      renderSymImgList();
       loadSymList();
-    } catch(e){ $('symListBody').innerHTML = '<tr><td colspan="2">'+escapeHTML(e.message)+'</td></tr>'; }
+    } catch(e){ $('symImgList').innerHTML = '<div class="empty">'+escapeHTML(e.message)+'</div>'; }
+  }
+  function renderSymImgList(){
+    $('symImgList').innerHTML = symImages.length ? symImages.map(im =>
+      '<div class="row sym-img-row'+(String(im.idx)===String(selectedSymIdx)?' selected':'')+'" data-idx="'+im.idx+'">'
+      + '<div class="top"><span class="name">'+escapeHTML(im.name)+'</span><span class="kind">'+(im.main?'主程序':'Framework')+'</span></div>'
+      + '<div class="n">'+im.imports+' 个导入符号</div></div>').join('')
+      : '<div class="empty">未发现本 App 镜像</div>';
+  }
+  function selectSymImage(idx){
+    if (String(idx)===String(selectedSymIdx)) return;
+    selectedSymIdx = idx;
+    renderSymImgList();
+    loadSymList();
   }
   async function loadSymList(){
-    const idx = $('symImgSel').value, q = $('symQ').value.trim();
-    if (idx==='' || idx===undefined) return;
-    $('symListBody').innerHTML = '<tr><td colspan="2" style="color:#8b949e;"><span class="spinner" style="margin-right:8px;"></span>加载中…</td></tr>';
+    if (selectedSymIdx==null) { $('symDetailBody').innerHTML = '<div class="detail-empty">未发现本 App 镜像</div>'; $('symCount').textContent=''; return; }
+    const q = $('symQ').value.trim();
+    $('symDetailBody').innerHTML = LOADING;
     try {
-      const d = await fetchJSON('/api/symbols?img='+encodeURIComponent(idx)+'&q='+encodeURIComponent(q)+'&limit=500');
+      const d = await fetchJSON('/api/symbols?img='+encodeURIComponent(selectedSymIdx)+'&q='+encodeURIComponent(q)+'&limit=500');
       const rows = (d.symbols||[]).map((nm,i) =>
-        '<tr><td style="color:#6e7681;">'+(i+1)+'</td><td class="symname">'+escapeHTML(nm)+'</td></tr>');
-      $('symListBody').innerHTML = rows.join('') || '<tr><td colspan="2" style="color:#6e7681;">无匹配符号</td></tr>';
+        '<tr><td style="color:#6e7681;width:48px;">'+(i+1)+'</td><td class="symname">'+escapeHTML(nm)+'</td></tr>');
+      $('symDetailBody').innerHTML = '<table class="dump-table"><thead><tr><th style="width:48px;">#</th><th>导入符号 (均为 fishhook 候选)</th></tr></thead><tbody>'
+        + (rows.join('') || '<tr><td colspan="2" style="color:#6e7681;">无匹配符号</td></tr>') + '</tbody></table>';
       $('symCount').textContent = d.shown+' / '+d.total+' 个导入符号'+(d.total>d.shown?' (已截断, 用过滤缩小)':'');
-    } catch(e){ $('symListBody').innerHTML = '<tr><td colspan="2">'+escapeHTML(e.message)+'</td></tr>'; }
+    } catch(e){ $('symDetailBody').innerHTML = '<div class="detail-empty">'+escapeHTML(e.message)+'</div>'; }
   }
 
   // ---- 设置 (日志保留条数 / 落盘上限 / 下载 / 清空) ----
@@ -614,11 +659,27 @@
     $('setDisplayCap').value = String(displayCap());
     $('setMask').classList.add('show');
     loadConfig();
+    loadNoisePatterns();
   }
   async function postConfig(params){
     try { const c = await fetchJSON('/api/config?'+params, {method:'POST'}); $('setLogBytes').textContent = fmtSize(c.logBytes||0); toast('已保存'); }
     catch(e){ toast('保存失败: '+e.message); }
     refreshStats();
+  }
+
+  // ---- 噪点特征串管理 (仅影响之后新捕获的事件) ----
+  function renderNoisePatterns(list){
+    $('noisePatterns').innerHTML = (list && list.length) ? list.map(p =>
+      '<span class="cap-chip" data-pattern="'+escapeHTML(p)+'">'+escapeHTML(p)
+      + ' <span style="color:#8b949e;cursor:pointer;" data-remove-pattern="'+escapeHTML(p)+'">✕</span></span>'
+    ).join('') : '<span style="color:#6e7681;font-size:12px;">(空 — 未过滤任何特征串)</span>';
+  }
+  async function loadNoisePatterns(){
+    try {
+      const d = await fetchJSON('/api/noise/patterns');
+      $('setNoiseEnabled').checked = !!d.enabled;
+      renderNoisePatterns(d.patterns||[]);
+    } catch(e){ $('noisePatterns').innerHTML = '<span style="color:#ffa198;font-size:12px;">获取失败: '+escapeHTML(e.message)+'</span>'; }
   }
 
   document.addEventListener('click', async (ev) => {
@@ -642,6 +703,8 @@
       if (d.callStack) { lines.push(''); lines.push('=== CallStack ==='); lines.push(d.callStack); }
       copyText(lines.join('\n')); return;
     }
+    const symRow = ev.target.closest('.sym-img-row');
+    if (symRow) { selectSymImage(symRow.dataset.idx); return; }
     const row = ev.target.closest('.row');
     if (row) selectRow(parseInt(row.dataset.seq, 10));
   });
@@ -650,8 +713,20 @@
   let qTimer; $('q').addEventListener('input', () => { (tabState[activeTab]||{}).q = $('q').value; clearTimeout(qTimer); qTimer=setTimeout(()=>refreshList({loading:true}),200); });
   $('tabPauseBtn').addEventListener('click', async () => { const c=tabCat(); const paused = activeTab==='crypto' ? ((stats.pausedByCat||[])[0]) : ((stats.pausedByCat||[])[c]); await fetch('/api/pause?cat='+c+'&paused='+(paused?'0':'1'),{method:'POST'}); await refreshStats(); refreshList(); });
   $('tabDownloadBtn').addEventListener('click', () => { window.open('/api/logs/download?cat='+tabCat(), '_blank'); });
-  $('tabClearBtn').addEventListener('click', async () => { if(!confirm('确定清空本板块日志?')) return; await fetch('/api/clear?cat='+tabCat(),{method:'POST'}); detailCache={}; selectedSeq=null; $('detail').innerHTML=EMPTY; listLive=false; refreshStats(); refreshList({loading:true}); });
-  $('captureWrap').addEventListener('change', async (ev) => { const cb=ev.target; if(!cb.dataset||!cb.dataset.sub) return; await fetch('/api/capture?sub='+encodeURIComponent(cb.dataset.sub)+'&on='+(cb.checked?'1':'0'),{method:'POST'}); refreshStats(); });
+  $('tabClearBtn').addEventListener('click', async () => {
+    if (activeTab==='noise') {
+      if(!confirm('确定清空噪点日志?')) return;
+      await fetch('/api/noise/clear',{method:'POST'});
+    } else {
+      if(!confirm('确定清空本板块日志?')) return;
+      await fetch('/api/clear?cat='+tabCat(),{method:'POST'});
+    }
+    detailCache={}; selectedSeq=null; $('detail').innerHTML=EMPTY; listLive=false; refreshStats(); refreshList({loading:true});
+  });
+  $('capBody').addEventListener('change', async (ev) => { const cb=ev.target; if(!cb.dataset||!cb.dataset.sub) return; await fetch('/api/capture?sub='+encodeURIComponent(cb.dataset.sub)+'&on='+(cb.checked?'1':'0'),{method:'POST'}); refreshStats(); });
+  $('capBtn').addEventListener('click', () => { $('capMask').classList.add('show'); syncCapCheckboxes(); });
+  $('capClose').addEventListener('click', () => $('capMask').classList.remove('show'));
+  $('capMask').addEventListener('click', (e) => { if(e.target===$('capMask')) $('capMask').classList.remove('show'); });
   $('diagBtn').addEventListener('click', openDiag);
   $('diagClose').addEventListener('click', () => $('diagMask').classList.remove('show'));
   $('diagRefresh').addEventListener('click', loadDiag);
@@ -665,6 +740,22 @@
   $('setDisplayCap').addEventListener('change', () => { localStorage.setItem('dh_displayCap', $('setDisplayCap').value); if(LOG_TABS.includes(activeTab)) refreshList({loading:true}); toast('展示条数已更新'); });
   $('setMaxEntries').addEventListener('change', () => postConfig('maxEntries='+$('setMaxEntries').value));
   $('setMaxFile').addEventListener('change', () => postConfig('maxFileBytes='+$('setMaxFile').value));
+  $('setNoiseEnabled').addEventListener('change', async () => {
+    await fetch('/api/noise/patterns?op=enable&on='+($('setNoiseEnabled').checked?'1':'0'),{method:'POST'});
+    toast('已保存'); refreshStats();
+  });
+  async function addNoisePattern(){
+    const v = $('noisePatternInput').value.trim(); if(!v) return;
+    const d = await fetchJSON('/api/noise/patterns?op=add&text='+encodeURIComponent(v),{method:'POST'});
+    $('noisePatternInput').value=''; renderNoisePatterns(d.patterns||[]); refreshStats();
+  }
+  $('noisePatternAdd').addEventListener('click', addNoisePattern);
+  $('noisePatternInput').addEventListener('keydown', (e) => { if(e.key==='Enter'){ e.preventDefault(); addNoisePattern(); } });
+  $('noisePatterns').addEventListener('click', async (e) => {
+    const p = e.target.dataset && e.target.dataset.removePattern; if(!p) return;
+    const d = await fetchJSON('/api/noise/patterns?op=remove&text='+encodeURIComponent(p),{method:'POST'});
+    renderNoisePatterns(d.patterns||[]); refreshStats();
+  });
   $('setClearAll').addEventListener('click', async () => {
     if(!confirm('确定清空全部日志(内存 + 所有落盘段)? 不可恢复。')) return;
     await fetch('/api/clear',{method:'POST'});
@@ -673,19 +764,20 @@
     refreshStats(); refreshList({loading:true}); loadConfig();
   });
   $('dumpRefresh').addEventListener('click', loadDumpImages);
-  $('dumpBin').addEventListener('click', () => startDump('bin'));
   $('dumpIpa').addEventListener('click', () => startDump('ipa'));
   $('symRefresh').addEventListener('click', loadSymbols);
-  $('symImgSel').addEventListener('change', loadSymList);
   let symQTimer; $('symQ').addEventListener('input', () => { clearTimeout(symQTimer); symQTimer=setTimeout(loadSymList,200); });
-  (function(){
-    const sp=$('splitter'), lp=$('list'), wsEl=document.querySelector('.workspace'); let dragging=false;
-    sp.addEventListener('mousedown', e => { dragging=true; sp.classList.add('dragging'); document.body.style.userSelect='none'; e.preventDefault(); });
-    document.addEventListener('mousemove', e => { if(!dragging) return; const rect=wsEl.getBoundingClientRect(); lp.style.width=Math.max(220, Math.min(rect.width-260, e.clientX-rect.left))+'px'; });
-    document.addEventListener('mouseup', () => { if(dragging){ dragging=false; sp.classList.remove('dragging'); document.body.style.userSelect=''; } });
-  })();
+  // 通用拖拽分隔条: 复用给主事件流 workspace 与符号页 sym-workspace 两处 list/detail 分栏。
+  function initSplitter(splitterEl, leftEl, containerEl) {
+    let dragging=false;
+    splitterEl.addEventListener('mousedown', e => { dragging=true; splitterEl.classList.add('dragging'); document.body.style.userSelect='none'; e.preventDefault(); });
+    document.addEventListener('mousemove', e => { if(!dragging) return; const rect=containerEl.getBoundingClientRect(); leftEl.style.width=Math.max(220, Math.min(rect.width-260, e.clientX-rect.left))+'px'; });
+    document.addEventListener('mouseup', () => { if(dragging){ dragging=false; splitterEl.classList.remove('dragging'); document.body.style.userSelect=''; } });
+  }
+  initSplitter($('splitter'), $('list'), document.querySelector('.workspace'));
+  initSplitter($('symSplitter'), document.querySelector('#symPane .sym-img-pane'), $('symPane'));
   setInterval(() => { if(!$('autoRefresh').checked) return; refreshStats(); if(LOG_TABS.includes(activeTab)) refreshList(); }, 1500);
-  buildCapture('crypto'); refreshStats(); refreshList({loading:true});
+  buildCapMenu(); refreshStats(); refreshList({loading:true});
 </script>
 </body>
 </html>

@@ -2,6 +2,7 @@
 #import "log_store.h"
 #import "dh_health.h"
 #import "dh_capture.h"
+#import "dh_noise.h"
 #import <sys/sysctl.h>
 #import <errno.h>
 
@@ -10,6 +11,8 @@
 
 @interface DHLogStore () {
     NSMutableArray<DHLogEntry *> *_buckets[DHCategoryOther + 1];   // 每类独立环形缓冲, 互不挤占
+    NSMutableArray<DHLogEntry *> *_noiseBucket;  // 命中噪点特征的条目改投到这里, 不进 _buckets
+    NSUInteger                    _noiseCount;
     dispatch_queue_t              _queue;       // 写入串行队列
     NSUInteger                    _categoryCounts[DHCategoryOther + 1];
     uint64_t                      _seqCounter;
@@ -39,6 +42,8 @@ static const unsigned long long kDefaultMaxLogFileBytes = 50ULL * 1024 * 1024;  
 - (instancetype)init {
     if ((self = [super init])) {
         for (int c = 0; c <= DHCategoryOther; c++) _buckets[c] = [NSMutableArray array];
+        _noiseBucket = [NSMutableArray array];
+        _noiseCount = 0;
         _queue = dispatch_queue_create("com.decrypthelper.logstore", DISPATCH_QUEUE_SERIAL);
         _seqCounter = 0;
         memset(_categoryCounts, 0, sizeof(_categoryCounts));
@@ -111,18 +116,27 @@ static const unsigned long long kDefaultMaxLogFileBytes = 50ULL * 1024 * 1024;  
     return total;
 }
 
+// 噪点判定: 对 input 的 UTF-8 内容与 detail 各做一次特征串子串匹配, 任一命中即噪点。
+static BOOL dh_noise_entry_matches(DHLogEntry *entry) {
+    if (dh_noise_matches(DHUTF8FromData(entry.input))) return YES;
+    if (dh_noise_matches(entry.detail)) return YES;
+    return NO;
+}
+
 - (void)append:(DHLogEntry *)entry {
     if (self.paused || entry == nil) return;
     NSInteger ci = (entry.category >= 0 && entry.category <= DHCategoryOther) ? entry.category : DHCategoryOther;
     if (dh_capture_cat_paused((int)ci)) return;            // 该分类已暂停(单一真相源在 dh_capture, 已持久化)
+    BOOL noisy = dh_noise_enabled() && dh_noise_entry_matches(entry);
     dispatch_async(_queue, ^{
         entry.seq = ++self->_seqCounter;
-        NSMutableArray *b = self->_buckets[ci];
+        NSMutableArray *b = noisy ? self->_noiseBucket : self->_buckets[ci];
         [b addObject:entry];
         if (b.count > self->_maxPerCategory)
             [b removeObjectsInRange:NSMakeRange(0, b.count - self->_maxPerCategory)];
-        self->_categoryCounts[ci]++;
-        [self _persist:entry];
+        if (noisy) self->_noiseCount++;
+        else       self->_categoryCounts[ci]++;
+        [self _persist:entry];   // 噪点条目仍照常落盘, 保持「崩溃可闭环取证」承诺
     });
 }
 
@@ -291,6 +305,13 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
                 if (e.seq == seq) { r = e; break; }
             }
         }
+        if (!r) {
+            NSMutableArray *b = self->_noiseBucket;
+            for (NSInteger i = (NSInteger)b.count - 1; i >= 0; i--) {
+                DHLogEntry *e = b[i];
+                if (e.seq == seq) { r = e; break; }
+            }
+        }
     });
     return r;
 }
@@ -332,6 +353,39 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
             [self->_buckets[cat] removeAllObjects]; self->_categoryCounts[cat] = 0;
         }
         // 仅清该类内存(落盘文件混所有类, 不动; 整体清空走 clearAll)
+    });
+}
+
+- (NSArray<DHLogEntry *> *)snapshotNoiseMatching:(NSString *)keyword {
+    __block NSArray *src = nil;
+    dispatch_sync(_queue, ^{ src = [self->_noiseBucket copy]; });
+    if (!keyword || keyword.length == 0) return src;
+
+    NSMutableArray *out = [NSMutableArray array];
+    NSString *kw = [keyword lowercaseString];
+    for (DHLogEntry *e in src) {
+        BOOL hit = NO;
+        if ([[e.algorithm lowercaseString] containsString:kw]) hit = YES;
+        else if ([[e.operation lowercaseString] containsString:kw]) hit = YES;
+        else if (e.detail && [[e.detail lowercaseString] containsString:kw]) hit = YES;
+        else if (e.input && [[DHUTF8FromData(e.input) lowercaseString] containsString:kw]) hit = YES;
+        else if (e.input && [[DHHexFromData(e.input) lowercaseString] containsString:kw]) hit = YES;
+        else if (e.output && [[DHHexFromData(e.output) lowercaseString] containsString:kw]) hit = YES;
+        if (hit) [out addObject:e];
+    }
+    return out;
+}
+
+- (NSUInteger)noiseCount {
+    __block NSUInteger n;
+    dispatch_sync(_queue, ^{ n = self->_noiseCount; });
+    return n;
+}
+
+- (void)clearNoise {
+    dispatch_async(_queue, ^{
+        [self->_noiseBucket removeAllObjects];
+        self->_noiseCount = 0;
     });
 }
 

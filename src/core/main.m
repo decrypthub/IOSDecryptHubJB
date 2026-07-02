@@ -15,6 +15,7 @@
 #import "http_server.h"
 #import "dh_health.h"
 #import "dh_capture.h"
+#import "dh_noise.h"
 
 extern void dh_install_digest_hooks(void);
 extern void dh_install_hmac_hooks(void);
@@ -45,6 +46,7 @@ static void dh_bootstrap(void) {
     dh_diag_set_dir(docsDir.fileSystemRepresentation);
     dh_diag_append(DH_DIAG_GENERAL, "INFO", "IOSDecryptHub 启动, 开始安装 hook");
     dh_capture_load([docsDir stringByAppendingPathComponent:@".dh_capture.conf"].fileSystemRepresentation);
+    dh_noise_load([docsDir stringByAppendingPathComponent:@".dh_noise.conf"]);
     // 安装 hook —— 尽早完成, 否则早期发生的加解密会漏抓.
     dh_install_all_hooks();
     dh_diag_append(DH_DIAG_GENERAL, "INFO", "hook 安装完成 (Digest/HMAC/对称/非对称/KDF/网络/文件/系统)");

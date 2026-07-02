@@ -67,6 +67,11 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 // 仅清某分类的内存日志 (0..7 或 -2 加密组), 不动落盘文件
 - (void)clearCategory:(NSInteger)cat;
 
+// ===== 噪点日志 (命中 dh_noise 特征串的条目改投到独立桶, 不进主事件流, 仍照常落盘) =====
+- (NSArray<DHLogEntry *> *)snapshotNoiseMatching:(nullable NSString *)keyword;
+- (NSUInteger)noiseCount;
+- (void)clearNoise;   // 仅清内存, 不动落盘文件
+
 // 日志文件路径 (落盘文件用于 share/导出)
 - (NSString *)logFilePath;
 

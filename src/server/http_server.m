@@ -27,6 +27,7 @@
 #import "web_index_html.h"
 #import "dh_health.h"
 #import "dh_capture.h"
+#import "dh_noise.h"
 #import "ui_float.h"
 #import "dump_manager.h"
 #import "dh_symtab.h"
@@ -253,6 +254,8 @@ static void handle_stats(int fd) {
         @"port":        @(gPort),
         @"version":     @DH_HTTP_VERSION,
         @"logBytes":    @(logBytes),
+        @"noiseCount":  @([s noiseCount]),
+        @"noiseEnabled": @(dh_noise_enabled()),
         @"process":     [s processInfo],
         @"health":      @{
             @"hookFails":     @(dh_health_hook_fail_count()),
@@ -296,6 +299,52 @@ static void handle_clear(int fd, NSDictionary *q) {
     if (q[@"cat"]) [[DHLogStore shared] clearCategory:[q[@"cat"] integerValue]];   // 清空本类
     else           [[DHLogStore shared] clearAll];                                 // 清空全部(含落盘)
     send_json(fd, 200, @{@"ok": @YES});
+}
+
+// 噪点日志 —— 命中 dh_noise 特征串的条目改投到独立桶, 不进主事件流, 仍照常落盘。
+static void handle_noise_list(int fd, NSDictionary *q) {
+    NSString *kw     = q[@"q"]      ?: @"";
+    uint64_t  since  = q[@"since"]  ? (uint64_t)[q[@"since"] longLongValue]  : 0;
+    uint64_t  before = q[@"before"] ? (uint64_t)[q[@"before"] longLongValue] : 0;
+    NSInteger lim    = q[@"limit"]  ? [q[@"limit"] integerValue] : 500;
+    if (lim <= 0 || lim > 5000) lim = 500;
+
+    NSArray *src = [[DHLogStore shared] snapshotNoiseMatching:kw];
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSInteger i = (NSInteger)src.count - 1; i >= 0 && (NSInteger)out.count < lim; i--) {
+        DHLogEntry *e = src[i];
+        if (since  && e.seq <= since)  continue;
+        if (before && e.seq >= before) continue;
+        [out addObject:entry_summary(e)];
+    }
+    send_json(fd, 200, out);
+}
+
+static void handle_noise_clear(int fd) {
+    [[DHLogStore shared] clearNoise];
+    send_json(fd, 200, @{@"ok": @YES});
+}
+
+static void handle_noise_patterns_get(int fd) {
+    send_json(fd, 200, @{
+        @"enabled":  @(dh_noise_enabled()),
+        @"patterns": dh_noise_patterns(),
+    });
+}
+
+static void handle_noise_patterns_set(int fd, NSDictionary *q) {
+    NSString *op = q[@"op"] ?: @"";
+    if ([op isEqualToString:@"add"]) {
+        NSString *text = q[@"text"];
+        if (text.length) dh_noise_add_pattern(text);
+    } else if ([op isEqualToString:@"remove"]) {
+        NSString *text = q[@"text"];
+        if (text.length) dh_noise_remove_pattern(text);
+    } else if ([op isEqualToString:@"enable"]) {
+        BOOL on = [(q[@"on"] ?: @"1") isEqualToString:@"1"];
+        dh_noise_set_enabled(on);
+    }
+    handle_noise_patterns_get(fd);   // 回当前(已更新)状态
 }
 
 static void handle_pause(int fd, NSDictionary *q) {
@@ -492,40 +541,58 @@ static void handle_dump_status(int fd) {
     send_json(fd, 200, [[DHDumpManager shared] statusDict]);
 }
 
-static void handle_dump_download(int fd, NSDictionary *q) {
-    NSString *kind = [q[@"kind"] isEqualToString:@"bin"] ? @"bin" : @"ipa";
-    NSString *path = [[DHDumpManager shared] artifactPathForKind:kind];
-    if (!path) { send_text(fd, 404, @"砸壳产物尚未就绪"); return; }
+// 流式发送磁盘文件作为附件下载; 复用于整包产物(bin/ipa)和单镜像即时下载。
+static void send_file_as_download(int fd, NSString *path, NSString *downloadName) {
     NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
-    if (!attrs) { send_text(fd, 404, @"产物文件丢失"); return; }
+    if (!attrs) { send_text(fd, 404, @"文件丢失"); return; }
     unsigned long long total = [(NSNumber *)attrs[NSFileSize] unsignedLongLongValue];
 
-    // 复用 handle_download 的分块流式写法, 仅换 Content-Type / 文件名
     NSMutableString *headers = [NSMutableString string];
     [headers appendString:@"HTTP/1.1 200 OK\r\n"];
     [headers appendString:@"Content-Type: application/octet-stream\r\n"];
     [headers appendFormat:@"Content-Length: %llu\r\n", total];
-    [headers appendFormat:@"Content-Disposition: attachment; filename=%@\r\n", [path lastPathComponent]];
+    [headers appendFormat:@"Content-Disposition: attachment; filename=%@\r\n", downloadName];
     [headers appendString:@"Cache-Control: no-store\r\n"];
     [headers appendString:@"Connection: close\r\n\r\n"];
     NSData *hd = [headers dataUsingEncoding:NSUTF8StringEncoding];
     if (!write_all(fd, hd.bytes, hd.length)) return;
 
     NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
-    if (!fh) { DH_ERR(@"砸壳下载: 无法读取产物 %@, 连接将中断", path); return; }
+    if (!fh) { DH_ERR(@"下载: 无法读取 %@, 连接将中断", path); return; }
     @try {
         while (1) {
             NSData *chunk = [fh readDataOfLength:64 * 1024];
             if (chunk.length == 0) break;
             if (!write_all(fd, chunk.bytes, chunk.length)) {
-                DH_ERR(@"砸壳下载: 发送数据块失败(客户端可能已断开)");
+                DH_ERR(@"下载: 发送数据块失败(客户端可能已断开)");
                 break;
             }
         }
     } @catch (NSException *e) {
-        DH_ERR(@"砸壳下载: 读取产物异常: %@", e.reason);
+        DH_ERR(@"下载: 读取文件异常: %@", e.reason);
     }
     [fh closeFile];
+}
+
+static void handle_dump_download(int fd, NSDictionary *q) {
+    NSString *kind = [q[@"kind"] isEqualToString:@"bin"] ? @"bin" : @"ipa";
+    NSString *path = [[DHDumpManager shared] artifactPathForKind:kind];
+    if (!path) { send_text(fd, 404, @"砸壳产物尚未就绪"); return; }
+    send_file_as_download(fd, path, [path lastPathComponent]);
+}
+
+// 单镜像即时下载: 无需跑整包任务, 现砸现传, 发完删临时文件。
+static void handle_dump_image_download(int fd, NSDictionary *q) {
+    NSString *name = q[@"name"];
+    if (name.length == 0 || [name rangeOfString:@"/"].location != NSNotFound
+                          || [name rangeOfString:@".."].location != NSNotFound) {
+        send_text(fd, 400, @"非法 name 参数"); return;
+    }
+    NSError *err = nil;
+    NSString *tmpPath = [[DHDumpManager shared] decryptImageNamed:name error:&err];
+    if (!tmpPath) { send_text(fd, 404, err.localizedDescription ?: @"砸壳失败"); return; }
+    send_file_as_download(fd, tmpPath, [name stringByAppendingString:@"-decrypted"]);
+    [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil];
 }
 
 // ---- 符号导入表(可 hook 观测) ----
@@ -635,6 +702,10 @@ static void handle_connection(int fd) {
                 handle_logs_list(fd, q);
             } else if ([path isEqualToString:@"/api/logs/download"]) {
                 handle_logs_download(fd, q);
+            } else if ([path isEqualToString:@"/api/noise"]) {
+                handle_noise_list(fd, q);
+            } else if ([path isEqualToString:@"/api/noise/patterns"]) {
+                handle_noise_patterns_get(fd);
             } else if ([path isEqualToString:@"/api/capture"]) {
                 handle_capture_get(fd);
             } else if ([path isEqualToString:@"/api/config"]) {
@@ -649,6 +720,8 @@ static void handle_connection(int fd) {
                 handle_dump_status(fd);
             } else if ([path isEqualToString:@"/api/dump/download"]) {
                 handle_dump_download(fd, q);
+            } else if ([path isEqualToString:@"/api/dump/image"]) {
+                handle_dump_image_download(fd, q);
             } else if ([path isEqualToString:@"/api/appicon"]) {
                 handle_appicon(fd);
             } else if ([path isEqualToString:@"/api/diag"]) {
@@ -667,6 +740,10 @@ static void handle_connection(int fd) {
         } else if ([method isEqualToString:@"POST"]) {
             if ([path isEqualToString:@"/api/clear"]) {
                 handle_clear(fd, q);
+            } else if ([path isEqualToString:@"/api/noise/clear"]) {
+                handle_noise_clear(fd);
+            } else if ([path isEqualToString:@"/api/noise/patterns"]) {
+                handle_noise_patterns_set(fd, q);
             } else if ([path isEqualToString:@"/api/pause"]) {
                 handle_pause(fd, q);
             } else if ([path isEqualToString:@"/api/capture"]) {

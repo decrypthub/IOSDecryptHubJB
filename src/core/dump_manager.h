@@ -28,6 +28,12 @@ NS_ASSUME_NONNULL_BEGIN
 // 产物路径; kind = @"bin" | @"ipa"; 不存在返回 nil (给 GET /api/dump/download)
 - (nullable NSString *)artifactPathForKind:(NSString *)kind;
 
+// 单个镜像即时砸壳: 按 name(listImagesDict 里的 "name" 字段, 精确匹配) 找到镜像, 解密写到
+// 一个临时文件并返回其路径; 调用方(HTTP handler)负责流式发送后删除该文件。
+// 与 startDump 的异步任务机制无关, 同步执行、独立于任务状态机(不占 running 状态)。
+// 找不到镜像或解密失败返回 nil 并填充 error。
+- (nullable NSString *)decryptImageNamed:(NSString *)name error:(NSError * _Nullable * _Nullable)error;
+
 @end
 
 NS_ASSUME_NONNULL_END

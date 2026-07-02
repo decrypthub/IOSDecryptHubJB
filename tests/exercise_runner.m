@@ -42,6 +42,13 @@ static void test_digests(void) {
     CC_MD5(msg, (CC_LONG)len, md5);
     print_hex("MD5      ", md5, CC_MD5_DIGEST_LENGTH);
 
+    // 噪点分流演示: 模拟 iOS MobileGestalt 内部缓存键 (业务无关噪点)。默认特征串 "MGCopyAnswer"
+    // 命中后, 这条不进主事件流(加解密 tab), 而被路由到独立的「噪点」tab, 便于回归验证噪点机制。
+    const char *noise = "MGCopyAnswerapple-internal-install";
+    unsigned char md5n[CC_MD5_DIGEST_LENGTH];
+    CC_MD5(noise, (CC_LONG)strlen(noise), md5n);
+    print_hex("MD5-noise", md5n, CC_MD5_DIGEST_LENGTH);
+
     unsigned char sha1[CC_SHA1_DIGEST_LENGTH];
     CC_SHA1(msg, (CC_LONG)len, sha1);
     print_hex("SHA1     ", sha1, CC_SHA1_DIGEST_LENGTH);
@@ -188,6 +195,7 @@ int main(int argc, char **argv) {
     printf("           SHA256-streaming + HMAC-SHA256/SHA1 + HMAC-streaming +\n");
     printf("           AES-128-CBC encrypt + AES-128-CBC decrypt (streaming) +\n");
     printf("           RSA SIGN/VERIFY/ENC/DEC, 一共 ~12 条日志.\n");
+    printf("[exercise] 另有 1 条 MGCopyAnswer 噪点 → 应出现在「噪点」tab, 不在加解密 tab.\n");
     printf("[exercise] Ctrl-C 退出. (默认 600s 自动退)\n");
 
     signal(SIGINT, on_sigint);
