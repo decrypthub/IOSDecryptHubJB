@@ -183,9 +183,8 @@
   <button class='tab active' data-tab='crypto'>加解密<span class='n' id='n-crypto'></span></button>
   <button class='tab' data-tab='file'>文件<span class='n' id='n-file'></span></button>
   <button class='tab' data-tab='sys'>系统<span class='n' id='n-sys'></span></button>
-  <button class='tab' data-tab='noise'>噪点<span class='n' id='n-noise'></span></button>
   <button class='tab' data-tab='symbols'>符号</button>
-  <button class='tab' data-tab='dump'>砸壳</button>
+  <button class='tab' data-tab='dump'>Dump</button>
 </nav>
 <div class='filters' id='toolbar'>
   <span id='catWrap'><label>分类</label>
@@ -207,6 +206,7 @@
   <button id='tabPauseBtn' class='warn'>暂停</button>
   <button id='tabDownloadBtn'>下载本类</button>
   <button id='tabClearBtn' class='danger'>清空本类</button>
+  <button id='viewNoiseBtn'>查看噪声<span class='n' id='n-noise-btn'></span></button>
   <span id='count' style='color:#6e7681; font-size:11px; margin-left:auto;'></span>
 </div>
 <div class='workspace'>
@@ -283,7 +283,7 @@
         <span class='val' id='setLogBytes'>—</span>
       </div>
       <div class='set-row' style='flex-direction:column; align-items:stretch; gap:8px;'>
-        <div class='lab'><b>噪点过滤</b><span>命中特征串的事件自动路由到「噪点」tab, 不进入主事件流(仍会照常落盘, 不丢数据)。仅影响之后新捕获的事件, 已有记录不会被重新分类。</span></div>
+        <div class='lab'><b>噪点过滤</b><span>命中特征串的事件自动路由到噪声视图(点工具栏「查看噪声」), 不进入主事件流(仍会照常落盘, 不丢数据)。仅影响之后新捕获的事件, 已有记录不会被重新分类。</span></div>
         <label style='color:#8b949e;font-size:12px;'><input type='checkbox' id='setNoiseEnabled'> 启用噪点过滤</label>
         <div id='noisePatterns' style='display:flex; flex-wrap:wrap; gap:6px;'></div>
         <div style='display:flex; gap:8px;'>
@@ -309,7 +309,7 @@
   const CAT_NAMES = ['摘要','HMAC','对称','非对称','文件','系统','其它'];
   const CAT_CLS   = ['digest','hmac','sym','asym','file','sys','other'];
   const TAB_CAT   = { crypto:-2, file:4, sys:5 };
-  const LOG_TABS  = ['crypto','file','sys','noise'];   // 走日志 master-detail 的 tab; 符号/砸壳是独立面板
+  const LOG_TABS  = ['crypto','file','sys'];   // 走日志 master-detail 的 tab; 噪声经工具栏按钮查看; 符号/Dump 是独立面板
   // 全部捕获子开关, 按类别分组一次性收纳进「捕获」小菜单(不再随 tab 切换)。
   const CAP_GROUPS = [
     ['加解密', [['DIGEST','摘要'],['HMAC','HMAC'],['SYMMETRIC','对称'],['ASYMMETRIC','非对称'],['KDF','KDF']]],
@@ -321,6 +321,7 @@
   const EMPTY = '<div class="detail-empty">← 选择左侧一条记录查看详情</div>';
   const LOADING = '<div class="loading"><span class="spinner"></span>加载中…</div>';
   let selectedSeq = null, detailCache = {}, stats = {}, activeTab = 'crypto';
+  let noiseView = false;  // 工具栏「查看噪声」打开的噪声列表视图(不占独立 tab)
   let listLive = false;   // 本会话当前 tab 是否已渲染过实时数据(用于断连时决定是否回退缓存)
 
   // 服务不可达(App 闪退/被检测拦截/网络断): 绝不清屏, 只挂横幅。数据已落盘, 引导用「下载全部日志」取全量。
@@ -331,7 +332,7 @@
     else b.style.display = 'none';
   }
   // 把本类最近一次实时日志镜像到 localStorage, 浏览器刷新/重开后即便服务已死也能看到断连前数据。
-  function cacheKey(cat) { return 'dh_logs_'+activeTab+'_'+cat; }
+  function cacheKey(cat) { return 'dh_logs_'+(noiseView?'noise':activeTab)+'_'+cat; }
   function saveCache(cat, entries) { try { localStorage.setItem(cacheKey(cat), JSON.stringify(entries)); } catch(e){} }
   function loadCache(cat) { try { return JSON.parse(localStorage.getItem(cacheKey(cat))||'null'); } catch(e){ return null; } }
 
@@ -340,7 +341,24 @@
   function escapeHTML(s) { return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   async function copyText(t) { try { await navigator.clipboard.writeText(t); toast('已复制 '+t.length+' 字符'); } catch(e) { const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('已复制'); } }
   async function fetchJSON(url, opts) { const r=await fetch(url,opts); if(!r.ok) throw new Error(r.status+' '+r.statusText); return r.json(); }
-  function curCat() { return activeTab==='crypto' ? $('catSel').value : (activeTab==='noise' ? 'noise' : TAB_CAT[activeTab]); }
+  function curCat() { return noiseView ? 'noise' : (activeTab==='crypto' ? $('catSel').value : TAB_CAT[activeTab]); }
+  function updateNoiseToolbar() {
+    const inNoise = noiseView;
+    $('catWrap').style.display = inNoise ? 'none' : (activeTab==='crypto' ? '' : 'none');
+    $('minWrap').style.display = inNoise ? 'none' : (activeTab==='crypto' ? '' : 'none');
+    $('tabPauseBtn').style.display = inNoise ? 'none' : '';
+    $('tabDownloadBtn').style.display = inNoise ? 'none' : '';
+    $('tabClearBtn').textContent = inNoise ? '清空噪声' : '清空本类';
+    $('q').placeholder = inNoise ? '搜索噪声: 算法/路径/明文/Hex…' : '搜索本类: 算法/路径/明文/Hex…';
+    const btn = $('viewNoiseBtn');
+    if (!btn) return;
+    if (inNoise) {
+      btn.textContent = '返回';
+    } else {
+      const cnt = (stats && stats.noiseCount) ? (' '+stats.noiseCount) : '';
+      btn.innerHTML = '查看噪声<span class="n" id="n-noise-btn">'+cnt+'</span>';
+    }
+  }
   function buildCapMenu() {
     $('capBody').innerHTML = CAP_GROUPS.map(([title,subs]) =>
       '<div class="cap-section"><div class="cap-section-title">'+escapeHTML(title)+'</div>'
@@ -352,10 +370,12 @@
     document.querySelectorAll('#capBody input[data-sub]').forEach(cb => { if(cap[cb.dataset.sub]!==undefined) cb.checked = cap[cb.dataset.sub]!==0; });
   }
   function updateToolbar() {
-    if (!LOG_TABS.includes(activeTab)) return;
+    if (!LOG_TABS.includes(activeTab) && !noiseView) return;
+    if (noiseView) { updateNoiseToolbar(); return; }
     const pbc=(stats&&stats.pausedByCat)||[];
     const paused = activeTab==='crypto' ? !!pbc[0] : !!pbc[TAB_CAT[activeTab]];
     const pb=$('tabPauseBtn'); if(pb){ pb.textContent = paused?'继续':'暂停'; pb.classList.toggle('danger', paused); }
+    updateNoiseToolbar();
   }
   const DIAG_BOARDS = [[-1,'全部'],[0,'通用'],[1,'加解密'],[2,'文件'],[3,'系统'],[4,'砸壳']];
   let diagBoard = -1;
@@ -394,7 +414,6 @@
       $('n-crypto').textContent = cryptoN ? cryptoN : '';
       $('n-file').textContent = bc[4] ? bc[4] : '';
       $('n-sys').textContent = bc[5] ? bc[5] : '';
-      $('n-noise').textContent = stats.noiseCount ? stats.noiseCount : '';
       $('ver').textContent = stats.version ? ('v'+stats.version) : '';
       const p = stats.process || {}; const pb = [];
       if (p.appName) pb.push('<span><b>'+escapeHTML(p.appName)+'</b></span>');
@@ -419,7 +438,7 @@
   let listHasMore = false;              // 是否可能还有更早记录 (决定「加载更早」按钮)
   function logsURL(extra){
     const q = $('q').value.trim();
-    if (activeTab==='noise') return '/api/noise?q='+encodeURIComponent(q)+'&limit='+displayCap()+(extra||'');
+    if (noiseView) return '/api/noise?q='+encodeURIComponent(q)+'&limit='+displayCap()+(extra||'');
     const cat = curCat(), minSize = $('minSize').value;
     return '/api/logs?cat='+encodeURIComponent(cat)+'&q='+encodeURIComponent(q)
       +'&minSize='+encodeURIComponent(minSize)+'&limit='+displayCap()+(extra||'');
@@ -537,7 +556,32 @@
     }
     $('detail').innerHTML = renderDetailPane(detailCache[seq]);
   }
+  function enterNoiseView() {
+    if (noiseView) return;
+    noiseView = true;
+    $('q').value = (tabState.noise||{}).q || '';
+    updateNoiseToolbar();
+    selectedSeq = null; $('detail').innerHTML = EMPTY;
+    listLive = false;
+    $('list').innerHTML = LOADING;
+    refreshList({loading:true});
+  }
+  function exitNoiseView() {
+    if (!noiseView) return;
+    (tabState.noise||{}).q = $('q').value;
+    noiseView = false;
+    $('q').value = (tabState[activeTab]||{}).q || '';
+    updateNoiseToolbar();
+    selectedSeq = null; $('detail').innerHTML = EMPTY;
+    listLive = false;
+    $('list').innerHTML = LOADING;
+    refreshList({loading:true});
+  }
   function switchTab(name) {
+    if (noiseView) {
+      (tabState.noise||{}).q = $('q').value;
+      noiseView = false;
+    }
     activeTab = name;
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab===name));
     const isLog = LOG_TABS.includes(name);
@@ -547,10 +591,6 @@
     $('toolbar').style.display = isLog ? 'flex' : 'none';
     if (name==='dump') { loadDumpImages(); pollDump(); return; }
     if (name==='symbols') { loadSymbols(); return; }
-    $('catWrap').style.display = (name==='crypto') ? '' : 'none';
-    $('minWrap').style.display = (name==='crypto') ? '' : 'none';
-    $('tabPauseBtn').style.display = (name==='noise') ? 'none' : '';
-    $('tabDownloadBtn').style.display = (name==='noise') ? 'none' : '';
     $('q').value = (tabState[name]||{}).q || '';
     updateToolbar();
     selectedSeq = null; $('detail').innerHTML = EMPTY;
@@ -710,12 +750,13 @@
   });
   $('catSel').addEventListener('change', () => refreshList({loading:true}));
   $('minSize').addEventListener('change', () => refreshList({loading:true}));
-  let qTimer; $('q').addEventListener('input', () => { (tabState[activeTab]||{}).q = $('q').value; clearTimeout(qTimer); qTimer=setTimeout(()=>refreshList({loading:true}),200); });
+  let qTimer; $('q').addEventListener('input', () => { (tabState[noiseView?'noise':activeTab]||{}).q = $('q').value; clearTimeout(qTimer); qTimer=setTimeout(()=>refreshList({loading:true}),200); });
+  $('viewNoiseBtn').addEventListener('click', () => { noiseView ? exitNoiseView() : enterNoiseView(); });
   $('tabPauseBtn').addEventListener('click', async () => { const c=tabCat(); const paused = activeTab==='crypto' ? ((stats.pausedByCat||[])[0]) : ((stats.pausedByCat||[])[c]); await fetch('/api/pause?cat='+c+'&paused='+(paused?'0':'1'),{method:'POST'}); await refreshStats(); refreshList(); });
   $('tabDownloadBtn').addEventListener('click', () => { window.open('/api/logs/download?cat='+tabCat(), '_blank'); });
   $('tabClearBtn').addEventListener('click', async () => {
-    if (activeTab==='noise') {
-      if(!confirm('确定清空噪点日志?')) return;
+    if (noiseView) {
+      if(!confirm('确定清空噪声日志?')) return;
       await fetch('/api/noise/clear',{method:'POST'});
     } else {
       if(!confirm('确定清空本板块日志?')) return;
@@ -737,7 +778,7 @@
   $('settingsBtn').addEventListener('click', openSettings);
   $('setClose').addEventListener('click', () => $('setMask').classList.remove('show'));
   $('setMask').addEventListener('click', (e) => { if(e.target===$('setMask')) $('setMask').classList.remove('show'); });
-  $('setDisplayCap').addEventListener('change', () => { localStorage.setItem('dh_displayCap', $('setDisplayCap').value); if(LOG_TABS.includes(activeTab)) refreshList({loading:true}); toast('展示条数已更新'); });
+  $('setDisplayCap').addEventListener('change', () => { localStorage.setItem('dh_displayCap', $('setDisplayCap').value); if(LOG_TABS.includes(activeTab) || noiseView) refreshList({loading:true}); toast('展示条数已更新'); });
   $('setMaxEntries').addEventListener('change', () => postConfig('maxEntries='+$('setMaxEntries').value));
   $('setMaxFile').addEventListener('change', () => postConfig('maxFileBytes='+$('setMaxFile').value));
   $('setNoiseEnabled').addEventListener('change', async () => {
@@ -776,7 +817,7 @@
   }
   initSplitter($('splitter'), $('list'), document.querySelector('.workspace'));
   initSplitter($('symSplitter'), document.querySelector('#symPane .sym-img-pane'), $('symPane'));
-  setInterval(() => { if(!$('autoRefresh').checked) return; refreshStats(); if(LOG_TABS.includes(activeTab)) refreshList(); }, 1500);
+  setInterval(() => { if(!$('autoRefresh').checked) return; refreshStats(); if(LOG_TABS.includes(activeTab) || noiseView) refreshList(); }, 1500);
   buildCapMenu(); refreshStats(); refreshList({loading:true});
 </script>
 </body>
