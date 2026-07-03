@@ -130,7 +130,7 @@ static void do_dlopen(void) {
 }
 static void do_dlsym(void) {
     // 走 dlsym 路径调用 CC_MD5 / CCCrypt —— 验证 dlsym hook 重定向到 wrapper
-    unsigned char (*md5_fn)(const void *, CC_LONG, unsigned char *) =
+    unsigned char *(*md5_fn)(const void *, CC_LONG, unsigned char *) =
         (unsigned char *(*)(const void *, CC_LONG, unsigned char *))dlsym(RTLD_DEFAULT, "CC_MD5");
     if (md5_fn) {
         unsigned char d[CC_MD5_DIGEST_LENGTH];
