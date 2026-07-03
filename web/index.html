@@ -161,6 +161,26 @@
   .modal h3 button:hover { background:#30363d; }
   .modal pre { flex:1; overflow:auto; margin:0; padding:14px 16px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; color:#c9d1d9; }
   .sym-workspace { flex:1; display:flex; min-height:0; }
+  .files-workspace { flex:1; display:flex; min-height:0; }
+  .files-list-pane { display:flex; flex-direction:column; overflow-y:hidden; }
+  .files-head { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid #21262d; flex-shrink:0; flex-wrap:wrap; }
+  .files-head button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer; flex-shrink:0; }
+  .files-head button:hover { background:#30363d; }
+  .files-breadcrumb { flex:1; min-width:0; font-size:12px; color:#8b949e; word-break:break-all; }
+  .files-breadcrumb a { color:#58a6ff; text-decoration:none; }
+  .files-breadcrumb a:hover { text-decoration:underline; }
+  .files-list { overflow-y:auto; flex:1; }
+  .files-row .top { display:flex; gap:8px; align-items:center; font-size:12px; }
+  .files-row .files-icon { color:#8b949e; font-size:11px; flex-shrink:0; width:28px; }
+  .files-row .files-icon.dir { color:#d4c95a; }
+  .files-row .name { font-weight:500; color:#c9d1d9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  .files-row .files-actions { display:flex; gap:6px; flex-shrink:0; }
+  .files-row .files-actions button { background:#21262d; color:#8b949e; border:1px solid #30363d; padding:2px 8px; border-radius:5px; font-size:11px; cursor:pointer; }
+  .files-row .files-actions button:hover { background:#30363d; color:#c9d1d9; }
+  .files-row .n { color:#6e7681; font-size:11px; margin-top:2px; padding-left:36px; }
+  .files-preview-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:14px 0 10px; position:sticky; top:0; background:#0d1117; z-index:1; border-bottom:1px solid #21262d; margin-bottom:10px; }
+  .files-preview-head .path { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:12px; color:#c9d1d9; word-break:break-all; flex:1; }
+  #filesPreviewBody { margin:0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; color:#c9d1d9; }
   .sym-img-pane { display:flex; flex-direction:column; overflow-y:hidden; }
   .sym-img-head { padding:10px 14px; color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; border-bottom:1px solid #21262d; flex-shrink:0; }
   .sym-img-head button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer; text-transform:none; letter-spacing:normal; }
@@ -237,6 +257,7 @@
 <nav class='tabbar' id='tabbar'>
   <button class='tab active' data-tab='crypto'>加解密<span class='n' id='n-crypto'></span></button>
   <button class='tab' data-tab='sys'>系统<span class='n' id='n-sys'></span></button>
+  <button class='tab' data-tab='files'>文件</button>
   <button class='tab' data-tab='symbols'>符号</button>
   <button class='tab' data-tab='dump'>Dump</button>
 </nav>
@@ -297,6 +318,23 @@
     <div id='dumpDone' class='dump-done' style='display:none;'></div>
     <table class='dump-table'><thead><tr><th>镜像</th><th>类型</th><th>大小</th><th>操作</th></tr></thead>
       <tbody id='dumpImgBody'><tr><td colspan='4' style='color:#6e7681;'>点击「刷新镜像」加载…</td></tr></tbody></table>
+  </div>
+</div>
+<div id='filesPane' class='files-workspace' style='display:none;'>
+  <aside class='list-pane files-list-pane'>
+    <div class='files-head'>
+      <nav class='files-breadcrumb' id='filesBreadcrumb'></nav>
+      <button type='button' id='filesUp' title='上一级'>↑</button>
+      <button type='button' id='filesRefresh'>刷新</button>
+    </div>
+    <div id='filesList' class='files-list'><div class='empty'>加载中…</div></div>
+  </aside>
+  <div class='splitter' id='filesSplitter'></div>
+  <div class='detail-pane'>
+    <div class='files-preview-head' id='filesPreviewHead'>
+      <span class='path'>← 选择文件预览, 或点击「下载」</span>
+    </div>
+    <pre id='filesPreviewBody'></pre>
   </div>
 </div>
 <div id='symPane' class='sym-workspace' style='display:none;'>
@@ -822,10 +860,12 @@
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab===name));
     const isLog = LOG_TABS.includes(name);
     $('dumpPane').style.display = (name==='dump') ? 'flex' : 'none';
+    $('filesPane').style.display = (name==='files') ? 'flex' : 'none';
     $('symPane').style.display  = (name==='symbols') ? 'flex' : 'none';
     document.querySelector('.workspace').style.display = isLog ? 'flex' : 'none';
     $('toolbar').style.display = isLog ? 'flex' : 'none';
     if (name==='dump') { loadDumpImages(); pollDump(); return; }
+    if (name==='files') { loadFilesBrowser(); return; }
     if (name==='symbols') { loadSymbols(); return; }
     $('q').value = (tabState[name]||{}).q || '';
     if (name === 'crypto') loadSizeState();
@@ -881,6 +921,86 @@
       toast('砸壳失败: '+(s.error||'未知错误'));
     }
   }
+  // ---- 宿主沙盒文件浏览 ----
+  let filesPath = '';
+  let filesParent = '';
+  let filesSelected = null;
+
+  function renderFilesBreadcrumb(path) {
+    const parts = path ? path.split('/').filter(Boolean) : [];
+    let html = '<a href="#" data-files-nav="">沙盒根</a>';
+    let acc = '';
+    for (const p of parts) {
+      acc = acc ? acc + '/' + p : p;
+      html += ' <span style="color:#484f58">/</span> <a href="#" data-files-nav="'+escapeHTML(acc)+'">'+escapeHTML(p)+'</a>';
+    }
+    $('filesBreadcrumb').innerHTML = html;
+  }
+
+  function filesFullPath(name) { return filesPath ? (filesPath + '/' + name) : name; }
+
+  async function loadFilesBrowser() {
+    $('filesList').innerHTML = LOADING;
+    try {
+      const d = await fetchJSON('/api/files?path='+encodeURIComponent(filesPath));
+      filesPath = d.path || '';
+      filesParent = (d.parent === null || d.parent === undefined) ? '' : String(d.parent);
+      renderFilesBreadcrumb(filesPath);
+      const entries = d.entries || [];
+      if (!entries.length) {
+        $('filesList').innerHTML = '<div class="empty">空目录</div>';
+        return;
+      }
+      $('filesList').innerHTML = entries.map(e => {
+        const full = filesFullPath(e.name);
+        const isDir = e.type === 'dir';
+        const meta = isDir ? '目录' : ('文件 · '+fmtSize(e.size||0));
+        const actions = isDir ? '' :
+          '<span class="files-actions"><button type="button" data-files-preview="'+escapeHTML(full)+'">预览</button>'
+          +'<a class="dl-link" href="/api/files/download?path='+encodeURIComponent(full)+'" download>下载</a></span>';
+        return '<div class="row files-row'+(full===filesSelected?' selected':'')+'" data-files-path="'+escapeHTML(full)+'" data-files-type="'+e.type+'">'
+          +'<div class="top"><span class="files-icon'+(isDir?' dir':'')+'">'+(isDir?'DIR':'FILE')+'</span>'
+          +'<span class="name">'+escapeHTML(e.name)+'</span>'+actions+'</div>'
+          +'<div class="n">'+escapeHTML(meta)+'</div></div>';
+      }).join('');
+    } catch(e) {
+      $('filesList').innerHTML = '<div class="empty">'+escapeHTML(e.message)+'</div>';
+    }
+  }
+
+  function navigateFiles(path) {
+    filesPath = path || '';
+    filesSelected = null;
+    $('filesPreviewHead').innerHTML = '<span class="path">← 选择文件预览, 或点击「下载」</span>';
+    $('filesPreviewBody').textContent = '';
+    loadFilesBrowser();
+  }
+
+  async function previewFile(path) {
+    filesSelected = path;
+    document.querySelectorAll('.files-row').forEach(r => r.classList.toggle('selected', r.dataset.filesPath===path));
+    $('filesPreviewHead').innerHTML =
+      '<span class="path">'+escapeHTML(path)+'</span>'
+      +'<a class="dl-link" href="/api/files/download?path='+encodeURIComponent(path)+'" download>下载</a>';
+    $('filesPreviewBody').textContent = '加载中…';
+    try {
+      const d = await fetchJSON('/api/files/preview?path='+encodeURIComponent(path));
+      const fmt = d.format === 'hex' ? ' <span style="color:#8b949e;font-size:11px;">(Hex)</span>' : '';
+      $('filesPreviewHead').innerHTML =
+        '<span class="path">'+escapeHTML(path)+fmt+' · '+fmtSize(d.size||0)+'</span>'
+        +'<a class="dl-link" href="/api/files/download?path='+encodeURIComponent(path)+'" download>下载</a>';
+      let text = d.text || '';
+      if (d.truncated) text += '\n\n… (已截断, 完整内容请下载)';
+      $('filesPreviewBody').textContent = text;
+    } catch(e) {
+      $('filesPreviewBody').textContent = '';
+      $('filesPreviewHead').innerHTML =
+        '<span class="path">'+escapeHTML(path)+'</span>'
+        +'<a class="dl-link" href="/api/files/download?path='+encodeURIComponent(path)+'" download>下载</a>';
+      $('filesPreviewBody').innerHTML = '<div class="detail-empty">'+escapeHTML(e.message)+'</div>';
+    }
+  }
+
   // ---- 符号导入表: 左侧 image 列表 / 右侧详情(该 image 的导入符号), 与事件流主从布局同构 ----
   async function loadSymbols(){ await loadSymImages(); }
   let symImages = [], selectedSymIdx = null;
@@ -993,6 +1113,16 @@
     }
     const symRow = ev.target.closest('.sym-img-row');
     if (symRow) { selectSymImage(symRow.dataset.idx); return; }
+    const filesNav = ev.target.closest('[data-files-nav]');
+    if (filesNav) { ev.preventDefault(); navigateFiles(filesNav.dataset.filesNav || ''); return; }
+    const filesPreview = ev.target.dataset && ev.target.dataset.filesPreview;
+    if (filesPreview) { ev.stopPropagation(); previewFile(filesPreview); return; }
+    const filesRow = ev.target.closest('.files-row');
+    if (filesRow) {
+      if (filesRow.dataset.filesType === 'dir') navigateFiles(filesRow.dataset.filesPath);
+      else previewFile(filesRow.dataset.filesPath);
+      return;
+    }
     const row = ev.target.closest('.row');
     if (row) selectRow(parseInt(row.dataset.seq, 10));
   });
@@ -1081,6 +1211,8 @@
     refreshStats(); refreshList({loading:true}); loadConfig();
   });
   $('dumpRefresh').addEventListener('click', loadDumpImages);
+  $('filesRefresh').addEventListener('click', () => loadFilesBrowser());
+  $('filesUp').addEventListener('click', () => navigateFiles(filesParent));
   $('dumpIpa').addEventListener('click', () => startDump('ipa'));
   $('symRefresh').addEventListener('click', loadSymbols);
   let symQTimer; $('symQ').addEventListener('input', () => { clearTimeout(symQTimer); symQTimer=setTimeout(loadSymList,200); });
@@ -1093,6 +1225,7 @@
   }
   initSplitter($('splitter'), document.querySelector('.list-pane'), document.querySelector('.workspace'));
   initSplitter($('symSplitter'), document.querySelector('#symPane .sym-img-pane'), $('symPane'));
+  initSplitter($('filesSplitter'), document.querySelector('#filesPane .files-list-pane'), $('filesPane'));
   document.addEventListener('keydown', (e) => {
     const tag = (e.target && e.target.tagName) || '';
     if (tag==='INPUT' || tag==='TEXTAREA' || tag==='SELECT' || e.target.isContentEditable) {

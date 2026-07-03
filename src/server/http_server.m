@@ -31,12 +31,13 @@
 #import "ui_float.h"
 #import "dump_manager.h"
 #import "dh_symtab.h"
+#import "dh_files.h"
 
 #define DH_HTTP_PORT_FIRST  8088
 #define DH_HTTP_PORT_LAST   8108
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
-#define DH_HTTP_VERSION     "1.10.0"
+#define DH_HTTP_VERSION     "1.11.0"
 
 static int        gListenFD = -1;
 static uint16_t   gPort     = 0;
@@ -609,6 +610,43 @@ static void handle_dump_image_download(int fd, NSDictionary *q) {
     [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil];
 }
 
+// ---- 宿主沙盒文件浏览 (只读) ----
+static void handle_files_list(int fd, NSDictionary *q) {
+    NSError *err = nil;
+    NSDictionary *d = dh_files_list_dict(q[@"path"], &err);
+    if (!d) {
+        NSInteger code = err.code;
+        send_json(fd, (code >= 400 && code < 600) ? (int)code : 400,
+                  @{@"error": err.localizedDescription ?: @"error"});
+        return;
+    }
+    send_json(fd, 200, d);
+}
+
+static void handle_files_preview(int fd, NSDictionary *q) {
+    NSUInteger limit = q[@"limit"] ? (NSUInteger)[q[@"limit"] integerValue] : 65536;
+    NSError *err = nil;
+    NSDictionary *d = dh_files_preview_dict(q[@"path"], limit, &err);
+    if (!d) {
+        NSInteger code = err.code;
+        send_json(fd, (code >= 400 && code < 600) ? (int)code : 400,
+                  @{@"error": err.localizedDescription ?: @"error"});
+        return;
+    }
+    send_json(fd, 200, d);
+}
+
+static void handle_files_download(int fd, NSDictionary *q) {
+    NSError *err = nil;
+    NSString *abs = dh_files_resolve_file(q[@"path"], &err);
+    if (!abs) {
+        send_text(fd, err.code == 404 ? 404 : 400, err.localizedDescription ?: @"error");
+        return;
+    }
+    NSString *rel = q[@"path"] ?: @"download";
+    send_file_as_download(fd, abs, [rel lastPathComponent]);
+}
+
 // ---- 符号导入表(可 hook 观测) ----
 // fishhook 只能改导入符号表 —— 这几个端点把各 image 的导入(undefined)符号暴露给面板, 让使用者
 // 当场看清「哪些可被 fishhook 拦截」, 尤其 TLS 明文接口是否在导入表里(不在=多半静态链接)。
@@ -746,6 +784,12 @@ static void handle_connection(int fd) {
                 handle_symbols_images(fd);
             } else if ([path isEqualToString:@"/api/symbols"]) {
                 handle_symbols(fd, q);
+            } else if ([path isEqualToString:@"/api/files"]) {
+                handle_files_list(fd, q);
+            } else if ([path isEqualToString:@"/api/files/preview"]) {
+                handle_files_preview(fd, q);
+            } else if ([path isEqualToString:@"/api/files/download"]) {
+                handle_files_download(fd, q);
             } else if ([path isEqualToString:@"/favicon.ico"]) {
                 send_response(fd, 204, @"No Content", @"image/x-icon", [NSData data]);
             } else {
