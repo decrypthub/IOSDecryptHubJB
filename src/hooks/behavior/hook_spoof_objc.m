@@ -15,6 +15,7 @@
 #define DH_BOARD DH_DIAG_GENERAL
 #import "dh_health.h"
 #import "dh_spoof.h"
+#import "dh_capture.h"
 
 static void spoof_log(NSString *what, NSString *val) {
     DHLogEntry *e = [DHLogEntry new];
@@ -101,6 +102,30 @@ static NSUUID *swz_idfa(id self, SEL _cmd) {
     return orig_idfa(self, _cmd);
 }
 
+// ---- UIApplication.canOpenURL: (越狱 URL scheme 隐藏 + 观测) ----
+static void scheme_log(NSString *scheme, NSString *op) {
+    DHLogEntry *e = [DHLogEntry new];
+    e.category  = DHCategorySystem;
+    e.algorithm = @"canOpenURL";
+    e.operation = op;
+    e.detail    = [scheme stringByAppendingString:@"://"];
+    e.timestamp = DHTimestampNow();
+    e.callStack = DHCallStackFiltered();
+    [[DHLogStore shared] append:e];
+}
+static BOOL (*orig_canOpenURL)(id, SEL, id);
+static BOOL swz_canOpenURL(id self, SEL _cmd, id url) {
+    NSString *scheme = [url respondsToSelector:@selector(scheme)] ? [url scheme] : nil;
+    const char *cs = scheme.UTF8String;
+    if (cs && dh_spoof_jb_should_hide_scheme(cs)) {
+        scheme_log(scheme, @"已隐藏");
+        return NO;   // 隐藏 cydia:// sileo:// filza:// 等越狱 App 探测
+    }
+    if (scheme.length && dh_capture_sub_enabled(DH_CAP_ENV_PROBE))
+        scheme_log(scheme, @"查询");
+    return orig_canOpenURL(self, _cmd, url);
+}
+
 void dh_install_spoof_objc_hooks(void) {
     // 用单例实例的真实类做 swizzle(处理类簇/私有子类覆盖同名方法的情形)。
     Class uidev = dh_singleton_class(@"UIDevice", @selector(currentDevice));
@@ -115,7 +140,11 @@ void dh_install_spoof_objc_hooks(void) {
     Class asim = dh_singleton_class(@"ASIdentifierManager", @selector(sharedManager));
     BOOL c = dh_swizzle(asim, @selector(advertisingIdentifier), (IMP)swz_idfa, (IMP *)&orig_idfa);
 
-    char dbg[96];
-    snprintf(dbg, sizeof(dbg), "spoof-objc swizzle: UIDevice=%d NSProcessInfo=%d ASIdentifierManager=%d", a, b, c);
+    // UIApplication.canOpenURL: —— 越狱 URL scheme 隐藏 + 观测。
+    Class uiapp = dh_singleton_class(@"UIApplication", @selector(sharedApplication));
+    BOOL d = dh_swizzle(uiapp, @selector(canOpenURL:), (IMP)swz_canOpenURL, (IMP *)&orig_canOpenURL);
+
+    char dbg[128];
+    snprintf(dbg, sizeof(dbg), "spoof-objc swizzle: UIDevice=%d NSProcessInfo=%d ASIdentifierManager=%d canOpenURL=%d", a, b, c, d);
     dh_diag_append(DH_DIAG_GENERAL, "INFO", dbg);
 }

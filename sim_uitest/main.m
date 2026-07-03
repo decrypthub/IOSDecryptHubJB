@@ -11,8 +11,18 @@
 #import <CommonCrypto/CommonCryptor.h>
 #import <CommonCrypto/CommonKeyDerivation.h>
 #import <Security/Security.h>
+#import <AdSupport/AdSupport.h>
 #import <dlfcn.h>
 #import <unistd.h>
+#import <sys/stat.h>
+#import <sys/sysctl.h>
+#import <sys/utsname.h>
+#import <mach-o/dyld.h>
+
+extern int ptrace(int, pid_t, caddr_t, int);
+#ifndef P_TRACED
+#define P_TRACED 0x00000800
+#endif
 
 // 运行时从注入的 dylib 取真实服务地址(端口在 8088..8108 间自动顺延), 避免写死端口
 static NSString *gUrlHint = @"";
@@ -149,12 +159,79 @@ static void do_dlsym(void) {
     }
 }
 
+// ==================== 伪装/绕过自检(自检 tab) ====================
+// 每项直接调用检测手法, 反推伪装是否生效, 返回可读结果。同时这些调用会被 dylib 观测并落日志。
+
+static NSString *chk_jailbreak_files(void) {
+    const char *paths[] = { "/Applications/Cydia.app", "/bin/bash", "/etc/apt", "/var/jb", "/usr/sbin/sshd" };
+    NSMutableString *s = [NSMutableString stringWithString:@"[越狱文件探测]\n"];
+    for (int i = 0; i < 5; i++) {
+        struct stat st;
+        BOOL visible = (access(paths[i], F_OK) == 0) || (stat(paths[i], &st) == 0);
+        [s appendFormat:@"  %s → %@\n", paths[i], visible ? @"可见!(未隐藏)" : @"已隐藏"];
+    }
+    return s;
+}
+
+static NSString *chk_url_schemes(void) {
+    NSArray<NSString *> *schemes = @[ @"cydia", @"sileo", @"filza", @"zbra" ];
+    NSMutableString *s = [NSMutableString stringWithString:@"[URL Scheme 探测 canOpenURL]\n"];
+    UIApplication *app = [UIApplication sharedApplication];
+    for (NSString *sc in schemes) {
+        NSURL *u = [NSURL URLWithString:[sc stringByAppendingString:@"://package"]];
+        BOOL can = [app canOpenURL:u];
+        [s appendFormat:@"  %@:// → %@\n", sc, can ? @"可打开!(未隐藏)" : @"已隐藏(canOpenURL=NO)"];
+    }
+    return s;
+}
+
+static NSString *chk_dyld_images(void) {
+    const char *marks[] = { "decrypt_helper", "substrate", "TweakInject", "libhooker", "ellekit" };
+    uint32_t cnt = _dyld_image_count();
+    int hits = 0;
+    for (uint32_t i = 0; i < cnt; i++) {
+        const char *n = _dyld_get_image_name(i);
+        if (!n) continue;
+        for (int j = 0; j < 5; j++) if (strstr(n, marks[j])) { hits++; break; }
+    }
+    return [NSString stringWithFormat:@"[dyld image 遍历]\n  已加载 %u 个 image, 命中注入标记 %d 个 → %@\n",
+            cnt, hits, hits == 0 ? @"注入痕迹已隐藏" : @"仍可见!"];
+}
+
+static NSString *chk_antidebug(void) {
+    NSMutableString *s = [NSMutableString stringWithString:@"[反调试]\n"];
+    int p = ptrace(31 /*PT_DENY_ATTACH*/, 0, 0, 0);
+    [s appendFormat:@"  ptrace(PT_DENY_ATTACH) → 返回 %d %@\n", p, p == 0 ? @"(空转,已绕过)" : @"(未绕过)"];
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+    struct kinfo_proc info; size_t sz = sizeof(info);
+    if (sysctl(mib, 4, &info, &sz, NULL, 0) == 0) {
+        BOOL traced = (info.kp_proc.p_flag & P_TRACED) != 0;
+        [s appendFormat:@"  sysctl P_TRACED → %@\n", traced ? @"被跟踪!" : @"未被跟踪(已清)"];
+    }
+    return s;
+}
+
+static NSString *chk_device_info(void) {
+    NSMutableString *s = [NSMutableString stringWithString:@"[设备信息(改机开则为伪造值)]\n"];
+    UIDevice *d = [UIDevice currentDevice];
+    [s appendFormat:@"  UIDevice.systemVersion = %@\n", d.systemVersion];
+    [s appendFormat:@"  UIDevice.name = %@\n", d.name];
+    [s appendFormat:@"  IDFV = %@\n", d.identifierForVendor.UUIDString];
+    char m[64] = {0}; size_t ml = sizeof(m);
+    if (sysctlbyname("hw.machine", m, &ml, NULL, 0) == 0) [s appendFormat:@"  sysctl hw.machine = %s\n", m];
+    struct utsname un; if (uname(&un) == 0) [s appendFormat:@"  uname.machine = %s\n", un.machine];
+    NSUUID *idfa = [[ASIdentifierManager sharedManager] advertisingIdentifier];
+    [s appendFormat:@"  IDFA = %@\n", idfa.UUIDString];
+    return s;
+}
+
 // ==================== 测试台 VC ====================
 @interface TestVC : UIViewController
 @property (nonatomic, strong) UILabel *status;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UIButton *> *btnMap;
 @property (nonatomic, strong) NSMutableArray<UIScrollView *> *tabScrolls;
 @property (nonatomic, strong) UISegmentedControl *seg;
+@property (nonatomic, strong) UITextView *checkOut;
 - (BOOL)triggerByKey:(NSString *)key;
 @end
 
@@ -180,7 +257,7 @@ static void do_dlsym(void) {
     self.status.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.status];
 
-    self.seg = [[UISegmentedControl alloc] initWithItems:@[@"加解密", @"系统"]];
+    self.seg = [[UISegmentedControl alloc] initWithItems:@[@"加解密", @"系统", @"伪装自检"]];
     self.seg.selectedSegmentIndex = 0;
     self.seg.translatesAutoresizingMaskIntoConstraints = NO;
     [self.seg addTarget:self action:@selector(onSeg:) forControlEvents:UIControlEventValueChanged];
@@ -226,6 +303,27 @@ static void do_dlsym(void) {
     [self addGroup:t1 title:@"动态库" color:purple buttons:@[@"dlopen 模块", @"dlsym 符号"]
               sels:@[@"onDlopen",@"onDlsym"] keys:@[@"dlopen",@"dlsym"]];
 
+    // --- tab 2: 伪装自检(验证越狱绕过 / 改机 / 注入隐藏是否生效) ---
+    UIStackView *t2 = [self addTabStack];
+    [self addGroup:t2 title:@"越狱绕过" color:green buttons:@[@"越狱文件探测",@"URL Scheme",@"dyld 遍历"]
+              sels:@[@"onChkJB",@"onChkURL",@"onChkDyld"] keys:@[@"chkjb",@"chkurl",@"chkdyld"]];
+    [self addGroup:t2 title:@"反调试 / 改机" color:orange buttons:@[@"反调试",@"设备信息",@"全部自检"]
+              sels:@[@"onChkAnti",@"onChkDevice",@"onChkAll"] keys:@[@"chkanti",@"chkdevice",@"chkall"]];
+    UILabel *rl = [UILabel new];
+    rl.text = @"自检结果(这些调用也会被 dylib 观测并落日志):";
+    rl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+    rl.textColor = [UIColor colorWithWhite:0.5 alpha:1.0];
+    [t2 addArrangedSubview:rl];
+    self.checkOut = [UITextView new];
+    self.checkOut.editable = NO;
+    self.checkOut.backgroundColor = [UIColor colorWithRed:0.05 green:0.06 blue:0.09 alpha:1.0];
+    self.checkOut.textColor = [UIColor colorWithRed:0.80 green:0.86 blue:0.90 alpha:1.0];
+    self.checkOut.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
+    self.checkOut.layer.cornerRadius = 8;
+    self.checkOut.text = @"点上面按钮运行自检…\n";
+    [self.checkOut.heightAnchor constraintEqualToConstant:300].active = YES;
+    [t2 addArrangedSubview:self.checkOut];
+
     self.tabScrolls[0].hidden = NO;   // 默认显示加解密
 
     __weak typeof(self) ws = self;
@@ -242,7 +340,8 @@ static void do_dlsym(void) {
     if ([[NSProcessInfo processInfo].environment[@"DH_AUTOTEST"] isEqualToString:@"1"]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             for (NSString *k in @[@"md5",@"sha256",@"hmac",@"aes",@"3des",@"rsasign",@"pbkdf",
-                                  @"fwrite",@"fread",@"fdel",@"frename",@"dlopen",@"dlsym"])
+                                  @"fwrite",@"fread",@"fdel",@"frename",@"dlopen",@"dlsym",
+                                  @"chkjb",@"chkurl",@"chkdyld",@"chkanti",@"chkdevice"])
                 [ws triggerByKey:k];
         });
     }
@@ -363,6 +462,26 @@ static void do_dlsym(void) {
 // 系统
 - (void)onDlopen   { do_dlopen();      [self flash:@"dlopen 模块"]; }
 - (void)onDlsym    { do_dlsym();       [self flash:@"dlsym 符号"]; }
+// 伪装自检
+- (void)appendCheck:(NSString *)text {
+    self.checkOut.text = [self.checkOut.text stringByAppendingString:[text stringByAppendingString:@"\n"]];
+    NSRange end = NSMakeRange(self.checkOut.text.length, 0);
+    [self.checkOut scrollRangeToVisible:end];
+}
+- (void)onChkJB     { [self appendCheck:chk_jailbreak_files()]; [self flash:@"越狱文件探测"]; }
+- (void)onChkURL    { [self appendCheck:chk_url_schemes()];     [self flash:@"URL Scheme 探测"]; }
+- (void)onChkDyld   { [self appendCheck:chk_dyld_images()];     [self flash:@"dyld 遍历"]; }
+- (void)onChkAnti   { [self appendCheck:chk_antidebug()];       [self flash:@"反调试自检"]; }
+- (void)onChkDevice { [self appendCheck:chk_device_info()];     [self flash:@"设备信息"]; }
+- (void)onChkAll {
+    self.checkOut.text = @"";
+    [self appendCheck:chk_jailbreak_files()];
+    [self appendCheck:chk_url_schemes()];
+    [self appendCheck:chk_dyld_images()];
+    [self appendCheck:chk_antidebug()];
+    [self appendCheck:chk_device_info()];
+    [self flash:@"全部自检完成"];
+}
 @end
 
 // ==================== Scene / App ====================
