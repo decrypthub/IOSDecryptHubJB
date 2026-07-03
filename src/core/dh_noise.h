@@ -1,9 +1,7 @@
-// dh_noise.h — 噪点特征串管理 (ObjC, 变长字符串列表)
+// dh_noise.h — 噪点特征串管理 (按板块独立: 加解密 / 系统)
 //
-// 系统本身高频调用一些"业务无关"的 API(如 MobileGestalt MGCopyAnswer* 系列内部缓存键),
-// 会在摘要/HMAC 等 hook 里以 input 形式出现, 混进主事件流干扰渗透测试者注意力。这里维护一份
-// 用户可增删的"噪点特征串"列表, 供 log_store.m 的 append: 判定是否把条目改投到噪点桶。
-// 持久化到沙箱(Documents/.dh_noise.conf), 格式: 第一行 1/0(总开关), 之后每行一条特征串。
+// 各板块维护独立的启用开关与特征串列表; 与特征串完全相等时改投到该板块的噪声桶,
+// 不与其它板块混用。持久化到 Documents/.dh_noise.conf (v2 格式)。
 
 #ifndef DH_NOISE_H
 #define DH_NOISE_H
@@ -12,19 +10,27 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-// 从沙箱加载持久化配置(应在安装 hook 之前调用一次)。confPath = .dh_noise.conf 绝对路径;
-// 文件不存在则用默认值(enabled=YES, patterns=["MGCopyAnswer"])。
+typedef NS_ENUM(NSInteger, DHNoiseBoard) {
+    DHNoiseBoardCrypto = 0,   // 加解密 (摘要/HMAC/对称/非对称/KDF)
+    DHNoiseBoardSys    = 1,   // 系统 (文件读写 + 模块加载)
+    DHNoiseBoardCount  = 2,
+};
+
+// 从沙箱加载持久化配置(应在安装 hook 之前调用)。
 void dh_noise_load(NSString *confPath);
 
-BOOL dh_noise_enabled(void);
-void dh_noise_set_enabled(BOOL on);   // 立即存盘
+BOOL dh_noise_enabled_for_board(DHNoiseBoard board);
+void dh_noise_set_enabled_for_board(DHNoiseBoard board, BOOL on);
 
-NSArray<NSString *> *dh_noise_patterns(void);
-BOOL dh_noise_add_pattern(NSString *pattern);      // 去重(忽略大小写); 立即存盘; 已存在返回 NO
-BOOL dh_noise_remove_pattern(NSString *pattern);   // 不存在返回 NO; 立即存盘
+NSArray<NSString *> *dh_noise_patterns_for_board(DHNoiseBoard board);
+BOOL dh_noise_add_pattern_for_board(DHNoiseBoard board, NSString *pattern);
+BOOL dh_noise_remove_pattern_for_board(DHNoiseBoard board, NSString *pattern);
 
-// 对当前特征串列表做不区分大小写子串匹配 (总开关关闭时也照常匹配, 由调用方结合 dh_noise_enabled 判断)。
-BOOL dh_noise_matches(NSString * _Nullable text);
+// 对指定板块的特征串做不区分大小写的完全相等匹配。
+BOOL dh_noise_matches_for_board(DHNoiseBoard board, NSString * _Nullable text);
+
+// 根据日志分类判定所属噪声板块 (file/system → 系统; 其余加解密类 → 加解密)。
+DHNoiseBoard dh_noise_board_for_category(NSInteger category);
 
 NS_ASSUME_NONNULL_END
 

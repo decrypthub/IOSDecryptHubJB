@@ -1,25 +1,66 @@
 // dh_noise.m — 见 dh_noise.h
 #import "dh_noise.h"
 #import "dh_health.h"
+#import "log_store.h"
 
-static NSMutableArray<NSString *> *gPatterns = nil;
-static BOOL          gEnabled  = YES;
+static NSMutableArray<NSString *> *gPatterns[DHNoiseBoardCount];
+static BOOL          gEnabled[DHNoiseBoardCount];
 static NSString     *gConfPath = nil;
 static NSLock       *gLock     = nil;
 
 static void dh_noise_set_defaults_locked(void) {
-    gEnabled  = YES;
-    gPatterns = [NSMutableArray arrayWithObject:@"MGCopyAnswer"];
+    for (int i = 0; i < DHNoiseBoardCount; i++) {
+        gEnabled[i]  = YES;
+        gPatterns[i] = [NSMutableArray array];
+    }
+    [gPatterns[DHNoiseBoardCrypto] addObject:@"MGCopyAnswer"];
 }
 
-// 须持有 gLock 调用。格式: 第一行 1/0, 之后每行一条特征串。
+// v2 格式:
+//   第一行 "v2"
+//   [CRYPTO] / enabled / patterns... / -- / [SYS] / enabled / patterns...
 static void dh_noise_save_locked(void) {
     if (!gConfPath) return;
-    NSMutableString *txt = [NSMutableString stringWithFormat:@"%d\n", gEnabled ? 1 : 0];
-    for (NSString *p in gPatterns) [txt appendFormat:@"%@\n", p];
+    NSMutableString *txt = [NSMutableString stringWithString:@"v2\n"];
+    const char *tags[] = { "CRYPTO", "SYS" };
+    for (int b = 0; b < DHNoiseBoardCount; b++) {
+        [txt appendFormat:@"[%s]\n%d\n", tags[b], gEnabled[b] ? 1 : 0];
+        for (NSString *p in gPatterns[b]) [txt appendFormat:@"%@\n", p];
+        if (b < DHNoiseBoardCount - 1) [txt appendString:@"--\n"];
+    }
     int saved = dh_in_hook; dh_in_hook = 1;
     [txt writeToFile:gConfPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
     dh_in_hook = saved;
+}
+
+static void dh_noise_load_v1(NSArray<NSString *> *lines) {
+    if (lines.count < 1) return;
+    gEnabled[DHNoiseBoardCrypto] = [lines[0] isEqualToString:@"1"];
+    gEnabled[DHNoiseBoardSys]    = YES;
+    gPatterns[DHNoiseBoardCrypto] = [NSMutableArray array];
+    gPatterns[DHNoiseBoardSys]    = [NSMutableArray array];
+    for (NSUInteger i = 1; i < lines.count; i++) {
+        NSString *p = lines[i];
+        if (p.length) [gPatterns[DHNoiseBoardCrypto] addObject:p];
+    }
+}
+
+static void dh_noise_load_v2(NSArray<NSString *> *lines) {
+    int board = -1;
+    BOOL afterEnabled = NO;
+    for (NSString *line in lines) {
+        if ([line isEqualToString:@"v2"]) continue;
+        if ([line isEqualToString:@"[CRYPTO]"]) { board = DHNoiseBoardCrypto; afterEnabled = NO; continue; }
+        if ([line isEqualToString:@"[SYS]"])    { board = DHNoiseBoardSys;    afterEnabled = NO; continue; }
+        if ([line isEqualToString:@"--"]) continue;
+        if (board < 0) continue;
+        if (!afterEnabled) {
+            gEnabled[board] = [line isEqualToString:@"1"];
+            afterEnabled = YES;
+            continue;
+        }
+        if (line.length) [gPatterns[board] addObject:line];
+    }
 }
 
 void dh_noise_load(NSString *confPath) {
@@ -33,76 +74,82 @@ void dh_noise_load(NSString *confPath) {
         dh_in_hook = saved;
         if (txt.length) {
             NSArray<NSString *> *lines = [txt componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
-            if (lines.count >= 1) {
-                gEnabled = [lines[0] isEqualToString:@"1"];
-                NSMutableArray<NSString *> *pats = [NSMutableArray array];
-                for (NSUInteger i = 1; i < lines.count; i++) {
-                    NSString *p = lines[i];
-                    if (p.length) [pats addObject:p];
-                }
-                gPatterns = pats;   // 允许空列表(用户把默认特征串也删了)
+            NSMutableArray *trimmed = [NSMutableArray array];
+            for (NSString *l in lines) {
+                NSString *t = [l stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                if (t.length) [trimmed addObject:t];
             }
+            if (trimmed.count && [trimmed[0] isEqualToString:@"v2"]) dh_noise_load_v2(trimmed);
+            else dh_noise_load_v1(trimmed);
         }
     }
     [gLock unlock];
 }
 
-BOOL dh_noise_enabled(void) {
-    if (!gLock) return gEnabled;
-    [gLock lock]; BOOL v = gEnabled; [gLock unlock];
+BOOL dh_noise_enabled_for_board(DHNoiseBoard board) {
+    if (board < 0 || board >= DHNoiseBoardCount) return YES;
+    if (!gLock) return gEnabled[board];
+    [gLock lock]; BOOL v = gEnabled[board]; [gLock unlock];
     return v;
 }
 
-void dh_noise_set_enabled(BOOL on) {
+void dh_noise_set_enabled_for_board(DHNoiseBoard board, BOOL on) {
+    if (board < 0 || board >= DHNoiseBoardCount) return;
     if (!gLock) gLock = [NSLock new];
     [gLock lock];
-    gEnabled = on;
+    gEnabled[board] = on;
     dh_noise_save_locked();
     [gLock unlock];
 }
 
-NSArray<NSString *> *dh_noise_patterns(void) {
+NSArray<NSString *> *dh_noise_patterns_for_board(DHNoiseBoard board) {
+    if (board < 0 || board >= DHNoiseBoardCount) return @[];
     if (!gLock) return @[];
-    [gLock lock]; NSArray *r = [gPatterns copy]; [gLock unlock];
+    [gLock lock]; NSArray *r = [gPatterns[board] copy]; [gLock unlock];
     return r;
 }
 
-BOOL dh_noise_add_pattern(NSString *pattern) {
-    if (pattern.length == 0) return NO;
+BOOL dh_noise_add_pattern_for_board(DHNoiseBoard board, NSString *pattern) {
+    if (board < 0 || board >= DHNoiseBoardCount || pattern.length == 0) return NO;
     if (!gLock) gLock = [NSLock new];
     [gLock lock];
-    for (NSString *p in gPatterns) {
+    for (NSString *p in gPatterns[board]) {
         if ([p caseInsensitiveCompare:pattern] == NSOrderedSame) { [gLock unlock]; return NO; }
     }
-    [gPatterns addObject:pattern];
+    [gPatterns[board] addObject:pattern];
     dh_noise_save_locked();
     [gLock unlock];
     return YES;
 }
 
-BOOL dh_noise_remove_pattern(NSString *pattern) {
-    if (!gLock) return NO;
+BOOL dh_noise_remove_pattern_for_board(DHNoiseBoard board, NSString *pattern) {
+    if (board < 0 || board >= DHNoiseBoardCount || !gLock) return NO;
     [gLock lock];
     NSUInteger idx = NSNotFound;
-    for (NSUInteger i = 0; i < gPatterns.count; i++) {
-        if ([gPatterns[i] caseInsensitiveCompare:pattern] == NSOrderedSame) { idx = i; break; }
+    for (NSUInteger i = 0; i < gPatterns[board].count; i++) {
+        if ([gPatterns[board][i] caseInsensitiveCompare:pattern] == NSOrderedSame) { idx = i; break; }
     }
     if (idx == NSNotFound) { [gLock unlock]; return NO; }
-    [gPatterns removeObjectAtIndex:idx];
+    [gPatterns[board] removeObjectAtIndex:idx];
     dh_noise_save_locked();
     [gLock unlock];
     return YES;
 }
 
-BOOL dh_noise_matches(NSString *text) {
-    if (text.length == 0 || !gLock) return NO;
+BOOL dh_noise_matches_for_board(DHNoiseBoard board, NSString *text) {
+    if (board < 0 || board >= DHNoiseBoardCount || text.length == 0 || !gLock) return NO;
     [gLock lock];
-    NSArray<NSString *> *pats = [gPatterns copy];
+    NSArray<NSString *> *pats = [gPatterns[board] copy];
     [gLock unlock];
     if (pats.count == 0) return NO;
     NSString *lower = [text lowercaseString];
     for (NSString *p in pats) {
-        if (p.length && [lower containsString:[p lowercaseString]]) return YES;
+        if (p.length && [lower isEqualToString:[p lowercaseString]]) return YES;
     }
     return NO;
+}
+
+DHNoiseBoard dh_noise_board_for_category(NSInteger category) {
+    if (category == DHCategoryFile || category == DHCategorySystem) return DHNoiseBoardSys;
+    return DHNoiseBoardCrypto;
 }

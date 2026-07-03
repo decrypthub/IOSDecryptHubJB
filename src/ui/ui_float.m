@@ -12,6 +12,7 @@
 #import <UIKit/UIKit.h>
 #import "ui_logview.h"
 #import "log_store.h"
+#import "dh_noise.h"
 #import "http_server.h"
 #import "dh_health.h"
 
@@ -203,13 +204,14 @@ static DHFloatingController *gFloat = nil;
     NSUInteger asym = [s countForCategory:DHCategoryAsymmetric];
     NSUInteger file = [s countForCategory:DHCategoryFile];
     NSUInteger sys = [s countForCategory:DHCategorySystem];
-    NSUInteger noise = [s noiseCount];
+    NSUInteger noiseCrypto = [s noiseCountForBoard:DHNoiseBoardCrypto];
+    NSUInteger noiseSys    = [s noiseCountForBoard:DHNoiseBoardSys];
     NSString *state = s.paused ? @"已暂停" : @"运行中";
     self.statsLabel.text = [NSString stringWithFormat:
-        @"%@  总 %lu\n摘要 %lu  HMAC %lu  对称 %lu  RSA %lu\n文件 %lu  系统 %lu  噪声 %lu",
+        @"%@  总 %lu\n摘要 %lu  HMAC %lu  对称 %lu  RSA %lu\n系统 %lu  加密噪声 %lu  系统噪声 %lu",
         state, (unsigned long)[s totalCount],
         (unsigned long)d, (unsigned long)h, (unsigned long)sym, (unsigned long)asym,
-        (unsigned long)file, (unsigned long)sys, (unsigned long)noise];
+        (unsigned long)(file + sys), (unsigned long)noiseCrypto, (unsigned long)noiseSys];
 
     // fail-loud: 把健康状态显示出来 —— 服务失败/hook未挂上/落盘失败都用红字明示,
     // 而不是恒显"启动中…"假装一切正常.

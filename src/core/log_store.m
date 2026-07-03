@@ -11,8 +11,8 @@
 
 @interface DHLogStore () {
     NSMutableArray<DHLogEntry *> *_buckets[DHCategoryOther + 1];   // 每类独立环形缓冲, 互不挤占
-    NSMutableArray<DHLogEntry *> *_noiseBucket;  // 命中噪点特征的条目改投到这里, 不进 _buckets
-    NSUInteger                    _noiseCount;
+    NSMutableArray<DHLogEntry *> *_noiseBuckets[DHNoiseBoardCount];  // 各板块独立噪声桶
+    NSUInteger                    _noiseCount[DHNoiseBoardCount];
     dispatch_queue_t              _queue;       // 写入串行队列
     NSUInteger                    _categoryCounts[DHCategoryOther + 1];
     uint64_t                      _seqCounter;
@@ -42,8 +42,10 @@ static const unsigned long long kDefaultMaxLogFileBytes = 50ULL * 1024 * 1024;  
 - (instancetype)init {
     if ((self = [super init])) {
         for (int c = 0; c <= DHCategoryOther; c++) _buckets[c] = [NSMutableArray array];
-        _noiseBucket = [NSMutableArray array];
-        _noiseCount = 0;
+        for (int b = 0; b < DHNoiseBoardCount; b++) {
+            _noiseBuckets[b] = [NSMutableArray array];
+            _noiseCount[b] = 0;
+        }
         _queue = dispatch_queue_create("com.decrypthelper.logstore", DISPATCH_QUEUE_SERIAL);
         _seqCounter = 0;
         memset(_categoryCounts, 0, sizeof(_categoryCounts));
@@ -116,10 +118,10 @@ static const unsigned long long kDefaultMaxLogFileBytes = 50ULL * 1024 * 1024;  
     return total;
 }
 
-// 噪点判定: 对 input 的 UTF-8 内容与 detail 各做一次特征串子串匹配, 任一命中即噪点。
-static BOOL dh_noise_entry_matches(DHLogEntry *entry) {
-    if (dh_noise_matches(DHUTF8FromData(entry.input))) return YES;
-    if (dh_noise_matches(entry.detail)) return YES;
+// 噪点判定: 仅对该条目所属板块的特征串做匹配。
+static BOOL dh_noise_entry_matches_board(DHLogEntry *entry, DHNoiseBoard board) {
+    if (dh_noise_matches_for_board(board, DHUTF8FromData(entry.input))) return YES;
+    if (dh_noise_matches_for_board(board, entry.detail)) return YES;
     return NO;
 }
 
@@ -127,14 +129,15 @@ static BOOL dh_noise_entry_matches(DHLogEntry *entry) {
     if (self.paused || entry == nil) return;
     NSInteger ci = (entry.category >= 0 && entry.category <= DHCategoryOther) ? entry.category : DHCategoryOther;
     if (dh_capture_cat_paused((int)ci)) return;            // 该分类已暂停(单一真相源在 dh_capture, 已持久化)
-    BOOL noisy = dh_noise_enabled() && dh_noise_entry_matches(entry);
+    DHNoiseBoard board = dh_noise_board_for_category(ci);
+    BOOL noisy = dh_noise_enabled_for_board(board) && dh_noise_entry_matches_board(entry, board);
     dispatch_async(_queue, ^{
         entry.seq = ++self->_seqCounter;
-        NSMutableArray *b = noisy ? self->_noiseBucket : self->_buckets[ci];
+        NSMutableArray *b = noisy ? self->_noiseBuckets[board] : self->_buckets[ci];
         [b addObject:entry];
         if (b.count > self->_maxPerCategory)
             [b removeObjectsInRange:NSMakeRange(0, b.count - self->_maxPerCategory)];
-        if (noisy) self->_noiseCount++;
+        if (noisy) self->_noiseCount[board]++;
         else       self->_categoryCounts[ci]++;
         [self _persist:entry];   // 噪点条目仍照常落盘, 保持「崩溃可闭环取证」承诺
     });
@@ -159,11 +162,20 @@ static BOOL dh_noise_entry_matches(DHLogEntry *entry) {
     return all;
 }
 
-// 取某分类切片: -2=加密组(0..3) 合并排序; 0..Other=单桶(本就 seq 升序); 其它=全部。须在 _queue 内调用。
+// 取某分类切片: -2=加密组(0..3); -3=系统组(文件+模块); 0..Other=单桶; 其它=全部。须在 _queue 内调用。
 - (NSArray<DHLogEntry *> *)_categorySliceLocked:(NSInteger)cat {
     if (cat == -2) {
         NSMutableArray *m = [NSMutableArray array];
         for (int c = DHCategoryDigest; c <= DHCategoryAsymmetric; c++) [m addObjectsFromArray:_buckets[c]];
+        [m sortUsingComparator:^NSComparisonResult(DHLogEntry *a, DHLogEntry *b) {
+            return a.seq < b.seq ? NSOrderedAscending : (a.seq > b.seq ? NSOrderedDescending : NSOrderedSame);
+        }];
+        return m;
+    }
+    if (cat == -3) {
+        NSMutableArray *m = [NSMutableArray array];
+        [m addObjectsFromArray:_buckets[DHCategoryFile]];
+        [m addObjectsFromArray:_buckets[DHCategorySystem]];
         [m sortUsingComparator:^NSComparisonResult(DHLogEntry *a, DHLogEntry *b) {
             return a.seq < b.seq ? NSOrderedAscending : (a.seq > b.seq ? NSOrderedDescending : NSOrderedSame);
         }];
@@ -306,10 +318,12 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
             }
         }
         if (!r) {
-            NSMutableArray *b = self->_noiseBucket;
-            for (NSInteger i = (NSInteger)b.count - 1; i >= 0; i--) {
-                DHLogEntry *e = b[i];
-                if (e.seq == seq) { r = e; break; }
+            for (int b = 0; b < DHNoiseBoardCount && !r; b++) {
+                NSMutableArray *bucket = self->_noiseBuckets[b];
+                for (NSInteger i = (NSInteger)bucket.count - 1; i >= 0; i--) {
+                    DHLogEntry *e = bucket[i];
+                    if (e.seq == seq) { r = e; break; }
+                }
             }
         }
     });
@@ -349,6 +363,11 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
             for (int c = DHCategoryDigest; c <= DHCategoryAsymmetric; c++) {
                 [self->_buckets[c] removeAllObjects]; self->_categoryCounts[c] = 0;
             }
+        } else if (cat == -3) {     // 系统组(文件+模块)
+            [self->_buckets[DHCategoryFile] removeAllObjects];
+            [self->_buckets[DHCategorySystem] removeAllObjects];
+            self->_categoryCounts[DHCategoryFile] = 0;
+            self->_categoryCounts[DHCategorySystem] = 0;
         } else if (cat >= 0 && cat <= DHCategoryOther) {
             [self->_buckets[cat] removeAllObjects]; self->_categoryCounts[cat] = 0;
         }
@@ -356,9 +375,10 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
     });
 }
 
-- (NSArray<DHLogEntry *> *)snapshotNoiseMatching:(NSString *)keyword {
+- (NSArray<DHLogEntry *> *)snapshotNoiseMatching:(NSString *)keyword board:(NSInteger)board {
+    if (board < 0 || board >= DHNoiseBoardCount) board = DHNoiseBoardCrypto;
     __block NSArray *src = nil;
-    dispatch_sync(_queue, ^{ src = [self->_noiseBucket copy]; });
+    dispatch_sync(_queue, ^{ src = [self->_noiseBuckets[board] copy]; });
     if (!keyword || keyword.length == 0) return src;
 
     NSMutableArray *out = [NSMutableArray array];
@@ -376,16 +396,18 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
     return out;
 }
 
-- (NSUInteger)noiseCount {
+- (NSUInteger)noiseCountForBoard:(NSInteger)board {
+    if (board < 0 || board >= DHNoiseBoardCount) board = DHNoiseBoardCrypto;
     __block NSUInteger n;
-    dispatch_sync(_queue, ^{ n = self->_noiseCount; });
+    dispatch_sync(_queue, ^{ n = self->_noiseCount[board]; });
     return n;
 }
 
-- (void)clearNoise {
+- (void)clearNoiseForBoard:(NSInteger)board {
+    if (board < 0 || board >= DHNoiseBoardCount) board = DHNoiseBoardCrypto;
     dispatch_async(_queue, ^{
-        [self->_noiseBucket removeAllObjects];
-        self->_noiseCount = 0;
+        [self->_noiseBuckets[board] removeAllObjects];
+        self->_noiseCount[board] = 0;
     });
 }
 
@@ -414,13 +436,16 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
 
 - (NSArray<DHLogEntry *> *)snapshotMatching:(NSString *)keyword
                                    category:(NSInteger)categoryOrMinusOne
-                                    minSize:(NSUInteger)minBytes {
+                               minInputSize:(NSUInteger)minBytes
+                               maxInputSize:(NSUInteger)maxBytes {
     NSArray<DHLogEntry *> *base = [self snapshotMatching:keyword category:categoryOrMinusOne];
-    if (minBytes == 0) return base;
+    if (minBytes == 0 && maxBytes == 0) return base;
     NSMutableArray *out = [NSMutableArray array];
     for (DHLogEntry *e in base) {
-        NSUInteger maxLen = MAX(e.input.length, e.output.length);
-        if (maxLen >= minBytes) [out addObject:e];
+        NSUInteger inLen = e.input.length;
+        if (minBytes > 0 && inLen < minBytes) continue;
+        if (maxBytes > 0 && inLen > maxBytes) continue;
+        [out addObject:e];
     }
     return out;
 }

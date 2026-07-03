@@ -64,13 +64,13 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 
 // 清空 (内存 + 文件)
 - (void)clearAll;
-// 仅清某分类的内存日志 (0..7 或 -2 加密组), 不动落盘文件
+// 仅清某分类的内存日志 (0..7 或 -2 加密组 或 -3 系统组=文件+模块), 不动落盘文件
 - (void)clearCategory:(NSInteger)cat;
 
-// ===== 噪点日志 (命中 dh_noise 特征串的条目改投到独立桶, 不进主事件流, 仍照常落盘) =====
-- (NSArray<DHLogEntry *> *)snapshotNoiseMatching:(nullable NSString *)keyword;
-- (NSUInteger)noiseCount;
-- (void)clearNoise;   // 仅清内存, 不动落盘文件
+// ===== 噪点日志 (按板块独立桶: 加解密 / 系统; 与特征串完全相等时改投, 不进主事件流, 仍照常落盘) =====
+- (NSArray<DHLogEntry *> *)snapshotNoiseMatching:(nullable NSString *)keyword board:(NSInteger)board;
+- (NSUInteger)noiseCountForBoard:(NSInteger)board;
+- (void)clearNoiseForBoard:(NSInteger)board;   // 仅清该板块内存, 不动落盘文件
 
 // 日志文件路径 (落盘文件用于 share/导出)
 - (NSString *)logFilePath;
@@ -85,16 +85,17 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 // 当前落盘总字节 = 当前段 + 所有滚动备份段之和 (供 /api/stats 与设置页展示)。
 - (unsigned long long)totalLogBytes;
 
-// 把某分类(0..7, 或 -2=加密组, -1=全部)的内存日志导出成可读文本, 供「按板块下载」。
+// 把某分类(0..7, 或 -2=加密组, -3=系统组, -1=全部)的内存日志导出成可读文本, 供「按板块下载」。
 - (NSString *)exportTextForCategory:(NSInteger)cat;
 
 // 当前宿主进程信息 (pid/进程名/bundle/系统版本/设备型号), 一次性采集并缓存
 - (NSDictionary *)processInfo;
 
-// 大小过滤快照: 仅保留 input 或 output 字节数 >= minBytes 的条目 (keyword/category 同 snapshotMatching)
+// 大小过滤快照: 按 input 字节数落在 [minBytes, maxBytes] 内保留 (0=该端不限)
 - (NSArray<DHLogEntry *> *)snapshotMatching:(nullable NSString *)keyword
                                    category:(NSInteger)categoryOrMinusOne
-                                    minSize:(NSUInteger)minBytes;
+                               minInputSize:(NSUInteger)minBytes
+                               maxInputSize:(NSUInteger)maxBytes;
 
 @end
 

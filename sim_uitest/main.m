@@ -1,5 +1,5 @@
 // sim_uitest/main.m — IOSDecryptHub 交互式测试台
-// 顶部 segment 分 tab(加解密 / 文件 / 系统), 每个 tab 的按钮触发对应一类系统调用,
+// 顶部 segment 分 tab(加解密 / 系统), 每个 tab 的按钮触发对应一类系统调用,
 // 便于在注入的 dylib 里逐个观察 hook 效果。不把所有按钮堆在一页。
 //
 // 自动化测试通道: 注册 URL scheme "dhtest", xcrun simctl openurl <dev> dhtest://md5
@@ -160,7 +160,7 @@ static void do_dlopen(void) {
     self.status.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.status];
 
-    self.seg = [[UISegmentedControl alloc] initWithItems:@[@"加解密", @"文件", @"系统"]];
+    self.seg = [[UISegmentedControl alloc] initWithItems:@[@"加解密", @"系统"]];
     self.seg.selectedSegmentIndex = 0;
     self.seg.translatesAutoresizingMaskIntoConstraints = NO;
     [self.seg addTarget:self action:@selector(onSeg:) forControlEvents:UIControlEventValueChanged];
@@ -199,14 +199,11 @@ static void do_dlopen(void) {
     [self addGroup:t0 title:@"压测 / 综合" color:red buttons:@[@"128KB 大数据",@"全部跑一遍",@"打开日志"]
               sels:@[@"onBig",@"onAll",@"onLog"] keys:@[@"big",@"all",@"log"]];
 
-    // --- tab 1: 文件 ---
+    // --- tab 1: 系统(文件 + 模块加载) ---
     UIStackView *t1 = [self addTabStack];
     [self addGroup:t1 title:@"文件操作" color:orange buttons:@[@"写文件",@"读文件",@"删除",@"重命名"]
               sels:@[@"onFWrite",@"onFRead",@"onFDel",@"onFRename"] keys:@[@"fwrite",@"fread",@"fdel",@"frename"]];
-
-    // --- tab 2: 系统 ---
-    UIStackView *t2 = [self addTabStack];
-    [self addGroup:t2 title:@"动态库" color:purple buttons:@[@"dlopen 模块"] sels:@[@"onDlopen"] keys:@[@"dlopen"]];
+    [self addGroup:t1 title:@"动态库" color:purple buttons:@[@"dlopen 模块"] sels:@[@"onDlopen"] keys:@[@"dlopen"]];
 
     self.tabScrolls[0].hidden = NO;   // 默认显示加解密
 

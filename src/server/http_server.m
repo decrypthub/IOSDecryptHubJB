@@ -254,8 +254,8 @@ static void handle_stats(int fd) {
         @"port":        @(gPort),
         @"version":     @DH_HTTP_VERSION,
         @"logBytes":    @(logBytes),
-        @"noiseCount":  @([s noiseCount]),
-        @"noiseEnabled": @(dh_noise_enabled()),
+        @"noiseCount":  @[@([s noiseCountForBoard:DHNoiseBoardCrypto]), @([s noiseCountForBoard:DHNoiseBoardSys])],
+        @"noiseEnabled": @[@(dh_noise_enabled_for_board(DHNoiseBoardCrypto)), @(dh_noise_enabled_for_board(DHNoiseBoardSys))],
         @"process":     [s processInfo],
         @"health":      @{
             @"hookFails":     @(dh_health_hook_fail_count()),
@@ -275,8 +275,9 @@ static void handle_logs_list(int fd, NSDictionary *q) {
     NSInteger lim    = q[@"limit"]  ? [q[@"limit"] integerValue] : 500;
     if (lim <= 0 || lim > 5000) lim = 500;
     NSUInteger minSize = q[@"minSize"] ? (NSUInteger)[q[@"minSize"] integerValue] : 0;
+    NSUInteger maxSize = q[@"maxSize"] ? (NSUInteger)[q[@"maxSize"] integerValue] : 0;
 
-    NSArray *src = [[DHLogStore shared] snapshotMatching:kw category:cat minSize:minSize];
+    NSArray *src = [[DHLogStore shared] snapshotMatching:kw category:cat minInputSize:minSize maxInputSize:maxSize];
     // 最新在前; since/before 为游标, 二者择一 (前端不会同时传)
     NSMutableArray *out = [NSMutableArray array];
     for (NSInteger i = (NSInteger)src.count - 1; i >= 0 && (NSInteger)out.count < lim; i--) {
@@ -301,15 +302,22 @@ static void handle_clear(int fd, NSDictionary *q) {
     send_json(fd, 200, @{@"ok": @YES});
 }
 
-// 噪点日志 —— 命中 dh_noise 特征串的条目改投到独立桶, 不进主事件流, 仍照常落盘。
+// 噪点日志 —— 按板块独立桶; board=crypto|sys
+static DHNoiseBoard parse_noise_board(NSDictionary *q) {
+    NSString *b = q[@"board"];
+    if ([b isEqualToString:@"sys"]) return DHNoiseBoardSys;
+    return DHNoiseBoardCrypto;
+}
+
 static void handle_noise_list(int fd, NSDictionary *q) {
+    DHNoiseBoard board = parse_noise_board(q);
     NSString *kw     = q[@"q"]      ?: @"";
     uint64_t  since  = q[@"since"]  ? (uint64_t)[q[@"since"] longLongValue]  : 0;
     uint64_t  before = q[@"before"] ? (uint64_t)[q[@"before"] longLongValue] : 0;
     NSInteger lim    = q[@"limit"]  ? [q[@"limit"] integerValue] : 500;
     if (lim <= 0 || lim > 5000) lim = 500;
 
-    NSArray *src = [[DHLogStore shared] snapshotNoiseMatching:kw];
+    NSArray *src = [[DHLogStore shared] snapshotNoiseMatching:kw board:board];
     NSMutableArray *out = [NSMutableArray array];
     for (NSInteger i = (NSInteger)src.count - 1; i >= 0 && (NSInteger)out.count < lim; i--) {
         DHLogEntry *e = src[i];
@@ -320,31 +328,34 @@ static void handle_noise_list(int fd, NSDictionary *q) {
     send_json(fd, 200, out);
 }
 
-static void handle_noise_clear(int fd) {
-    [[DHLogStore shared] clearNoise];
+static void handle_noise_clear(int fd, NSDictionary *q) {
+    [[DHLogStore shared] clearNoiseForBoard:parse_noise_board(q)];
     send_json(fd, 200, @{@"ok": @YES});
 }
 
-static void handle_noise_patterns_get(int fd) {
+static void handle_noise_patterns_get(int fd, NSDictionary *q) {
+    DHNoiseBoard board = parse_noise_board(q);
     send_json(fd, 200, @{
-        @"enabled":  @(dh_noise_enabled()),
-        @"patterns": dh_noise_patterns(),
+        @"board":    (board == DHNoiseBoardSys) ? @"sys" : @"crypto",
+        @"enabled":  @(dh_noise_enabled_for_board(board)),
+        @"patterns": dh_noise_patterns_for_board(board),
     });
 }
 
 static void handle_noise_patterns_set(int fd, NSDictionary *q) {
+    DHNoiseBoard board = parse_noise_board(q);
     NSString *op = q[@"op"] ?: @"";
     if ([op isEqualToString:@"add"]) {
         NSString *text = q[@"text"];
-        if (text.length) dh_noise_add_pattern(text);
+        if (text.length) dh_noise_add_pattern_for_board(board, text);
     } else if ([op isEqualToString:@"remove"]) {
         NSString *text = q[@"text"];
-        if (text.length) dh_noise_remove_pattern(text);
+        if (text.length) dh_noise_remove_pattern_for_board(board, text);
     } else if ([op isEqualToString:@"enable"]) {
         BOOL on = [(q[@"on"] ?: @"1") isEqualToString:@"1"];
-        dh_noise_set_enabled(on);
+        dh_noise_set_enabled_for_board(board, on);
     }
-    handle_noise_patterns_get(fd);   // 回当前(已更新)状态
+    handle_noise_patterns_get(fd, q);   // 回当前(已更新)状态
 }
 
 static void handle_pause(int fd, NSDictionary *q) {
@@ -354,7 +365,10 @@ static void handle_pause(int fd, NSDictionary *q) {
         NSInteger cat = [q[@"cat"] integerValue];
         if (cat == -2) {                                // 加密组(摘要/HMAC/对称/非对称)
             for (int c = DHCategoryDigest; c <= DHCategoryAsymmetric; c++) [s setPaused:p forCategory:(DHCategory)c];
-        } else {                                        // 单类(文件/系统等)
+        } else if (cat == -3) {                         // 系统组(文件+模块)
+            [s setPaused:p forCategory:DHCategoryFile];
+            [s setPaused:p forCategory:DHCategorySystem];
+        } else {                                        // 单类
             [s setPaused:p forCategory:(DHCategory)cat];
         }
         send_json(fd, 200, @{@"paused": @(p), @"cat": @(cat)});
@@ -705,7 +719,7 @@ static void handle_connection(int fd) {
             } else if ([path isEqualToString:@"/api/noise"]) {
                 handle_noise_list(fd, q);
             } else if ([path isEqualToString:@"/api/noise/patterns"]) {
-                handle_noise_patterns_get(fd);
+                handle_noise_patterns_get(fd, q);
             } else if ([path isEqualToString:@"/api/capture"]) {
                 handle_capture_get(fd);
             } else if ([path isEqualToString:@"/api/config"]) {
@@ -741,7 +755,7 @@ static void handle_connection(int fd) {
             if ([path isEqualToString:@"/api/clear"]) {
                 handle_clear(fd, q);
             } else if ([path isEqualToString:@"/api/noise/clear"]) {
-                handle_noise_clear(fd);
+                handle_noise_clear(fd, q);
             } else if ([path isEqualToString:@"/api/noise/patterns"]) {
                 handle_noise_patterns_set(fd, q);
             } else if ([path isEqualToString:@"/api/pause"]) {

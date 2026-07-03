@@ -5,6 +5,7 @@
 #if __has_include(<UIKit/UIKit.h>)
 
 #import "log_store.h"
+#import "dh_noise.h"
 
 // ===================== 详情页 =====================
 @interface DHLogDetailVC : UIViewController
@@ -98,8 +99,8 @@
 @property (nonatomic, strong) NSArray<DHLogEntry *> *data;
 @property (nonatomic, strong) NSTimer *autoRefreshTimer;
 @property (nonatomic, copy)   NSString *searchKw;
-@property (nonatomic, assign) NSInteger filterCategory; // -1=全部 -2=加密组 4=文件 5=系统
-@property (nonatomic, assign) BOOL filterNoise;
+@property (nonatomic, assign) NSInteger filterCategory; // -1=全部 -2=加密组 -3=系统组
+@property (nonatomic, assign) NSInteger filterNoiseBoard; // -1=非噪声视图 0=加密噪声 1=系统噪声
 @end
 
 @implementation DHLogListVC
@@ -109,7 +110,7 @@
     self.title = @"IOSDecryptHub - 日志";
     self.view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1.0];
     self.filterCategory = -1;
-    self.filterNoise = NO;
+    self.filterNoiseBoard = -1;
     self.searchKw = @"";
 
     self.navigationItem.leftBarButtonItem =
@@ -122,7 +123,7 @@
                                         target:self action:@selector(reload)],
     ];
 
-    self.segment = [[UISegmentedControl alloc] initWithItems:@[@"全部", @"加密", @"文件", @"系统", @"噪声"]];
+    self.segment = [[UISegmentedControl alloc] initWithItems:@[@"全部", @"加密", @"系统", @"加密噪声", @"系统噪声"]];
     self.segment.selectedSegmentIndex = 0;
     [self.segment addTarget:self action:@selector(onSegment:) forControlEvents:UIControlEventValueChanged];
     self.segment.translatesAutoresizingMaskIntoConstraints = NO;
@@ -173,11 +174,11 @@
 
 - (void)onSegment:(UISegmentedControl *)sc {
     NSInteger i = sc.selectedSegmentIndex;
-    self.filterNoise = (i == 4);
-    if (i == 0) self.filterCategory = -1;
-    else if (i == 1) self.filterCategory = -2;
-    else if (i == 2) self.filterCategory = DHCategoryFile;
-    else if (i == 3) self.filterCategory = DHCategorySystem;
+    if (i == 0) { self.filterCategory = -1; self.filterNoiseBoard = -1; }
+    else if (i == 1) { self.filterCategory = -2; self.filterNoiseBoard = -1; }
+    else if (i == 2) { self.filterCategory = -3; self.filterNoiseBoard = -1; }
+    else if (i == 3) { self.filterCategory = -1; self.filterNoiseBoard = DHNoiseBoardCrypto; }
+    else { self.filterCategory = -1; self.filterNoiseBoard = DHNoiseBoardSys; }
     [self reload];
 }
 
@@ -192,8 +193,8 @@
 
 - (void)reload {
     NSArray *src;
-    if (self.filterNoise)
-        src = [[DHLogStore shared] snapshotNoiseMatching:self.searchKw];
+    if (self.filterNoiseBoard >= 0)
+        src = [[DHLogStore shared] snapshotNoiseMatching:self.searchKw board:self.filterNoiseBoard];
     else
         src = [[DHLogStore shared] snapshotMatching:self.searchKw category:self.filterCategory];
     // 最新的在最上面
