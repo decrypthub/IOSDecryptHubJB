@@ -153,3 +153,34 @@ DHNoiseBoard dh_noise_board_for_category(NSInteger category) {
     if (category == DHCategoryFile || category == DHCategorySystem) return DHNoiseBoardSys;
     return DHNoiseBoardCrypto;
 }
+
+NSDictionary *dh_noise_export(void) {
+    if (!gLock) return @{};
+    [gLock lock];
+    NSDictionary *d = @{
+        @"crypto": @{ @"enabled": @(gEnabled[DHNoiseBoardCrypto]),
+                      @"patterns": [gPatterns[DHNoiseBoardCrypto] copy] ?: @[] },
+        @"sys":    @{ @"enabled": @(gEnabled[DHNoiseBoardSys]),
+                      @"patterns": [gPatterns[DHNoiseBoardSys] copy] ?: @[] },
+    };
+    [gLock unlock];
+    return d;
+}
+
+void dh_noise_import(NSDictionary *root) {
+    if (![root isKindOfClass:[NSDictionary class]] || !gLock) return;
+    NSArray<NSString *> *keys = @[@"crypto", @"sys"];
+    [gLock lock];
+    for (int b = 0; b < DHNoiseBoardCount; b++) {
+        NSDictionary *bd = root[keys[b]];
+        if (![bd isKindOfClass:[NSDictionary class]]) continue;
+        if (bd[@"enabled"]) gEnabled[b] = [bd[@"enabled"] boolValue];
+        if ([bd[@"patterns"] isKindOfClass:[NSArray class]]) {
+            gPatterns[b] = [NSMutableArray array];   // 整组替换
+            for (id p in bd[@"patterns"])
+                if ([p isKindOfClass:[NSString class]] && [p length]) [gPatterns[b] addObject:p];
+        }
+    }
+    dh_noise_save_locked();
+    [gLock unlock];
+}

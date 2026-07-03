@@ -53,6 +53,8 @@ void dh_spoof_device_randomize(void);
 
 // 给 /api/spoof 的整份配置快照(JSON 友好的 NSDictionary)。
 NSDictionary *dh_spoof_snapshot(void);
+// 导入整份配置(格式同 snapshot: jb / anti_debug / device), 用于配置分享。
+void dh_spoof_import(NSDictionary *root);
 
 NS_ASSUME_NONNULL_END
 

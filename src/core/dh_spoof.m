@@ -269,3 +269,12 @@ NSDictionary *dh_spoof_snapshot(void) {
     [gLock unlock];
     return snap;
 }
+
+void dh_spoof_import(NSDictionary *root) {
+    if (![root isKindOfClass:[NSDictionary class]]) return;
+    if (!gLock) gLock = [NSRecursiveLock new];
+    [gLock lock];
+    spoof_apply_json_locked(root);   // 复用加载逻辑: jb/anti_debug/device 各段就地覆盖
+    spoof_save_locked();
+    [gLock unlock];
+}

@@ -38,6 +38,7 @@
 #define DH_HTTP_PORT_LAST   8108
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
+#define DH_HTTP_MAX_BODY    (2 * 1024 * 1024)   // 配置导入请求体上限
 #define DH_HTTP_VERSION     "1.11.0"
 
 static int        gListenFD = -1;
@@ -426,6 +427,36 @@ static void handle_spoof_set(int fd, NSDictionary *q) {
     handle_spoof_get(fd);   // 回当前(已更新)状态
 }
 
+// 配置导入/导出 —— 把捕获开关 / 噪声规则 / 伪装绕过规则打包成一份 JSON, 便于分享与跨 App 复用。
+static void handle_settings_export(int fd) {
+    NSMutableDictionary *cap = [NSMutableDictionary dictionary];
+    for (int i = 0; i < DH_CAP_SUB_COUNT; i++)
+        cap[[NSString stringWithUTF8String:dh_capture_sub_name((dh_cap_sub)i)]] = @(dh_capture_sub_enabled((dh_cap_sub)i));
+    send_json(fd, 200, @{
+        @"dh_settings_version": @1,
+        @"capture": cap,
+        @"noise":   dh_noise_export(),
+        @"spoof":   dh_spoof_snapshot(),
+    });
+}
+static void handle_settings_import(int fd, NSString *body) {
+    NSData *data = [body dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary *root = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if (![root isKindOfClass:[NSDictionary class]]) { send_json(fd, 400, @{@"error": @"配置 JSON 无效"}); return; }
+    NSMutableArray *applied = [NSMutableArray array];
+    NSDictionary *cap = root[@"capture"];
+    if ([cap isKindOfClass:[NSDictionary class]]) {
+        for (int i = 0; i < DH_CAP_SUB_COUNT; i++) {
+            NSString *nm = [NSString stringWithUTF8String:dh_capture_sub_name((dh_cap_sub)i)];
+            if (cap[nm] != nil) dh_capture_set_sub((dh_cap_sub)i, [cap[nm] boolValue]);
+        }
+        [applied addObject:@"capture"];
+    }
+    if ([root[@"noise"] isKindOfClass:[NSDictionary class]]) { dh_noise_import(root[@"noise"]); [applied addObject:@"noise"]; }
+    if ([root[@"spoof"] isKindOfClass:[NSDictionary class]]) { dh_spoof_import(root[@"spoof"]); [applied addObject:@"spoof"]; }
+    send_json(fd, 200, @{ @"ok": @YES, @"applied": applied });
+}
+
 // 日志保留/落盘配置 —— 每类内存保留条数 + 单文件滚动上限。持久化在沙箱 .dh_logcfg.conf。
 static void handle_config_get(int fd) {
     DHLogStore *s = [DHLogStore shared];
@@ -772,6 +803,30 @@ static void handle_connection(int fd) {
     else { path = [target substringToIndex:qrange.location]; qs = [target substringFromIndex:qrange.location + 1]; }
     NSDictionary *q = parse_query(qs);
 
+    // 读取请求体(POST import 等需要): 头部已在 buf 中(以 \r\n\r\n 分隔), 按 Content-Length 补齐剩余字节。
+    NSString *reqBody = @"";
+    if ([method isEqualToString:@"POST"]) {
+        const void *he = memmem(buf.bytes, buf.length, "\r\n\r\n", 4);
+        if (he) {
+            NSUInteger headerLen = (const char *)he - (const char *)buf.bytes + 4;
+            NSUInteger clen = 0;
+            for (NSString *line in lines) {
+                if ([[line lowercaseString] hasPrefix:@"content-length:"])
+                    { clen = (NSUInteger)[[line substringFromIndex:15] integerValue]; break; }
+            }
+            if (clen > DH_HTTP_MAX_BODY) clen = DH_HTTP_MAX_BODY;
+            NSMutableData *bodyData = [NSMutableData dataWithBytes:(const char *)buf.bytes + headerLen
+                                                           length:buf.length - headerLen];
+            while (bodyData.length < clen) {
+                ssize_t n = recv(fd, tmp, sizeof(tmp), 0);
+                if (n < 0) { if (errno == EINTR) continue; break; }
+                if (n == 0) break;
+                [bodyData appendBytes:tmp length:(NSUInteger)n];
+            }
+            if (bodyData.length) reqBody = [[NSString alloc] initWithData:bodyData encoding:NSUTF8StringEncoding] ?: @"";
+        }
+    }
+
     @try {
         if ([method isEqualToString:@"GET"]) {
             if ([path isEqualToString:@"/"] || [path isEqualToString:@"/index.html"]) {
@@ -790,6 +845,8 @@ static void handle_connection(int fd) {
                 handle_capture_get(fd);
             } else if ([path isEqualToString:@"/api/spoof"]) {
                 handle_spoof_get(fd);
+            } else if ([path isEqualToString:@"/api/settings/export"]) {
+                handle_settings_export(fd);
             } else if ([path isEqualToString:@"/api/config"]) {
                 handle_config_get(fd);
             } else if ([path hasPrefix:@"/api/logs/"]) {
@@ -838,6 +895,8 @@ static void handle_connection(int fd) {
                 handle_capture_set(fd, q);
             } else if ([path isEqualToString:@"/api/spoof"]) {
                 handle_spoof_set(fd, q);
+            } else if ([path isEqualToString:@"/api/settings/import"]) {
+                handle_settings_import(fd, reqBody);
             } else if ([path isEqualToString:@"/api/config"]) {
                 handle_config_set(fd, q);
             } else if ([path isEqualToString:@"/api/dump"]) {

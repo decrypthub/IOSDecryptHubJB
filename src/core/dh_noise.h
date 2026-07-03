@@ -32,6 +32,10 @@ BOOL dh_noise_matches_for_board(DHNoiseBoard board, NSString * _Nullable text);
 // 根据日志分类判定所属噪声板块 (file/system → 系统; 其余加解密类 → 加解密)。
 DHNoiseBoard dh_noise_board_for_category(NSInteger category);
 
+// 导入/导出(用于配置分享)。格式: { "crypto": {enabled, patterns:[…]}, "sys": {…} }。
+NSDictionary *dh_noise_export(void);
+void dh_noise_import(NSDictionary *root);
+
 NS_ASSUME_NONNULL_END
 
 #endif // DH_NOISE_H
