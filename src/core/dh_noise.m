@@ -50,8 +50,8 @@ static void dh_noise_load_v2(NSArray<NSString *> *lines) {
     BOOL afterEnabled = NO;
     for (NSString *line in lines) {
         if ([line isEqualToString:@"v2"]) continue;
-        if ([line isEqualToString:@"[CRYPTO]"]) { board = DHNoiseBoardCrypto; afterEnabled = NO; continue; }
-        if ([line isEqualToString:@"[SYS]"])    { board = DHNoiseBoardSys;    afterEnabled = NO; continue; }
+        if ([line isEqualToString:@"[CRYPTO]"]) { board = DHNoiseBoardCrypto; afterEnabled = NO; gPatterns[board] = [NSMutableArray array]; continue; }
+        if ([line isEqualToString:@"[SYS]"])    { board = DHNoiseBoardSys;    afterEnabled = NO; gPatterns[board] = [NSMutableArray array]; continue; }
         if ([line isEqualToString:@"--"]) continue;
         if (board < 0) continue;
         if (!afterEnabled) {

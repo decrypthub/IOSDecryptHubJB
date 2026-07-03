@@ -485,6 +485,12 @@
             <button id='setExportCopy' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:8px 16px; border-radius:6px; font-size:12px; cursor:pointer;'>复制到剪贴板</button>
           </div>
           <textarea id='setImportText' placeholder='把导出的配置 JSON 粘贴到这里,再点「导入并应用」…' style='width:100%; box-sizing:border-box; height:150px; margin-top:10px; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:10px; border-radius:6px; font-size:11px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; resize:vertical;'></textarea>
+          <div style='display:flex; gap:18px; margin-top:8px; font-size:12px; color:#8b949e; align-items:center;'>
+            <span>只导入:</span>
+            <label style='cursor:pointer;'><input type='checkbox' id='impCapture' checked> 捕获开关</label>
+            <label style='cursor:pointer;'><input type='checkbox' id='impNoise' checked> 噪声规则</label>
+            <label style='cursor:pointer;'><input type='checkbox' id='impSpoof' checked> 伪装绕过规则</label>
+          </div>
           <div class='set-actions' style='padding-top:8px;'>
             <button id='setImportApply' style='background:#1f6feb; color:#fff; border:1px solid #388bfd; padding:8px 16px; border-radius:6px; font-size:12px; cursor:pointer;'>导入并应用</button>
           </div>
@@ -1372,12 +1378,20 @@
     try { copyText(await fetchSettingsText()); } catch(e){ toast('导出失败: '+e.message); }
   });
   $('setImportApply').addEventListener('click', async () => {
-    const body = $('setImportText').value.trim();
-    if(!body){ toast('先粘贴配置 JSON'); return; }
-    try { JSON.parse(body); } catch(e){ toast('JSON 格式错误: '+e.message); return; }
-    if(!confirm('导入将覆盖当前的捕获/噪声/伪装规则,确定?')) return;
+    const raw = $('setImportText').value.trim();
+    if(!raw){ toast('先粘贴配置 JSON'); return; }
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch(e){ toast('JSON 格式错误: '+e.message); return; }
+    // 只发勾选且 JSON 里存在的板块 —— 后端「有哪段导哪段」, 缺的段不动。
+    const sel = { dh_settings_version: parsed.dh_settings_version || 1 };
+    const picked = [];
+    if($('impCapture').checked && parsed.capture){ sel.capture = parsed.capture; picked.push('捕获'); }
+    if($('impNoise').checked   && parsed.noise){   sel.noise   = parsed.noise;   picked.push('噪声'); }
+    if($('impSpoof').checked   && parsed.spoof){   sel.spoof   = parsed.spoof;   picked.push('伪装'); }
+    if(!picked.length){ toast('没有可导入的板块(勾选项与 JSON 内容需匹配)'); return; }
+    if(!confirm('将导入并覆盖:'+picked.join(' / ')+'。确定?')) return;
     try {
-      const r = await fetch('/api/settings/import',{method:'POST', body});
+      const r = await fetch('/api/settings/import',{method:'POST', body: JSON.stringify(sel)});
       const j = await r.json();
       if(j.error){ toast('导入失败: '+j.error); return; }
       toast('已导入: '+((j.applied||[]).join(' / ')||'无'));
