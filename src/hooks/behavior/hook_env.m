@@ -168,7 +168,7 @@ static char *hooked_getenv(const char *name) {
 // 高频 API: 只在命中越狱清单(即需隐藏)时记录, 不记每次普通探测, 避免刷屏。
 static int (*orig_stat)(const char *, struct stat *);
 static int hooked_stat(const char *path, struct stat *buf) {
-    if (dh_spoof_jb_should_hide_path(path)) {
+    if (!dh_in_hook && dh_spoof_jb_should_hide_path(path)) {
         env_log(@"stat", @"已隐藏", [NSString stringWithUTF8String:path] ?: @"?");
         errno = ENOENT; return -1;
     }
@@ -177,7 +177,7 @@ static int hooked_stat(const char *path, struct stat *buf) {
 
 static int (*orig_lstat)(const char *, struct stat *);
 static int hooked_lstat(const char *path, struct stat *buf) {
-    if (dh_spoof_jb_should_hide_path(path)) {
+    if (!dh_in_hook && dh_spoof_jb_should_hide_path(path)) {
         env_log(@"lstat", @"已隐藏", [NSString stringWithUTF8String:path] ?: @"?");
         errno = ENOENT; return -1;
     }
@@ -186,7 +186,7 @@ static int hooked_lstat(const char *path, struct stat *buf) {
 
 static int (*orig_access)(const char *, int);
 static int hooked_access(const char *path, int mode) {
-    if (dh_spoof_jb_should_hide_path(path)) {
+    if (!dh_in_hook && dh_spoof_jb_should_hide_path(path)) {
         env_log(@"access", @"已隐藏", [NSString stringWithUTF8String:path] ?: @"?");
         errno = ENOENT; return -1;
     }
@@ -195,7 +195,7 @@ static int hooked_access(const char *path, int mode) {
 
 static int (*orig_faccessat)(int, const char *, int, int);
 static int hooked_faccessat(int dirfd, const char *path, int mode, int flag) {
-    if (dh_spoof_jb_should_hide_path(path)) {
+    if (!dh_in_hook && dh_spoof_jb_should_hide_path(path)) {
         env_log(@"faccessat", @"已隐藏", [NSString stringWithUTF8String:path] ?: @"?");
         errno = ENOENT; return -1;
     }
@@ -204,7 +204,7 @@ static int hooked_faccessat(int dirfd, const char *path, int mode, int flag) {
 
 static int (*orig_fstatat)(int, const char *, struct stat *, int);
 static int hooked_fstatat(int dirfd, const char *path, struct stat *buf, int flag) {
-    if (dh_spoof_jb_should_hide_path(path)) {
+    if (!dh_in_hook && dh_spoof_jb_should_hide_path(path)) {
         env_log(@"fstatat", @"已隐藏", [NSString stringWithUTF8String:path] ?: @"?");
         errno = ENOENT; return -1;
     }

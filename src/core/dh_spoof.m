@@ -1,10 +1,10 @@
-// dh_spoof.m — 见 dh_spoof.h。JSON 持久化 + NSLock, 热路径总开关 volatile 早退。
+// dh_spoof.m — 见 dh_spoof.h。JSON 持久化 + NSRecursiveLock(save 触发的 stat/access 会回调 should_hide_*, 需同线程重入), 热路径总开关 volatile 早退。
 
 #import "dh_spoof.h"
 #import "dh_health.h"
 #import <stdlib.h>
 
-static NSLock *gLock = nil;
+static NSRecursiveLock *gLock = nil;   // 递归锁: save 时 writeToFile 会触发 stat/access → 回调 should_hide_*, 同线程重入不死锁
 static NSString *gConfPath = nil;
 
 // 热路径总开关(无锁 volatile 快读)。清单/字符串值改动都在锁内, 但读开关不必进锁。
@@ -87,7 +87,7 @@ static void spoof_apply_json_locked(NSDictionary *root) {
 }
 
 void dh_spoof_load(NSString *confPath) {
-    if (!gLock) gLock = [NSLock new];
+    if (!gLock) gLock = [NSRecursiveLock new];
     [gLock lock];
     spoof_set_defaults_locked();
     gConfPath = [confPath copy];
@@ -106,7 +106,7 @@ void dh_spoof_load(NSString *confPath) {
 // ---- 越狱隐藏 ----
 BOOL dh_spoof_jb_on(void) { return gJbOn; }
 void dh_spoof_jb_set_on(BOOL on) {
-    if (!gLock) gLock = [NSLock new];
+    if (!gLock) gLock = [NSRecursiveLock new];
     [gLock lock]; gJbOn = on; spoof_save_locked(); [gLock unlock];
 }
 
@@ -152,7 +152,7 @@ NSArray<NSString *> *dh_spoof_jb_schemes(void) {
 
 static BOOL spoof_list_add(NSMutableArray *arr, NSString *v) {
     if (v.length == 0) return NO;
-    if (!gLock) gLock = [NSLock new];
+    if (!gLock) gLock = [NSRecursiveLock new];
     [gLock lock];
     for (NSString *e in arr) if ([e caseInsensitiveCompare:v] == NSOrderedSame) { [gLock unlock]; return NO; }
     [arr addObject:v];
@@ -200,14 +200,14 @@ BOOL dh_spoof_jb_remove_image(NSString *s) { return spoof_list_remove(gJbImages,
 // ---- 反调试 ----
 BOOL dh_spoof_anti_debug_on(void) { return gAntiOn; }
 void dh_spoof_anti_debug_set_on(BOOL on) {
-    if (!gLock) gLock = [NSLock new];
+    if (!gLock) gLock = [NSRecursiveLock new];
     [gLock lock]; gAntiOn = on; spoof_save_locked(); [gLock unlock];
 }
 
 // ---- 改机 ----
 BOOL dh_spoof_device_on(void) { return gDeviceOn; }
 void dh_spoof_device_set_on(BOOL on) {
-    if (!gLock) gLock = [NSLock new];
+    if (!gLock) gLock = [NSRecursiveLock new];
     [gLock lock]; gDeviceOn = on; spoof_save_locked(); [gLock unlock];
 }
 
@@ -237,7 +237,7 @@ void dh_spoof_device_randomize(void) {
         {"iPhone 12",         "iPhone13,2", "D53gAP"},{"iPhone SE (3rd)","iPhone14,6","D49AP"},
     };
     static const char *kOSes[] = { "16.7.8", "17.4.1", "17.5.1", "17.6.1", "18.0.1", "18.1.1", "18.2.1" };
-    if (!gLock) gLock = [NSLock new];
+    if (!gLock) gLock = [NSRecursiveLock new];
     uint32_t mi = arc4random_uniform((uint32_t)(sizeof(kModels) / sizeof(kModels[0])));
     uint32_t oi = arc4random_uniform((uint32_t)(sizeof(kOSes) / sizeof(kOSes[0])));
     NSString *idfv = [[NSUUID UUID] UUIDString];
@@ -255,7 +255,7 @@ void dh_spoof_device_randomize(void) {
 }
 
 NSDictionary *dh_spoof_snapshot(void) {
-    if (!gLock) gLock = [NSLock new];
+    if (!gLock) gLock = [NSRecursiveLock new];
     [gLock lock];
     NSDictionary *snap = @{
         @"jb":         @{ @"on": @(gJbOn), @"paths": [gJbPaths copy] ?: @[], @"schemes": [gJbSchemes copy] ?: @[], @"images": [gJbImages copy] ?: @[] },
