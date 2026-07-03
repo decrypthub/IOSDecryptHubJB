@@ -128,6 +128,26 @@ static void do_dlopen(void) {
     void *h1 = dlopen("/usr/lib/libsqlite3.dylib", RTLD_LAZY); if (h1) dlclose(h1);
     void *h2 = dlopen("/usr/lib/libz.dylib", RTLD_LAZY);       if (h2) dlclose(h2);
 }
+static void do_dlsym(void) {
+    // 走 dlsym 路径调用 CC_MD5 / CCCrypt —— 验证 dlsym hook 重定向到 wrapper
+    unsigned char (*md5_fn)(const void *, CC_LONG, unsigned char *) =
+        (unsigned char *(*)(const void *, CC_LONG, unsigned char *))dlsym(RTLD_DEFAULT, "CC_MD5");
+    if (md5_fn) {
+        unsigned char d[CC_MD5_DIGEST_LENGTH];
+        md5_fn(kMsg, (CC_LONG)strlen(kMsg), d);
+    }
+    CCCryptorStatus (*crypt_fn)(CCOperation, CCAlgorithm, CCOptions,
+                                const void *, size_t, const void *,
+                                const void *, size_t, void *, size_t, size_t *) =
+        (CCCryptorStatus (*)(CCOperation, CCAlgorithm, CCOptions,
+                             const void *, size_t, const void *,
+                             const void *, size_t, void *, size_t, size_t *))dlsym(RTLD_DEFAULT, "CCCrypt");
+    if (crypt_fn) {
+        unsigned char key[16] = {0}, iv[16] = {0}, out[256]; size_t mv = 0;
+        crypt_fn(kCCEncrypt, kCCAlgorithmAES, kCCOptionPKCS7Padding, key, 16, iv,
+                 kMsg, strlen(kMsg), out, sizeof(out), &mv);
+    }
+}
 
 // ==================== 测试台 VC ====================
 @interface TestVC : UIViewController
@@ -203,7 +223,8 @@ static void do_dlopen(void) {
     UIStackView *t1 = [self addTabStack];
     [self addGroup:t1 title:@"文件操作" color:orange buttons:@[@"写文件",@"读文件",@"删除",@"重命名"]
               sels:@[@"onFWrite",@"onFRead",@"onFDel",@"onFRename"] keys:@[@"fwrite",@"fread",@"fdel",@"frename"]];
-    [self addGroup:t1 title:@"动态库" color:purple buttons:@[@"dlopen 模块"] sels:@[@"onDlopen"] keys:@[@"dlopen"]];
+    [self addGroup:t1 title:@"动态库" color:purple buttons:@[@"dlopen 模块", @"dlsym 符号"]
+              sels:@[@"onDlopen",@"onDlsym"] keys:@[@"dlopen",@"dlsym"]];
 
     self.tabScrolls[0].hidden = NO;   // 默认显示加解密
 
@@ -221,7 +242,7 @@ static void do_dlopen(void) {
     if ([[NSProcessInfo processInfo].environment[@"DH_AUTOTEST"] isEqualToString:@"1"]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             for (NSString *k in @[@"md5",@"sha256",@"hmac",@"aes",@"3des",@"rsasign",@"pbkdf",
-                                  @"fwrite",@"fread",@"fdel",@"frename",@"dlopen"])
+                                  @"fwrite",@"fread",@"fdel",@"frename",@"dlopen",@"dlsym"])
                 [ws triggerByKey:k];
         });
     }
@@ -341,6 +362,7 @@ static void do_dlopen(void) {
 - (void)onFRename  { do_file_rename(); [self flash:@"重命名"]; }
 // 系统
 - (void)onDlopen   { do_dlopen();      [self flash:@"dlopen 模块"]; }
+- (void)onDlsym    { do_dlsym();       [self flash:@"dlsym 符号"]; }
 @end
 
 // ==================== Scene / App ====================

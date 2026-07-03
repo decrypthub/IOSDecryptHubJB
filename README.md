@@ -1,6 +1,6 @@
 # IOSDecryptHub
 
-基于 fishhook 的 iOS App 行为监控平台。已实现三类监控：**加解密审计**（哈希 / HMAC / 对称 / 非对称 / KDF 的算法、Key、IV、明文、密文）、**文件监控**（open / write / unlink / rename 沙盒文件操作）、**系统模块**（dlopen 载入的动态库），每次调用都附应用层调用栈。Web 面板多 tab 架构，浏览器即可实时查看。
+基于 fishhook 的 iOS App 行为监控平台。已实现三类监控：**加解密审计**（哈希 / HMAC / 对称 / 非对称 / KDF 的算法、Key、IV、明文、密文）、**文件监控**（open / write / unlink / rename 沙盒文件操作）、**系统模块**（dlopen 载入的动态库、dlsym 动态符号解析），每次调用都附应用层调用栈。Web 面板多 tab 架构，浏览器即可实时查看。
 
 注入到目标 App 后，它自己调用系统加密 API 时，你能在旁边实时看到全部参数。
 
@@ -40,9 +40,20 @@ Web 面板多 tab 架构，三类监控共享同一套左右分栏 master-detail
 | --- | --- | --- |
 | 加解密 | CommonCrypto / SecKey | 算法 / Key / IV / 明文 / 密文 / 调用栈 |
 | 文件 | open / write / unlink / rename | 沙盒文件读写、删除、重命名（过滤系统噪音） |
-| 系统 | dlopen | 运行时载入的动态库 |
+| 系统 | dlopen / dlsym | 运行时载入的动态库; 动态符号解析(对已 hook 符号重定向到 wrapper) |
 
 另有 **符号** tab（列出 fishhook 可 rebind 的导入符号）、**Dump** tab（按需脱壳）、工具栏 **查看噪声**（噪点过滤命中事件）。
+
+### dlsym 路径与 import slot 的区别
+
+部分 App 不直接调用 `CCCrypt`，而是 `p = dlsym(handle, "CCCrypt"); p(...);`。这条路径**不经过**当前 image 的 import symbol pointer，因此仅 hook 导入表里的 `CCCrypt` 可能拦不到它。
+
+本插件另 hook **dlsym 本身**（它通常也是导入符号），可：
+
+- 记录谁 `dlsym` 了什么符号（系统 tab）
+- 在 `dlsym("CCCrypt")` / `dlsym("CC_MD5")` 等已 hook 符号上，返回我们的 wrapper，使后续通过函数指针的调用也能被捕获
+
+**边界**：若目标在 dylib 注入**之前**已经 `dlsym` 并缓存了函数指针，后续再 hook `dlsym` 为时已晚。
 
 ## 砸壳（脱壳 / dump）
 
@@ -138,7 +149,7 @@ make test-mac
 
 编出 dylib 与一个命令行 exerciser，用 DYLD_INSERT_LIBRARIES 注入运行，浏览器开 http://127.0.0.1:8088 看结果。
 
-iOS 模拟器 / 真机：编出 sim_uitest 这个测试 App，注入 dylib 后安装运行，点界面上的按钮触发算法。该测试 App 还注册了 dhtest:// URL scheme，可用 xcrun simctl openurl <device> dhtest://md5 之类的命令模拟点击对应按钮，方便无人值守的自动化测试（可用的 key：md5 / sha1 / sha256 / sha512 / hmac / aes / 3des / des / rc4 / rsasign / rsaenc / pbkdf / big / all / log / fwrite / fread / fdel / frename / dlopen）。
+iOS 模拟器 / 真机：编出 sim_uitest 这个测试 App，注入 dylib 后安装运行，点界面上的按钮触发算法。该测试 App 还注册了 dhtest:// URL scheme，可用 xcrun simctl openurl <device> dhtest://md5 之类的命令模拟点击对应按钮，方便无人值守的自动化测试（可用的 key：md5 / sha1 / sha256 / sha512 / hmac / aes / 3des / des / rc4 / rsasign / rsaenc / pbkdf / big / all / log / fwrite / fread / fdel / frename / dlopen / dlsym）。
 
 模拟器一键部署（推荐）：
 
@@ -160,6 +171,7 @@ src/
     fishhook.{c,h}      上游 fishhook (符号表重绑定)
     dh_health.{h,c}     健康状态中心 (fail-loud) + 递归保护 dh_in_hook
     dh_capture.{c,h}    捕获子开关持久化
+    dh_dlsym_redirect.{c,h}  dlsym 重定向表(已 hook 符号 → wrapper)
     dh_noise.{h,m}      噪点特征串过滤
     dh_symtab.{c,h}     导入符号枚举 (符号 tab)
     dump_manager.{h,m}  砸壳任务管理
@@ -169,7 +181,7 @@ src/
     main.m              注入入口 (构造函数, 安装所有 hook)
   hooks/
     crypto/             加解密 hook: digest / hmac / symmetric / asymmetric / kdf
-    behavior/           行为 hook: file(open/write/...) / system(dlopen)
+    behavior/           行为 hook: file(open/write/...) / system(dlopen/dlsym)
   server/
     http_server.{h,m}   零依赖本地 HTTP 服务
     web_index_html.h    内嵌单页前端 (由 web/index.html 生成)

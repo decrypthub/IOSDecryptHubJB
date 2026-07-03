@@ -12,6 +12,7 @@
 #define DH_BOARD DH_DIAG_CRYPTO
 #import "dh_health.h"
 #import "dh_capture.h"
+#import "dh_dlsym_redirect.h"
 
 static NSString *describe_key(SecKeyRef key) {
     if (!key) return @"(null)";
@@ -135,6 +136,7 @@ void dh_install_asymmetric_hooks(void) {
         {"SecKeyCreateDecryptedData", hooked_SecKeyCreateDecryptedData, (void **)&orig_SecKeyCreateDecryptedData},
     };
     rebind_symbols(r, sizeof(r)/sizeof(r[0]));
+    dh_dlsym_register_rebindings(r, sizeof(r)/sizeof(r[0]));
     // 注: 不在此做安装后自检 —— Security.framework 可能在 dylib 注入后才被宿主加载,
     // 此刻 orig 仍为 NULL 是正常的(随后 add-image 回调会补挂), 误报反而违背 fail-loud 初衷.
     // 真正没挂上的情形会在 SecKey* 调用发生却无日志时体现.

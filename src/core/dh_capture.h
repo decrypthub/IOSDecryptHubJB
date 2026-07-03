@@ -23,6 +23,7 @@ typedef enum {
     DH_CAP_FILE_UNLINK,
     DH_CAP_FILE_RENAME,
     DH_CAP_SYS_DLOPEN,
+    DH_CAP_SYS_DLSYM,      // dlsym 动态符号解析(含重定向到 hook wrapper)
     DH_CAP_SUB_COUNT
 } dh_cap_sub;
 

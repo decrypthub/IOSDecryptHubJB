@@ -13,6 +13,7 @@
 #define DH_BOARD DH_DIAG_CRYPTO
 #import "dh_health.h"
 #import "dh_capture.h"
+#import "dh_dlsym_redirect.h"
 
 static const char *prf_name(CCPseudoRandomAlgorithm prf) {
     switch (prf) {
@@ -61,6 +62,7 @@ void dh_install_kdf_hooks(void) {
         {"CCKeyDerivationPBKDF", hooked_CCKeyDerivationPBKDF, (void **)&orig_CCKeyDerivationPBKDF},
     };
     rebind_symbols(r, sizeof(r) / sizeof(r[0]));
+    dh_dlsym_register_rebindings(r, sizeof(r)/sizeof(r[0]));
     // 安装后自检(fail-loud): orig 仍为 NULL 即没挂上. CommonCrypto 注入时必已加载.
     for (size_t k = 0; k < sizeof(r)/sizeof(r[0]); k++)
         if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(DH_DIAG_CRYPTO, r[k].name);

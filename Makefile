@@ -16,6 +16,7 @@ SRC     := src/core/fishhook.c \
            src/core/dh_capture.c \
            src/core/dh_noise.m \
            src/core/dh_symtab.c \
+           src/core/dh_dlsym_redirect.c \
            src/core/log_store.m \
            src/core/zip_writer.c \
            src/core/macho_dump.m \

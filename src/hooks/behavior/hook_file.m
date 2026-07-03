@@ -14,6 +14,7 @@
 #define DH_BOARD DH_DIAG_FILE
 #import "dh_health.h"
 #import "dh_capture.h"
+#import "dh_dlsym_redirect.h"
 
 static BOOL dh_is_app_file(const char *p) {
     if (!p || !*p) return NO;
@@ -137,6 +138,7 @@ void dh_install_file_hooks(void) {
         {"rename", hooked_rename, (void **)&orig_rename},
     };
     rebind_symbols(r, sizeof(r)/sizeof(r[0]));
+    dh_dlsym_register_rebindings(r, sizeof(r)/sizeof(r[0]));
     for (size_t k = 0; k < sizeof(r)/sizeof(r[0]); k++)
         if (r[k].replaced && *(void **)r[k].replaced == NULL) dh_health_hook_fail(DH_DIAG_FILE, r[k].name);
 }

@@ -348,7 +348,7 @@
       <input id='symQ' type='search' placeholder='过滤符号 (子串, 如 SSL / CC / open)…'>
       <span id='symCount' style='color:#6e7681; font-size:11px;'></span>
     </div>
-    <div id='symDetailBody'><div class='detail-empty'>← 选择左侧 image 查看导入符号<br><br><span style='font-size:11px;'>fishhook 只能改<b>导入符号表</b> —— 即本 image 调用其它 dylib 导出的符号。凡在此出现的, 都是 fishhook 候选; 被<b>静态链接</b>进主二进制的符号不在导入表里, fishhook 无法拦截, 需改用 inline hook。</span></div></div>
+    <div id='symDetailBody'><div class='detail-empty'>← 选择左侧 image 查看导入符号<br><br><span style='font-size:11px;'>fishhook 只能改<b>导入符号表</b> —— 即本 image 调用其它 dylib 导出的符号。凡在此出现的, 都是 fishhook 候选; 被<b>静态链接</b>进主二进制的符号不在导入表里, fishhook 无法拦截, 需改用 inline hook。<br><br>若目标通过 <b>dlsym("CCCrypt")</b> 拿函数指针再调用, 不走 import slot; 本插件另 hook <b>dlsym</b> 本身, 在解析时把已知符号重定向到 wrapper 并记录日志 —— 但<b>注入前已缓存的指针</b>无法追溯。</span></div></div>
   </div>
 </div>
 <div class='modal-mask' id='diagMask'>
@@ -464,6 +464,7 @@
       { sub:'FILE_UNLINK', title:'unlink', funcs:'unlink(), remove() — 删除文件' },
       { sub:'FILE_RENAME', title:'rename', funcs:'rename() — 重命名/移动' },
       { sub:'SYS_DLOPEN', title:'dlopen', funcs:'dlopen() — 运行时载入动态库' },
+      { sub:'SYS_DLSYM', title:'dlsym', funcs:'dlsym() — 动态符号解析; 对已 hook 符号返回 wrapper(注入前已缓存的指针除外)' },
     ]},
   ];
   const tabState = { crypto:{q:'', sizeMin:'', sizeMax:''}, sys:{q:''}, noise_crypto:{q:''}, noise_sys:{q:''} };

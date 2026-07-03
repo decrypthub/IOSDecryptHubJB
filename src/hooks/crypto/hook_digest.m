@@ -15,6 +15,7 @@
 #define DH_BOARD DH_DIAG_CRYPTO
 #import "dh_health.h"
 #import "dh_capture.h"
+#import "dh_dlsym_redirect.h"
 
 // =================== ctx <-> buffer 关联 ===================
 static NSMapTable *gCtxBuffers = nil;     // weak->strong 不合适 (ctx 是裸指针), 用 strong->strong with manual cleanup
@@ -162,6 +163,7 @@ void dh_install_digest_hooks(void) {
         {"CC_SHA512_Final", hooked_CC_SHA512_Final,   (void **)&orig_CC_SHA512_Final},
     };
     rebind_symbols(r, sizeof(r)/sizeof(r[0]));
+    dh_dlsym_register_rebindings(r, sizeof(r)/sizeof(r[0]));
     // 安装后自检(fail-loud): 没匹配到的符号其 orig 指针仍为 NULL = 没挂上.
     // CommonCrypto 属 libSystem, 注入时必已加载, 此处检查可靠.
     // 例外: MD2/MD4 已废弃, 新系统(iOS 26+)可能不再导出这些符号, 属 best-effort.

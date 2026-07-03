@@ -16,6 +16,7 @@ static const char *kSubNames[DH_CAP_SUB_COUNT] = {
     "DIGEST", "HMAC", "SYMMETRIC", "ASYMMETRIC", "KDF",
     "FILE_OPEN", "FILE_WRITE", "FILE_UNLINK", "FILE_RENAME",
     "SYS_DLOPEN",
+    "SYS_DLSYM",
 };
 
 static void set_defaults(void) {
