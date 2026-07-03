@@ -34,6 +34,7 @@ SRC     := src/core/fishhook.c \
            src/hooks/behavior/hook_keychain.m \
            src/hooks/behavior/hook_env.m \
            src/hooks/behavior/hook_spoof_objc.m \
+           src/hooks/behavior/hook_dyld.m \
            src/server/http_server.m \
            src/ui/ui_float.m \
            src/ui/ui_logview.m \

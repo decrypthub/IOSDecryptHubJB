@@ -32,6 +32,7 @@
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <errno.h>
+#include <mach-o/dyld.h>
 extern int ptrace(int, pid_t, caddr_t, int);
 
 static void print_hex(const char *label, const unsigned char *b, size_t n) {
@@ -307,6 +308,18 @@ static void test_file(void) {
     close(rfd);
 }
 
+// 注入痕迹隐藏: 遍历已加载 image, 自身 dylib 名应被改名隐藏(jb 默认开)。
+static void test_inject(void) {
+    printf("\n=== 注入痕迹隐藏 ===\n");
+    uint32_t cnt = _dyld_image_count();
+    int visible = 0;
+    for (uint32_t i = 0; i < cnt; i++) {
+        const char *n = _dyld_get_image_name(i);
+        if (n && strstr(n, "decrypt_helper")) { visible++; printf("  仍可见: %s\n", n); }
+    }
+    printf("  image 总数=%u, 含 decrypt_helper 的可见项=%d (期望 0=已隐藏)\n", cnt, visible);
+}
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -325,6 +338,7 @@ int main(int argc, char **argv) {
     test_file();
     @autoreleasepool { test_keychain(); }
     test_env();
+    test_inject();
 
     printf("\n[exercise] 全部 hook 调用完毕.\n");
     printf("[exercise] 用浏览器打开 http://127.0.0.1:8088\n");

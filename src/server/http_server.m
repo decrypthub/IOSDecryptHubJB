@@ -414,11 +414,14 @@ static void handle_spoof_set(int fd, NSDictionary *q) {
         else if ([op isEqualToString:@"remove_path"]   && text.length) dh_spoof_jb_remove_path(text);
         else if ([op isEqualToString:@"add_scheme"]    && text.length) dh_spoof_jb_add_scheme(text);
         else if ([op isEqualToString:@"remove_scheme"] && text.length) dh_spoof_jb_remove_scheme(text);
+        else if ([op isEqualToString:@"add_image"]     && text.length) dh_spoof_jb_add_image(text);
+        else if ([op isEqualToString:@"remove_image"]  && text.length) dh_spoof_jb_remove_image(text);
     } else if ([group isEqualToString:@"anti"]) {
         if ([op isEqualToString:@"enable"]) dh_spoof_anti_debug_set_on(on);
     } else if ([group isEqualToString:@"device"]) {
         if      ([op isEqualToString:@"enable"]) dh_spoof_device_set_on(on);
         else if ([op isEqualToString:@"set"] && q[@"key"]) dh_spoof_device_set_value(q[@"key"], q[@"value"] ?: @"");
+        else if ([op isEqualToString:@"randomize"]) dh_spoof_device_randomize();
     }
     handle_spoof_get(fd);   // 回当前(已更新)状态
 }

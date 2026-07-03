@@ -447,9 +447,16 @@
           </div>
           <div class='set-section-title' style='font-size:12px;color:#8b949e;'>隐藏 URL Scheme</div>
           <div id='spoofJbSchemes' style='display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;'></div>
-          <div style='display:flex; gap:8px; margin-bottom:20px;'>
+          <div style='display:flex; gap:8px; margin-bottom:14px;'>
             <input id='spoofJbSchemeInput' type='text' placeholder='如 cydia、sileo、filza' style='flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:8px 10px; border-radius:6px; font-size:12px;'>
             <button id='spoofJbSchemeAdd' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
+          </div>
+          <div class='set-section-title' style='font-size:12px;color:#8b949e;'>隐藏动态库(注入痕迹)</div>
+          <p class='set-lead' style='margin:2px 0 8px;'>命中 image 名(子串)时,_dyld_get_image_name / dladdr 返回良性系统库名,挫败"遍历已加载库查黑名单"的注入检测。默认含自身 dylib 与常见注入框架。</p>
+          <div id='spoofJbImages' style='display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;'></div>
+          <div style='display:flex; gap:8px; margin-bottom:20px;'>
+            <input id='spoofJbImageInput' type='text' placeholder='如 decrypt_helper、MobileSubstrate' style='flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:8px 10px; border-radius:6px; font-size:12px;'>
+            <button id='spoofJbImageAdd' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
           </div>
 
           <div class='set-section-title'>反调试</div>
@@ -462,6 +469,10 @@
           <div class='set-toggle-row'>
             <div class='lab'><b>启用改机</b><span>各字段留空表示不伪造该项。sysctl/uname 走 C 层,UIDevice/IDFV/IDFA 走 ObjC。默认关,避免误伤</span></div>
             <label class='set-switch'><input type='checkbox' id='spoofDeviceOn'><span class='slider'></span></label>
+          </div>
+          <div style='margin:10px 0 4px;'>
+            <button id='spoofDeviceRandom' style='background:#1f6feb; color:#fff; border:1px solid #388bfd; padding:8px 16px; border-radius:6px; font-size:12px; cursor:pointer;'>🎲 一键随机设备</button>
+            <span style='color:#6e7681; font-size:11px; margin-left:8px;'>随机选一台真实机型 + 生成随机 IDFV/IDFA,并自动开启改机</span>
           </div>
           <div id='spoofDeviceFields' style='display:flex; flex-direction:column; gap:8px; margin-top:10px;'></div>
         </div>
@@ -1163,6 +1174,7 @@
     $('spoofDeviceOn').checked = !!dev.on;
     renderSpoofChips('spoofJbPaths', jb.paths||[], 'path');
     renderSpoofChips('spoofJbSchemes', jb.schemes||[], 'scheme');
+    renderSpoofChips('spoofJbImages', jb.images||[], 'image');
     renderSpoofDeviceFields(dev);
   }
   async function loadSpoof(){
@@ -1293,15 +1305,18 @@
   $('spoofAntiOn').addEventListener('change', () => postSpoof('group=anti&op=enable&on='+($('spoofAntiOn').checked?'1':'0')));
   $('spoofDeviceOn').addEventListener('change', () => postSpoof('group=device&op=enable&on='+($('spoofDeviceOn').checked?'1':'0')));
   function addSpoofJb(kind){
-    const input = kind==='scheme' ? $('spoofJbSchemeInput') : $('spoofJbPathInput');
+    const map = { scheme:'spoofJbSchemeInput', image:'spoofJbImageInput', path:'spoofJbPathInput' };
+    const input = $(map[kind] || map.path);
     const v = input.value.trim(); if(!v) return;
     input.value='';
     postSpoof('group=jb&op=add_'+kind+'&text='+encodeURIComponent(v));
   }
   $('spoofJbPathAdd').addEventListener('click', () => addSpoofJb('path'));
   $('spoofJbSchemeAdd').addEventListener('click', () => addSpoofJb('scheme'));
+  $('spoofJbImageAdd').addEventListener('click', () => addSpoofJb('image'));
   $('spoofJbPathInput').addEventListener('keydown', (e) => { if(e.key==='Enter'){ e.preventDefault(); addSpoofJb('path'); } });
   $('spoofJbSchemeInput').addEventListener('keydown', (e) => { if(e.key==='Enter'){ e.preventDefault(); addSpoofJb('scheme'); } });
+  $('spoofJbImageInput').addEventListener('keydown', (e) => { if(e.key==='Enter'){ e.preventDefault(); addSpoofJb('image'); } });
   function onSpoofRemove(e){
     const v = e.target.dataset && e.target.dataset.spoofRemove;
     if (!v) return;
@@ -1309,6 +1324,8 @@
   }
   $('spoofJbPaths').addEventListener('click', onSpoofRemove);
   $('spoofJbSchemes').addEventListener('click', onSpoofRemove);
+  $('spoofJbImages').addEventListener('click', onSpoofRemove);
+  $('spoofDeviceRandom').addEventListener('click', () => postSpoof('group=device&op=randomize'));
   $('spoofDeviceFields').addEventListener('change', (e) => {
     const key = e.target.dataset && e.target.dataset.devkey;
     if (!key) return;

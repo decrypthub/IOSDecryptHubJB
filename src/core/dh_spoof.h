@@ -31,6 +31,12 @@ BOOL dh_spoof_jb_add_path(NSString *p);
 BOOL dh_spoof_jb_remove_path(NSString *p);
 BOOL dh_spoof_jb_add_scheme(NSString *s);
 BOOL dh_spoof_jb_remove_scheme(NSString *s);
+// 注入痕迹隐藏: image 名(全路径)命中清单(子串匹配)时, _dyld_get_image_name/dladdr 返回良性系统库名。
+// 复用 jb 总开关。清单默认含自身 dylib 名与常见注入框架标记。
+BOOL dh_spoof_should_hide_image(const char *imageName);
+NSArray<NSString *> *dh_spoof_jb_images(void);
+BOOL dh_spoof_jb_add_image(NSString *s);
+BOOL dh_spoof_jb_remove_image(NSString *s);
 
 // ---- 反调试 ----
 BOOL dh_spoof_anti_debug_on(void);
@@ -42,6 +48,8 @@ void dh_spoof_device_set_on(BOOL on);
 // key ∈ {hw_machine, hw_model, os_version, device_name, idfv, idfa}。未设置/空 → 返回 nil(表示该项不伪造)。
 NSString * _Nullable dh_spoof_device_value(NSString *key);
 void dh_spoof_device_set_value(NSString *key, NSString * _Nullable val);
+// 一键随机设备: 从内置真实机型表随机选一台, 生成随机 IDFV/IDFA, 并置 device 总开关为开。
+void dh_spoof_device_randomize(void);
 
 // 给 /api/spoof 的整份配置快照(JSON 友好的 NSDictionary)。
 NSDictionary *dh_spoof_snapshot(void);

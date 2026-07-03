@@ -29,6 +29,7 @@ extern void dh_install_system_hooks(void);
 extern void dh_install_keychain_hooks(void);
 extern void dh_install_env_hooks(void);
 extern void dh_install_spoof_objc_hooks(void);
+extern void dh_install_dyld_hooks(void);
 
 static void dh_install_all_hooks(void) {
     dh_install_digest_hooks();
@@ -42,6 +43,7 @@ static void dh_install_all_hooks(void) {
     dh_install_keychain_hooks();
     dh_install_env_hooks();
     dh_install_spoof_objc_hooks();
+    dh_install_dyld_hooks();
 }
 
 __attribute__((constructor))
