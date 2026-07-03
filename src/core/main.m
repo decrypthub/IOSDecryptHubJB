@@ -16,14 +16,19 @@
 #import "dh_health.h"
 #import "dh_capture.h"
 #import "dh_noise.h"
+#import "dh_spoof.h"
 
 extern void dh_install_digest_hooks(void);
 extern void dh_install_hmac_hooks(void);
 extern void dh_install_symmetric_hooks(void);
 extern void dh_install_asymmetric_hooks(void);
 extern void dh_install_kdf_hooks(void);
+extern void dh_install_evp_hooks(void);
 extern void dh_install_file_hooks(void);
 extern void dh_install_system_hooks(void);
+extern void dh_install_keychain_hooks(void);
+extern void dh_install_env_hooks(void);
+extern void dh_install_spoof_objc_hooks(void);
 
 static void dh_install_all_hooks(void) {
     dh_install_digest_hooks();
@@ -31,8 +36,12 @@ static void dh_install_all_hooks(void) {
     dh_install_symmetric_hooks();
     dh_install_asymmetric_hooks();
     dh_install_kdf_hooks();
+    dh_install_evp_hooks();
     dh_install_file_hooks();
     dh_install_system_hooks();
+    dh_install_keychain_hooks();
+    dh_install_env_hooks();
+    dh_install_spoof_objc_hooks();
 }
 
 __attribute__((constructor))
@@ -47,10 +56,11 @@ static void dh_bootstrap(void) {
     dh_diag_append(DH_DIAG_GENERAL, "INFO", "IOSDecryptHub 启动, 开始安装 hook");
     dh_capture_load([docsDir stringByAppendingPathComponent:@".dh_capture.conf"].fileSystemRepresentation);
     dh_noise_load([docsDir stringByAppendingPathComponent:@".dh_noise.conf"]);
+    dh_spoof_load([docsDir stringByAppendingPathComponent:@".dh_spoof.conf"]);
     // 安装 hook —— 尽早完成, 否则早期发生的加解密会漏抓.
     dh_install_all_hooks();
-    dh_diag_append(DH_DIAG_GENERAL, "INFO", "hook 安装完成 (Digest/HMAC/对称/非对称/KDF/文件/系统/dlopen+dlsym)");
-    NSLog(@"[IOSDecryptHub] hook 已全部安装 (Digest / HMAC / 对称 / 非对称 / KDF / 文件 / 系统 / dlsym)");
+    dh_diag_append(DH_DIAG_GENERAL, "INFO", "hook 安装完成 (Digest/HMAC/对称/非对称/KDF/EVP/文件/系统)");
+    NSLog(@"[IOSDecryptHub] hook 已全部安装 (Digest / HMAC / 对称 / 非对称 / KDF / EVP / 文件 / 系统 / dlsym)");
 
     // 启动本地 HTTP 服务 - 不依赖 UIApplication, 可以立刻起.
     dh_http_start();

@@ -28,6 +28,7 @@
 #import "dh_health.h"
 #import "dh_capture.h"
 #import "dh_noise.h"
+#import "dh_spoof.h"
 #import "ui_float.h"
 #import "dump_manager.h"
 #import "dh_symtab.h"
@@ -398,6 +399,30 @@ static void handle_capture_set(int fd, NSDictionary *q) {
     send_json(fd, 200, @{@"sub": sub, @"on": @(on)});
 }
 
+// 伪装/绕过配置 —— 越狱隐藏 / 反调试 / 改机(持久化在沙箱 .dh_spoof.conf)。
+static void handle_spoof_get(int fd) {
+    send_json(fd, 200, dh_spoof_snapshot());
+}
+static void handle_spoof_set(int fd, NSDictionary *q) {
+    NSString *group = q[@"group"] ?: @"";
+    NSString *op    = q[@"op"] ?: @"";
+    BOOL on = [(q[@"on"] ?: @"1") isEqualToString:@"1"];
+    NSString *text  = q[@"text"];
+    if ([group isEqualToString:@"jb"]) {
+        if      ([op isEqualToString:@"enable"])       dh_spoof_jb_set_on(on);
+        else if ([op isEqualToString:@"add_path"]      && text.length) dh_spoof_jb_add_path(text);
+        else if ([op isEqualToString:@"remove_path"]   && text.length) dh_spoof_jb_remove_path(text);
+        else if ([op isEqualToString:@"add_scheme"]    && text.length) dh_spoof_jb_add_scheme(text);
+        else if ([op isEqualToString:@"remove_scheme"] && text.length) dh_spoof_jb_remove_scheme(text);
+    } else if ([group isEqualToString:@"anti"]) {
+        if ([op isEqualToString:@"enable"]) dh_spoof_anti_debug_set_on(on);
+    } else if ([group isEqualToString:@"device"]) {
+        if      ([op isEqualToString:@"enable"]) dh_spoof_device_set_on(on);
+        else if ([op isEqualToString:@"set"] && q[@"key"]) dh_spoof_device_set_value(q[@"key"], q[@"value"] ?: @"");
+    }
+    handle_spoof_get(fd);   // 回当前(已更新)状态
+}
+
 // 日志保留/落盘配置 —— 每类内存保留条数 + 单文件滚动上限。持久化在沙箱 .dh_logcfg.conf。
 static void handle_config_get(int fd) {
     DHLogStore *s = [DHLogStore shared];
@@ -760,6 +785,8 @@ static void handle_connection(int fd) {
                 handle_noise_patterns_get(fd, q);
             } else if ([path isEqualToString:@"/api/capture"]) {
                 handle_capture_get(fd);
+            } else if ([path isEqualToString:@"/api/spoof"]) {
+                handle_spoof_get(fd);
             } else if ([path isEqualToString:@"/api/config"]) {
                 handle_config_get(fd);
             } else if ([path hasPrefix:@"/api/logs/"]) {
@@ -806,6 +833,8 @@ static void handle_connection(int fd) {
                 handle_pause(fd, q);
             } else if ([path isEqualToString:@"/api/capture"]) {
                 handle_capture_set(fd, q);
+            } else if ([path isEqualToString:@"/api/spoof"]) {
+                handle_spoof_set(fd, q);
             } else if ([path isEqualToString:@"/api/config"]) {
                 handle_config_set(fd, q);
             } else if ([path isEqualToString:@"/api/dump"]) {

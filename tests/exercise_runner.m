@@ -18,11 +18,21 @@
 #include <unistd.h>
 #include <signal.h>
 
+#if defined(HAVE_OPENSSL) && HAVE_OPENSSL
+#include <openssl/evp.h>
+#endif
+
 #include <CommonCrypto/CommonDigest.h>
 #include <CommonCrypto/CommonHMAC.h>
 #include <CommonCrypto/CommonCryptor.h>
 #include <Security/Security.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/sysctl.h>
+#include <errno.h>
+extern int ptrace(int, pid_t, caddr_t, int);
 
 static void print_hex(const char *label, const unsigned char *b, size_t n) {
     printf("  %s (%zu): ", label, n);
@@ -173,8 +183,129 @@ static void test_rsa(void) {
     CFRelease(data); CFRelease(priv); if (pub) CFRelease(pub);
 }
 
+#if defined(HAVE_OPENSSL) && HAVE_OPENSSL
+static void test_evp_aes(void) {
+    printf("\n=== OpenSSL EVP AES-256-CBC ===\n");
+    const char *pt = "openssl evp cipher test plaintext";
+    unsigned char key[32], iv[16], ct[128];
+    memset(key, 0x42, sizeof(key));
+    memset(iv,  0x24, sizeof(iv));
+    int outl = 0, finl = 0;
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) { printf("  EVP_CIPHER_CTX_new failed\n"); return; }
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
+        printf("  EVP_EncryptInit_ex failed\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return;
+    }
+    if (EVP_EncryptUpdate(ctx, ct, &outl, (const unsigned char *)pt, (int)strlen(pt)) != 1) {
+        printf("  EVP_EncryptUpdate failed\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return;
+    }
+    int total = outl;
+    if (EVP_EncryptFinal_ex(ctx, ct + outl, &finl) != 1) {
+        printf("  EVP_EncryptFinal_ex failed\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return;
+    }
+    total += finl;
+    print_hex("evp-ct", ct, (size_t)total);
+    EVP_CIPHER_CTX_free(ctx);
+}
+#endif
+
+// Keychain: 增 → 查(dump data)→ 改 → 删 一条 generic password.
+// 期望日志: SecItemAdd / SecItemCopyMatching(dump) / SecItemUpdate / SecItemDelete.
+// 注: macOS 上 SecItem 走 login keychain, 可能因权限/无钥匙串失败, 失败也应有日志(status=...)。
+static void test_keychain(void) {
+    printf("\n=== Keychain SecItem ===\n");
+    NSString *svc = @"com.dh.probe.service";
+    NSString *acct = @"probe-account";
+    NSData *secret = [@"kc-secret-token-9f8e7d" dataUsingEncoding:NSUTF8StringEncoding];
+
+    NSDictionary *base = @{ (id)kSecClass: (id)kSecClassGenericPassword,
+                            (id)kSecAttrService: svc,
+                            (id)kSecAttrAccount: acct };
+    // 先清一遍避免 duplicate
+    SecItemDelete((__bridge CFDictionaryRef)base);
+
+    NSMutableDictionary *add = [base mutableCopy];
+    add[(id)kSecValueData] = secret;
+    OSStatus a = SecItemAdd((__bridge CFDictionaryRef)add, NULL);
+    printf("  SecItemAdd: %d\n", (int)a);
+
+    NSMutableDictionary *q = [base mutableCopy];
+    q[(id)kSecReturnData] = @YES;
+    q[(id)kSecMatchLimit] = (id)kSecMatchLimitOne;
+    CFTypeRef out = NULL;
+    OSStatus c = SecItemCopyMatching((__bridge CFDictionaryRef)q, &out);
+    printf("  SecItemCopyMatching: %d (len=%ld)\n", (int)c,
+           out ? CFDataGetLength((CFDataRef)out) : -1L);
+    if (out) CFRelease(out);
+
+    NSDictionary *upd = @{ (id)kSecValueData: [@"kc-secret-ROTATED" dataUsingEncoding:NSUTF8StringEncoding] };
+    OSStatus u = SecItemUpdate((__bridge CFDictionaryRef)base, (__bridge CFDictionaryRef)upd);
+    printf("  SecItemUpdate: %d\n", (int)u);
+
+    OSStatus d = SecItemDelete((__bridge CFDictionaryRef)base);
+    printf("  SecItemDelete: %d\n", (int)d);
+}
+
 static volatile int gKeepRunning = 1;
 static void on_sigint(int sig) { (void)sig; gKeepRunning = 0; }
+
+// 环境探测 / 越狱绕过 / 反调试。jb 默认开 → /bin/bash(mac 真实存在, 在默认越狱清单)应被隐藏。
+static void test_env(void) {
+    printf("\n=== Env / jailbreak-bypass / anti-debug ===\n");
+    errno = 0;
+    int a = access("/bin/bash", F_OK);
+    printf("  access(/bin/bash): ret=%d errno=%d (期望 -1/ENOENT=已隐藏)\n", a, errno);
+
+    struct stat st;
+    int s = stat("/bin/bash", &st);
+    printf("  stat(/bin/bash): ret=%d (期望 -1)\n", s);
+
+    int o = open("/bin/bash", O_RDONLY);
+    printf("  open(/bin/bash): ret=%d (期望 -1)\n", o);
+    if (o >= 0) close(o);
+
+    int p = ptrace(31 /*PT_DENY_ATTACH*/, 0, 0, 0);
+    printf("  ptrace(PT_DENY_ATTACH): ret=%d (期望 0=空转)\n", p);
+
+    char machine[64] = {0}; size_t ml = sizeof(machine);
+    sysctlbyname("hw.machine", machine, &ml, NULL, 0);
+    printf("  sysctlbyname(hw.machine) = %s (device 开→期望伪造值)\n", machine);
+
+    NSOperatingSystemVersion ov = [[NSProcessInfo processInfo] operatingSystemVersion];
+    printf("  NSProcessInfo os = %ld.%ld.%ld (device 开→期望伪造值)\n",
+           (long)ov.majorVersion, (long)ov.minorVersion, (long)ov.patchVersion);
+}
+
+// 文件层: 写一个 /tmp 文件 (dh_is_app_file 认 "/tmp/"), 再 read 回来 + mmap 一次.
+// 期望日志: open(写) / write / open(读) / read(dump 内容) / mmap.
+static void test_file(void) {
+    printf("\n=== File open/write/read/mmap ===\n");
+    const char *path = "/tmp/dh_file_probe.bin";
+    const char *payload = "sekret-token=abc123; device_id=DEADBEEF; probe file content";
+    size_t plen = strlen(payload);
+
+    int wfd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+    if (wfd < 0) { printf("  open(write) failed\n"); return; }
+    write(wfd, payload, plen);
+    close(wfd);
+
+    int rfd = open(path, O_RDONLY);
+    if (rfd < 0) { printf("  open(read) failed\n"); return; }
+    char buf[256] = {0};
+    ssize_t rn = read(rfd, buf, sizeof(buf));
+    printf("  read %zd bytes: %.*s\n", rn, (int)rn, buf);
+
+    void *m = mmap(NULL, plen, PROT_READ, MAP_PRIVATE, rfd, 0);
+    if (m != MAP_FAILED) { printf("  mmap ok @ %p\n", m); munmap(m, plen); }
+    close(rfd);
+}
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
@@ -187,13 +318,22 @@ int main(int argc, char **argv) {
     test_digests();
     test_hmac();
     test_aes();
+#if defined(HAVE_OPENSSL) && HAVE_OPENSSL
+    test_evp_aes();
+#endif
     @autoreleasepool { test_rsa(); }
+    test_file();
+    @autoreleasepool { test_keychain(); }
+    test_env();
 
     printf("\n[exercise] 全部 hook 调用完毕.\n");
     printf("[exercise] 用浏览器打开 http://127.0.0.1:8088\n");
     printf("[exercise] 应该能看到 MD5 / SHA1 / SHA256 / SHA512 (4 摘要) +\n");
     printf("           SHA256-streaming + HMAC-SHA256/SHA1 + HMAC-streaming +\n");
     printf("           AES-128-CBC encrypt + AES-128-CBC decrypt (streaming) +\n");
+#if defined(HAVE_OPENSSL) && HAVE_OPENSSL
+    printf("           OpenSSL EVP AES-256-CBC +\n");
+#endif
     printf("           RSA SIGN/VERIFY/ENC/DEC, 一共 ~12 条日志.\n");
     printf("[exercise] 另有 1 条 MGCopyAnswer 噪点 → 应出现在「噪点」tab, 不在加解密 tab.\n");
     printf("[exercise] Ctrl-C 退出. (默认 600s 自动退)\n");

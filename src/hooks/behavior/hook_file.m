@@ -9,12 +9,15 @@
 #import <Foundation/Foundation.h>
 #import <fcntl.h>
 #import <stdarg.h>
+#import <errno.h>
+#import <sys/mman.h>
 #import "fishhook.h"
 #import "log_store.h"
 #define DH_BOARD DH_DIAG_FILE
 #import "dh_health.h"
 #import "dh_capture.h"
 #import "dh_dlsym_redirect.h"
+#import "dh_spoof.h"
 
 static BOOL dh_is_app_file(const char *p) {
     if (!p || !*p) return NO;
@@ -60,6 +63,19 @@ static int (*orig_open)(const char *, int, ...);
 static int hooked_open(const char *path, int flags, ...) {
     mode_t mode = 0;
     if (flags & O_CREAT) { va_list ap; va_start(ap, flags); mode = (mode_t)va_arg(ap, int); va_end(ap); }
+    // 越狱绕过: 命中越狱清单的路径直接返回不存在(open 已被本文件占用, 故隐藏逻辑内联于此,
+    // 不在 hook_env 重复 rebind)。仅非递归路径生效, 防伪装自身记录/写盘触发的 open。
+    if (!dh_in_hook && dh_spoof_jb_should_hide_path(path)) {
+        dh_in_hook = 1;
+        DHLogEntry *e = [DHLogEntry new];
+        e.category = DHCategorySystem; e.algorithm = @"open"; e.operation = @"已隐藏";
+        e.detail = [NSString stringWithUTF8String:path] ?: @"?";
+        e.timestamp = DHTimestampNow(); e.callStack = DHCallStackFiltered();
+        [[DHLogStore shared] append:e];
+        dh_in_hook = 0;
+        errno = ENOENT;
+        return -1;
+    }
     int fd = orig_open(path, flags, mode);
     if (!dh_in_hook && fd >= 0 && dh_is_app_file(path)) {
         dh_in_hook = 1;
@@ -95,6 +111,64 @@ static ssize_t hooked_write(int fd, const void *buf, size_t n) {
         dh_in_hook = 0;
     }
     return r;
+}
+
+// ---------- read / pread (只 dump 被跟踪的沙盒文件 fd 读出的内容) ----------
+// read 超高频: 先查 gFdPath 命中 (未跟踪 fd 直接跳过), 再决定是否 dump。单条内容上限
+// 1MB, 防个别巨读撑爆内存/UI。
+#define DH_READ_DUMP_CAP (1u << 20)
+
+static void file_log_read(int fd, const void *buf, ssize_t r) {
+    if (dh_in_hook || !gFdPath || r <= 0) return;
+    dh_in_hook = 1;
+    dispatch_semaphore_wait(gFdLock, DISPATCH_TIME_FOREVER);
+    NSString *path = gFdPath[@(fd)];
+    dispatch_semaphore_signal(gFdLock);
+    if (path && dh_capture_sub_enabled(DH_CAP_FILE_READ)) {
+        DHLogEntry *e = [DHLogEntry new];
+        e.category  = DHCategoryFile;
+        e.algorithm = @"read";
+        e.operation = [NSString stringWithFormat:@"%zd bytes", r];
+        e.detail    = path;
+        NSUInteger cap = (NSUInteger)r < DH_READ_DUMP_CAP ? (NSUInteger)r : DH_READ_DUMP_CAP;
+        if (buf && cap) e.input = [NSData dataWithBytes:buf length:cap];
+        e.timestamp = DHTimestampNow();
+        e.callStack = DHCallStackFiltered();
+        [[DHLogStore shared] append:e];
+    }
+    dh_in_hook = 0;
+}
+
+static ssize_t (*orig_read)(int, void *, size_t);
+static ssize_t hooked_read(int fd, void *buf, size_t n) {
+    ssize_t r = orig_read(fd, buf, n);
+    file_log_read(fd, buf, r);
+    return r;
+}
+
+static ssize_t (*orig_pread)(int, void *, size_t, off_t);
+static ssize_t hooked_pread(int fd, void *buf, size_t n, off_t off) {
+    ssize_t r = orig_pread(fd, buf, n, off);
+    file_log_read(fd, buf, r);
+    return r;
+}
+
+// ---------- mmap (映射已跟踪 fd 时记路径/长度/offset; 内容惰性分页, 此处只记元数据) ----------
+static void *(*orig_mmap)(void *, size_t, int, int, int, off_t);
+static void *hooked_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) {
+    void *p = orig_mmap(addr, len, prot, flags, fd, off);
+    if (!dh_in_hook && gFdPath && fd >= 0 && p != MAP_FAILED) {
+        dh_in_hook = 1;
+        dispatch_semaphore_wait(gFdLock, DISPATCH_TIME_FOREVER);
+        NSString *path = gFdPath[@(fd)];
+        dispatch_semaphore_signal(gFdLock);
+        if (path && dh_capture_sub_enabled(DH_CAP_FILE_MMAP)) {
+            file_log(@"mmap", path.fileSystemRepresentation,
+                     [NSString stringWithFormat:@"%zu bytes @ off %lld", len, (long long)off]);
+        }
+        dh_in_hook = 0;
+    }
+    return p;
 }
 
 // ---------- close (清理 fd 映射, 防 fd 复用误配; 清理不会递归, 无需 dh_in_hook) ----------
@@ -133,6 +207,9 @@ void dh_install_file_hooks(void) {
     struct rebinding r[] = {
         {"open",   hooked_open,   (void **)&orig_open},
         {"write",  hooked_write,  (void **)&orig_write},
+        {"read",   hooked_read,   (void **)&orig_read},
+        {"pread",  hooked_pread,  (void **)&orig_pread},
+        {"mmap",   hooked_mmap,   (void **)&orig_mmap},
         {"close",  hooked_close,  (void **)&orig_close},
         {"unlink", hooked_unlink, (void **)&orig_unlink},
         {"rename", hooked_rename, (void **)&orig_rename},

@@ -14,9 +14,12 @@ static char g_conf_path[1024] = {0};
 
 static const char *kSubNames[DH_CAP_SUB_COUNT] = {
     "DIGEST", "HMAC", "SYMMETRIC", "ASYMMETRIC", "KDF",
-    "FILE_OPEN", "FILE_WRITE", "FILE_UNLINK", "FILE_RENAME",
+    "FILE_OPEN", "FILE_WRITE", "FILE_READ", "FILE_MMAP", "FILE_UNLINK", "FILE_RENAME",
     "SYS_DLOPEN",
     "SYS_DLSYM",
+    "EVP",
+    "KEYCHAIN",
+    "ENV_PROBE",
 };
 
 static void set_defaults(void) {

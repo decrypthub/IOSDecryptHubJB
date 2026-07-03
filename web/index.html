@@ -367,6 +367,7 @@
         <button type='button' data-setpage='capture' class='active'>捕获</button>
         <button type='button' data-setpage='log'>日志</button>
         <button type='button' data-setpage='noise'>噪声</button>
+        <button type='button' data-setpage='spoof'>伪装/绕过</button>
         <button type='button' data-setpage='data'>数据</button>
       </nav>
       <div class='set-main'>
@@ -429,6 +430,41 @@
             <button id='noisePatternAddSys' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
           </div>
         </div>
+        <div id='setPageSpoof' class='set-page'>
+          <h4>伪装 / 绕过</h4>
+          <p class='set-lead'>进程内伪装:仅改写<b>目标 App 在本进程内看到的返回值</b>,非系统级真实改机。规则持久化到沙箱 .dh_spoof.conf,重注入仍生效。</p>
+
+          <div class='set-section-title'>越狱检测绕过</div>
+          <div class='set-toggle-row'>
+            <div class='lab'><b>启用越狱隐藏</b><span>命中清单的路径经 open/stat/access 返回不存在;DYLD 注入痕迹经 getenv 隐藏</span></div>
+            <label class='set-switch'><input type='checkbox' id='spoofJbOn'><span class='slider'></span></label>
+          </div>
+          <div class='set-section-title' style='font-size:12px;color:#8b949e;'>隐藏路径</div>
+          <div id='spoofJbPaths' style='display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;'></div>
+          <div style='display:flex; gap:8px; margin-bottom:14px;'>
+            <input id='spoofJbPathInput' type='text' placeholder='如 /Applications/Cydia.app 或 /var/jb' style='flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:8px 10px; border-radius:6px; font-size:12px;'>
+            <button id='spoofJbPathAdd' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
+          </div>
+          <div class='set-section-title' style='font-size:12px;color:#8b949e;'>隐藏 URL Scheme</div>
+          <div id='spoofJbSchemes' style='display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;'></div>
+          <div style='display:flex; gap:8px; margin-bottom:20px;'>
+            <input id='spoofJbSchemeInput' type='text' placeholder='如 cydia、sileo、filza' style='flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:8px 10px; border-radius:6px; font-size:12px;'>
+            <button id='spoofJbSchemeAdd' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
+          </div>
+
+          <div class='set-section-title'>反调试</div>
+          <div class='set-toggle-row' style='margin-bottom:20px;'>
+            <div class='lab'><b>启用反调试绕过</b><span>ptrace(PT_DENY_ATTACH) 空转、sysctl 清 P_TRACED、csops 清 CS_DEBUGGED</span></div>
+            <label class='set-switch'><input type='checkbox' id='spoofAntiOn'><span class='slider'></span></label>
+          </div>
+
+          <div class='set-section-title'>改机(设备参数伪造)</div>
+          <div class='set-toggle-row'>
+            <div class='lab'><b>启用改机</b><span>各字段留空表示不伪造该项。sysctl/uname 走 C 层,UIDevice/IDFV/IDFA 走 ObjC。默认关,避免误伤</span></div>
+            <label class='set-switch'><input type='checkbox' id='spoofDeviceOn'><span class='slider'></span></label>
+          </div>
+          <div id='spoofDeviceFields' style='display:flex; flex-direction:column; gap:8px; margin-top:10px;'></div>
+        </div>
         <div id='setPageData' class='set-page'>
           <h4>数据</h4>
           <p class='set-lead'>危险操作 — 清空后不可恢复, 但可随时从「下载全部日志」取走落盘副本后再清。</p>
@@ -457,14 +493,19 @@
       { sub:'SYMMETRIC', title:'CCCrypt / CCCryptor', funcs:'CCCrypt, CCCryptorCreate / CreateWithMode / Update / Final (AES·DES·3DES·RC4·RC2·CAST·Blowfish)' },
       { sub:'ASYMMETRIC', title:'SecKey 非对称', funcs:'SecKeyCreateSignature, VerifySignature, CreateEncryptedData, CreateDecryptedData' },
       { sub:'KDF', title:'CCKeyDerivationPBKDF', funcs:'PBKDF2 密钥派生' },
+      { sub:'EVP', title:'OpenSSL EVP Cipher', funcs:'EVP_*Init* / *Update / *Final* / CIPHER_CTX_ctrl — AES·DES·ChaCha20·SM4·GCM/CCM 等对称算法' },
     ]},
     { section: '系统', rows: [
       { sub:'FILE_OPEN', title:'open', funcs:'open(), openat() — 打开/创建沙盒文件' },
       { sub:'FILE_WRITE', title:'write', funcs:'write(), writev() — 写入文件' },
+      { sub:'FILE_READ', title:'read', funcs:'read(), pread() — 读取沙盒文件并 dump 读出内容 (命中已跟踪 fd)' },
+      { sub:'FILE_MMAP', title:'mmap', funcs:'mmap() — 映射沙盒文件 (记路径/长度/offset; db·证书常走 mmap)' },
       { sub:'FILE_UNLINK', title:'unlink', funcs:'unlink(), remove() — 删除文件' },
       { sub:'FILE_RENAME', title:'rename', funcs:'rename() — 重命名/移动' },
       { sub:'SYS_DLOPEN', title:'dlopen', funcs:'dlopen() — 运行时载入动态库' },
       { sub:'SYS_DLSYM', title:'dlsym', funcs:'dlsym() — 动态符号解析; 对已 hook 符号返回 wrapper(注入前已缓存的指针除外)' },
+      { sub:'KEYCHAIN', title:'SecItem Keychain', funcs:'SecItemCopyMatching / Add / Update / Delete — token·密码·设备ID 存取; dump 读回/写入的 data' },
+      { sub:'ENV_PROBE', title:'环境探测观测', funcs:'sysctl / sysctlbyname / uname / getenv / ptrace / csops / stat / access — 记录 App 在探测什么环境(改写规则见「伪装/绕过」页)' },
     ]},
   ];
   const tabState = { crypto:{q:'', sizeMin:'', sizeMax:''}, sys:{q:''}, noise_crypto:{q:''}, noise_sys:{q:''} };
@@ -1060,6 +1101,7 @@
     syncCapCheckboxes();
     loadConfig();
     loadNoisePatterns();
+    loadSpoof();
   }
   async function postConfig(params){
     try { const c = await fetchJSON('/api/config?'+params, {method:'POST'}); $('setLogBytes').textContent = fmtSize(c.logBytes||0); toast('已保存'); }
@@ -1089,6 +1131,47 @@
       $('noisePatternsCrypto').innerHTML = '<span style="color:#ffa198;font-size:12px;">获取失败: '+escapeHTML(e.message)+'</span>';
       $('noisePatternsSys').innerHTML = '';
     }
+  }
+
+  // ===== 伪装/绕过 (/api/spoof) =====
+  const SPOOF_DEVICE_FIELDS = [
+    { key:'hw_machine',  label:'机型 hw.machine', ph:'如 iPhone15,3' },
+    { key:'hw_model',    label:'内部型号 hw.model', ph:'如 D74AP' },
+    { key:'os_version',  label:'系统版本', ph:'如 17.5.1' },
+    { key:'device_name', label:'设备名称', ph:'如 iPhone' },
+    { key:'idfv',        label:'IDFV', ph:'UUID, 如 12345678-90AB-...' },
+    { key:'idfa',        label:'IDFA', ph:'UUID, 如 12345678-90AB-...' },
+  ];
+  function renderSpoofChips(elId, list, kind){
+    $(elId).innerHTML = (list && list.length) ? list.map(p =>
+      '<span class="cap-chip" data-val="'+escapeHTML(p)+'">'+escapeHTML(p)
+      + ' <span style="color:#8b949e;cursor:pointer;" data-spoof-remove="'+escapeHTML(p)+'" data-kind="'+kind+'">✕</span></span>'
+    ).join('') : '<span style="color:#6e7681;font-size:12px;">(空)</span>';
+  }
+  function renderSpoofDeviceFields(dev){
+    $('spoofDeviceFields').innerHTML = SPOOF_DEVICE_FIELDS.map(f =>
+      '<div style="display:flex; align-items:center; gap:10px;">'
+      + '<span style="width:150px; color:#8b949e; font-size:12px;">'+escapeHTML(f.label)+'</span>'
+      + '<input type="text" data-devkey="'+f.key+'" value="'+escapeHTML(dev[f.key]||'')+'" placeholder="'+escapeHTML(f.ph)
+      + '" style="flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:7px 9px; border-radius:6px; font-size:12px;"></div>'
+    ).join('');
+  }
+  function applySpoofSnapshot(s){
+    const jb=(s&&s.jb)||{}, anti=(s&&s.anti_debug)||{}, dev=(s&&s.device)||{};
+    $('spoofJbOn').checked = !!jb.on;
+    $('spoofAntiOn').checked = !!anti.on;
+    $('spoofDeviceOn').checked = !!dev.on;
+    renderSpoofChips('spoofJbPaths', jb.paths||[], 'path');
+    renderSpoofChips('spoofJbSchemes', jb.schemes||[], 'scheme');
+    renderSpoofDeviceFields(dev);
+  }
+  async function loadSpoof(){
+    try { applySpoofSnapshot(await fetchJSON('/api/spoof')); }
+    catch(e){ $('spoofJbPaths').innerHTML = '<span style="color:#ffa198;font-size:12px;">获取失败: '+escapeHTML(e.message)+'</span>'; }
+  }
+  async function postSpoof(params){
+    try { applySpoofSnapshot(await fetchJSON('/api/spoof?'+params, {method:'POST'})); toast('已保存'); }
+    catch(e){ toast('保存失败: '+e.message); }
   }
 
   document.addEventListener('click', async (ev) => {
@@ -1204,6 +1287,33 @@
   }
   $('noisePatternsCrypto').addEventListener('click', onNoisePatternRemove);
   $('noisePatternsSys').addEventListener('click', onNoisePatternRemove);
+
+  // 伪装/绕过 事件
+  $('spoofJbOn').addEventListener('change', () => postSpoof('group=jb&op=enable&on='+($('spoofJbOn').checked?'1':'0')));
+  $('spoofAntiOn').addEventListener('change', () => postSpoof('group=anti&op=enable&on='+($('spoofAntiOn').checked?'1':'0')));
+  $('spoofDeviceOn').addEventListener('change', () => postSpoof('group=device&op=enable&on='+($('spoofDeviceOn').checked?'1':'0')));
+  function addSpoofJb(kind){
+    const input = kind==='scheme' ? $('spoofJbSchemeInput') : $('spoofJbPathInput');
+    const v = input.value.trim(); if(!v) return;
+    input.value='';
+    postSpoof('group=jb&op=add_'+kind+'&text='+encodeURIComponent(v));
+  }
+  $('spoofJbPathAdd').addEventListener('click', () => addSpoofJb('path'));
+  $('spoofJbSchemeAdd').addEventListener('click', () => addSpoofJb('scheme'));
+  $('spoofJbPathInput').addEventListener('keydown', (e) => { if(e.key==='Enter'){ e.preventDefault(); addSpoofJb('path'); } });
+  $('spoofJbSchemeInput').addEventListener('keydown', (e) => { if(e.key==='Enter'){ e.preventDefault(); addSpoofJb('scheme'); } });
+  function onSpoofRemove(e){
+    const v = e.target.dataset && e.target.dataset.spoofRemove;
+    if (!v) return;
+    postSpoof('group=jb&op=remove_'+(e.target.dataset.kind||'path')+'&text='+encodeURIComponent(v));
+  }
+  $('spoofJbPaths').addEventListener('click', onSpoofRemove);
+  $('spoofJbSchemes').addEventListener('click', onSpoofRemove);
+  $('spoofDeviceFields').addEventListener('change', (e) => {
+    const key = e.target.dataset && e.target.dataset.devkey;
+    if (!key) return;
+    postSpoof('group=device&op=set&key='+encodeURIComponent(key)+'&value='+encodeURIComponent(e.target.value.trim()));
+  });
   $('setClearAll').addEventListener('click', async () => {
     if(!confirm('确定清空全部日志(内存 + 所有落盘段)? 不可恢复。')) return;
     await fetch('/api/clear',{method:'POST'});

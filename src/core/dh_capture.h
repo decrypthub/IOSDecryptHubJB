@@ -20,10 +20,15 @@ typedef enum {
     DH_CAP_KDF,            // PBKDF2
     DH_CAP_FILE_OPEN,
     DH_CAP_FILE_WRITE,
+    DH_CAP_FILE_READ,      // read/pread —— 命中已跟踪 fd 时 dump 读出内容
+    DH_CAP_FILE_MMAP,      // mmap —— 映射已跟踪 fd 时记路径/长度/offset
     DH_CAP_FILE_UNLINK,
     DH_CAP_FILE_RENAME,
     DH_CAP_SYS_DLOPEN,
     DH_CAP_SYS_DLSYM,      // dlsym 动态符号解析(含重定向到 hook wrapper)
+    DH_CAP_EVP,            // OpenSSL EVP 对称加解密 (Init/Update/Final/ctrl)
+    DH_CAP_KEYCHAIN,       // SecItem* Keychain 查询/增改删 (token/密码存取)
+    DH_CAP_ENV_PROBE,      // 环境探测观测 (sysctl/uname/getenv/ptrace/csops/stat/access)
     DH_CAP_SUB_COUNT
 } dh_cap_sub;
 

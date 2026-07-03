@@ -21,6 +21,7 @@ Web 面板多 tab（加解密 / 文件 / 系统 / 符号 / Dump）+ 宿主 App �
 - 摘要（Digest）：MD2 / MD4 / MD5、SHA1 / SHA224 / SHA256 / SHA384 / SHA512，一次性与流式 Init/Update/Final 都覆盖，流式会把分片喂入的数据拼回完整明文。
 - HMAC：CCHmac 系列，解析为 HMAC-SHA256 等。
 - 对称加密：AES / DES / 3DES / RC4 / RC2 / CAST / Blowfish，覆盖 CCCrypt（一次性）、CCCryptorCreate / CCCryptorCreateWithMode / CCCryptorUpdate / CCCryptorFinal（流式），自动识别 ECB / CBC / CTR / CFB / OFB 模式与 PKCS7 填充。
+- **OpenSSL EVP 对称**（若目标链接 libcrypto）：`EVP_*Init*` / `*Update` / `*Final*` / `EVP_CIPHER_CTX_ctrl`，覆盖 AES / DES / ChaCha20 / SM4 / GCM / CCM 等所有走 EVP_CIPHER 接口的算法；Init 绑定 ctx→cipher/key/iv，Update 拼明文/密文，ctrl 补 AAD/tag。
 - 非对称：RSA / EC 的签名、验签、加密、解密（SecKey 系列）。
 - 密钥派生（KDF）：CCKeyDerivationPBKDF（PBKDF2），记录明文口令、salt、迭代次数、PRF 与派生出的密钥。
 
@@ -38,7 +39,7 @@ Web 面板多 tab 架构，三类监控共享同一套左右分栏 master-detail
 
 | tab | hook 目标 | 能看到什么 |
 | --- | --- | --- |
-| 加解密 | CommonCrypto / SecKey | 算法 / Key / IV / 明文 / 密文 / 调用栈 |
+| 加解密 | CommonCrypto / SecKey / OpenSSL EVP | 算法 / Key / IV / 明文 / 密文 / 调用栈 |
 | 文件 | open / write / unlink / rename | 沙盒文件读写、删除、重命名（过滤系统噪音） |
 | 系统 | dlopen / dlsym | 运行时载入的动态库; 动态符号解析(对已 hook 符号重定向到 wrapper) |
 
@@ -54,6 +55,24 @@ Web 面板多 tab 架构，三类监控共享同一套左右分栏 master-detail
 - 在 `dlsym("CCCrypt")` / `dlsym("CC_MD5")` 等已 hook 符号上，返回我们的 wrapper，使后续通过函数指针的调用也能被捕获
 
 **边界**：若目标在 dylib 注入**之前**已经 `dlsym` 并缓存了函数指针，后续再 hook `dlsym` 为时已晚。
+
+### OpenSSL EVP 对称加解密
+
+目标 App 若静态/动态链接 **libcrypto**，且对称加解密走 EVP Cipher API，本插件 hook：
+
+```text
+EVP_EncryptInit_ex / EVP_DecryptInit_ex / EVP_CipherInit_ex
+EVP_EncryptInit_ex2 / EVP_DecryptInit_ex2 / EVP_CipherInit_ex2  (OpenSSL 3.x)
+EVP_EncryptUpdate / EVP_DecryptUpdate / EVP_CipherUpdate
+EVP_EncryptFinal_ex / EVP_DecryptFinal_ex / EVP_CipherFinal_ex
+EVP_CIPHER_CTX_ctrl   (GCM/CCM tag、AAD 等)
+```
+
+可捕获所有通过 `EVP_CIPHER_CTX` 流转的对称算法（AES-CBC/GCM/CTR、DES/3DES、ChaCha20-Poly1305、SM4、Camellia 等，取决于 OpenSSL 构建）。
+
+**不覆盖**：RSA/ECC（需 `EVP_PKEY_*` / `RSA_*`）、Hash/HMAC/KDF（需 `EVP_Digest*` / `HMAC_*` / `EVP_KDF*`）、CommonCrypto（`CCCrypt`）、BoringSSL AEAD（`EVP_AEAD_CTX_*`）、自研/静态链接不走 import slot 的实现。
+
+**实现注意**：OpenSSL 3 初始化会通过 `dlsym` 解析自身 EVP 符号，故 EVP **不**走 dlsym 重定向表；`libcrypto` 内部发起的 `dlsym` 亦跳过重定向。Mac 本地测试需 `brew install openssl@3`。
 
 ## 砸壳（脱壳 / dump）
 
@@ -180,7 +199,7 @@ src/
     log_store.{h,m}     日志中心 (环形缓冲 + 异步落盘 + 分类计数 + 进程信息)
     main.m              注入入口 (构造函数, 安装所有 hook)
   hooks/
-    crypto/             加解密 hook: digest / hmac / symmetric / asymmetric / kdf
+    crypto/             加解密 hook: digest / hmac / symmetric / asymmetric / kdf / evp
     behavior/           行为 hook: file(open/write/...) / system(dlopen/dlsym)
   server/
     http_server.{h,m}   零依赖本地 HTTP 服务

@@ -15,6 +15,7 @@ SRC     := src/core/fishhook.c \
            src/core/dh_health.c \
            src/core/dh_capture.c \
            src/core/dh_noise.m \
+           src/core/dh_spoof.m \
            src/core/dh_symtab.c \
            src/core/dh_dlsym_redirect.c \
            src/core/log_store.m \
@@ -27,8 +28,12 @@ SRC     := src/core/fishhook.c \
            src/hooks/crypto/hook_symmetric.m \
            src/hooks/crypto/hook_asymmetric.m \
            src/hooks/crypto/hook_kdf.m \
+           src/hooks/crypto/hook_evp.m \
            src/hooks/behavior/hook_file.m \
            src/hooks/behavior/hook_system.m \
+           src/hooks/behavior/hook_keychain.m \
+           src/hooks/behavior/hook_env.m \
+           src/hooks/behavior/hook_spoof_objc.m \
            src/server/http_server.m \
            src/ui/ui_float.m \
            src/ui/ui_logview.m \
@@ -146,6 +151,15 @@ $(SIM_TARGET): $(WEB_HEADER) $(SRC)
 # 编 dylib + 编 exercise_runner + DYLD_INSERT_LIBRARIES 跑.
 # 跑完浏览器开 http://127.0.0.1:8088 应该能看到 ~12 条日志.
 TEST_BIN := tests/exercise_runner
+OPENSSL_PREFIX := $(shell brew --prefix openssl@3 2>/dev/null || brew --prefix openssl 2>/dev/null)
+TEST_OPENSSL_CFLAGS :=
+TEST_OPENSSL_LIBS :=
+ifneq ($(OPENSSL_PREFIX),)
+ifneq ($(wildcard $(OPENSSL_PREFIX)/include/openssl/evp.h),)
+TEST_OPENSSL_CFLAGS := -I$(OPENSSL_PREFIX)/include -DHAVE_OPENSSL=1
+TEST_OPENSSL_LIBS := -L$(OPENSSL_PREFIX)/lib -lcrypto
+endif
+endif
 
 test-mac: $(MAC_TARGET) $(TEST_BIN)
 	@echo "[*] 启动测试: DYLD_INSERT_LIBRARIES=$(MAC_TARGET) $(TEST_BIN)"
@@ -157,8 +171,9 @@ $(TEST_BIN): tests/exercise_runner.m
 	@echo "[*] 编 exercise_runner ..."
 	$(CC) -arch $(MAC_ARCH) -isysroot $(MAC_SDK) -mmacosx-version-min=$(MAC_MIN) \
 	      -ObjC -fobjc-arc -Wall -Wno-deprecated-declarations -O0 -g \
+	      $(TEST_OPENSSL_CFLAGS) \
 	      -framework Foundation -framework CoreFoundation -framework Security \
-	      tests/exercise_runner.m -o $(TEST_BIN)
+	      tests/exercise_runner.m -o $(TEST_BIN) $(TEST_OPENSSL_LIBS)
 	@echo "✅ test runner: $(TEST_BIN)"
 
 # ---------- 5) 发布产物: 带版本号的 dylib ----------
