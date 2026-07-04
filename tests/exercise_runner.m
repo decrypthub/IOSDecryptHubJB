@@ -34,6 +34,7 @@
 #include <errno.h>
 #include <mach-o/dyld.h>
 extern int ptrace(int, pid_t, caddr_t, int);
+extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 
 static void print_hex(const char *label, const unsigned char *b, size_t n) {
     printf("  %s (%zu): ", label, n);
@@ -279,9 +280,18 @@ static void test_env(void) {
     sysctlbyname("hw.machine", machine, &ml, NULL, 0);
     printf("  sysctlbyname(hw.machine) = %s (device 开→期望伪造值)\n", machine);
 
+    char model[64] = {0}; size_t modl = sizeof(model);
+    sysctlbyname("hw.model", model, &modl, NULL, 0);
+    printf("  sysctlbyname(hw.model) = %s (device 开→期望伪造值)\n", model);
+
     NSOperatingSystemVersion ov = [[NSProcessInfo processInfo] operatingSystemVersion];
     printf("  NSProcessInfo os = %ld.%ld.%ld (device 开→期望伪造值)\n",
            (long)ov.majorVersion, (long)ov.minorVersion, (long)ov.patchVersion);
+
+    // csops: 反调试清 CS_DEBUGGED 验证。先探当前 flags, 观测/清位逻辑在 hook 内。
+    uint32_t csflags = 0;
+    int cr = csops(getpid(), 0 /*CS_OPS_STATUS*/, &csflags, sizeof(csflags));
+    printf("  csops(CS_OPS_STATUS): ret=%d flags=0x%x (CS_DEBUGGED=0x10000000 应被清)\n", cr, csflags);
 }
 
 // 文件层: 写一个 /tmp 文件 (dh_is_app_file 认 "/tmp/"), 再 read 回来 + mmap 一次.
