@@ -9,7 +9,7 @@
 #       export CROSS_CC=/path/to/theos/toolchain/linux/iphone/bin/clang
 #       make linux                 -> decrypt_helper.dylib
 
-VERSION := 1.15.0
+VERSION := 1.16.0
 TARGET  := decrypt_helper.dylib
 
 # Capstone 反汇编库源文件（仅 ARM/ARM64 架构）

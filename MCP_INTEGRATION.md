@@ -21,8 +21,16 @@
 | `analyze_function` | 安全读取进程内存 `address..+size` 并反汇编（`vm_read_overwrite` 防护，不可读地址返回 isError 而非崩溃） | `address`, `size` |
 | `list_imports` | 列举某镜像的导入（undefined）符号 —— fishhook 可 rebind 的候选 | `image_index` |
 | `get_macho_info` | 列举 App bundle 内已加载镜像：load_address、cryptid、加密状态 | 无 |
+| `find_xrefs` | 「谁调用了它」：扫某镜像 `__TEXT,__text` 里所有直接 `bl` 到目标符号/地址的调用点，经运行时已绑定的 GOT + dladdr 把 import stub 还原成真实符号 | `symbol` 或 `address` |
+| `find_string_refs` | 「谁引用了这个字符串」：扫 `__text` 的 `ADRP+ADD`（直接）/ `ADRP+LDR`（间接指针槽）恢复的数据地址，落在字符串 section 则记引用点 | `string` 或 `address` |
 
-可选参数：`disassemble`/`analyze_function` 的 `arch`（`arm64`/`arm`/`thumb`，默认 arm64）；`list_imports` 的 `query`（子串过滤）、`limit`。
+可选参数：`disassemble`/`analyze_function` 的 `arch`（`arm64`/`arm`/`thumb`，默认 arm64）；`list_imports` 的 `query`（子串过滤）、`limit`；`find_xrefs` 的 `image`（镜像名子串，默认主程序）、`max_results`（默认 256）。
+
+`find_xrefs` 仅 tier-1：只认直接 `bl`（不含 `blr`/`br` 间接调用、无 string/selector 引用、无 CFG）。三种 `kind`：`call_direct`（本镜像内部函数）/`call_import_stub`（经 `__stubs`/`__auth_stubs` 的导入 API）/`call_objc_stub`（经 `__objc_stubs` 的 `objc_msgSend$sel` 降级 stub）。lazy slot 尚未绑定时目标记为未知但仍保留调用点。`resolved_name` 反映**运行时真正到达的目标**——若该导入被 fishhook 改写，会如实显示 hook 符号。
+
+**函数归属（tier-1.5）**：每条结果带 `from_func`（`main+0x50` 或 strip 后 `sub_<runtime>+0x50`）、`from_func_start`（函数起点运行时地址）、`from_func_offset`、`from_func_vmaddr`（起点 vmaddr，去 slide，跨 ASLR 稳定，宜作 ID）。归属优先用 `dladdr` 符号，无符号时用 `LC_FUNCTION_STARTS`；`from_func` is resolved by `LC_FUNCTION_STARTS` when available, and function end is approximated by the next function start（不是完整函数边界恢复）。
+
+**`find_string_refs`（tier-2A）**：谁引用了某字符串。给 `string`（子串匹配）或 `address`（精确字符串地址），可选 `image`（默认主程序）、`max_results`。识别两种取址模式——`ADRP+ADD`（直接，`indirect:false`，目标在被扫镜像的 `__cstring`/`__objc_methname`/`__objc_classname`/`__objc_methtype`）与 `ADRP+LDR`→指针槽（间接，`indirect:true`，仅认 `__objc_selrefs`/`__got`/... 白名单槽；运行时 selref 已定到别处的 SEL，目标可能跨镜像，section 标 `(external)` 但字符串内容仍如实读出）。局部窗口回溯：按寄存器缓存最近 `ADRP` 页，寄存器被写即失效，不做跨基本块/跨函数数据流。每条结果带 `ref_site`、`string`、`string_addr`、`string_vmaddr`、`section`、`instruction`、`indirect`，以及与 find_xrefs 同款的 `from_func` 归属字段。selector ref 就是间接串引用的特化（selref 槽 + 使用点旁的 `objc_msgSend`），tier-2B 再做。
 
 工具执行错误走 MCP 的 `isError:true` content 信封（非 JSON-RPC 协议错误）；返回同时含 `structuredContent`（机器可读）与 `content[].text`（JSON 文本）。
 

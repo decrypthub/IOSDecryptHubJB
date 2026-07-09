@@ -343,6 +343,128 @@ static NSDictionary *tool_get_macho_info(NSDictionary *args) {
     return tool_ok(@{@"count": @(n), @"encrypted_count": @(encrypted), @"images": arr});
 }
 
+// find_xrefs —— tier-1: 扫某镜像 __text 里所有直接 BL 到目标符号/地址的调用点
+static NSDictionary *tool_find_xrefs(NSDictionary *args) {
+    NSString *sym     = [args[@"symbol"] isKindOfClass:NSString.class] ? args[@"symbol"] : nil;
+    NSString *addrStr = [args[@"address"] isKindOfClass:NSString.class] ? args[@"address"] : nil;
+    NSString *image   = [args[@"image"] isKindOfClass:NSString.class] ? args[@"image"] : nil;
+    if (sym.length == 0 && addrStr.length == 0)
+        return tool_err(@"need 'symbol' or 'address' to locate the xref target");
+
+    uint64_t targetAddr = addrStr.length ? strtoull(addrStr.UTF8String, NULL, 0) : 0;
+    int maxR = [args[@"max_results"] isKindOfClass:NSNumber.class] ? [args[@"max_results"] intValue] : 256;
+    if (maxR <= 0 || maxR > 2000) maxR = 256;
+
+    AnalysisXref *rows = calloc((size_t)maxR, sizeof(AnalysisXref));
+    if (!rows) return tool_err(@"out of memory");
+
+    uint64_t qaddr = 0, scanned = 0; char imgNm[256] = {0}; int truncated = 0;
+    int n = analysis_find_xrefs(image.length ? image.UTF8String : NULL,
+                                sym.length ? sym.UTF8String : NULL, targetAddr,
+                                rows, maxR, &qaddr, imgNm, sizeof(imgNm), &scanned, &truncated);
+    if (n == -1) { free(rows); return tool_err(@"invalid arguments"); }
+    if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
+    if (n == -3) { free(rows); return tool_err([NSString stringWithFormat:@"symbol not resolvable via dlsym: %@ (try passing 'address' instead)", sym]); }
+
+    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
+    for (int i = 0; i < n; i++) {
+        AnalysisXref *r = &rows[i];
+        NSMutableDictionary *d = [@{
+            @"call_site":       [NSString stringWithFormat:@"0x%llx", r->call_site],
+            @"target":          [NSString stringWithFormat:@"0x%llx", r->target],
+            @"resolved_target": [NSString stringWithFormat:@"0x%llx", r->resolved_target],
+            @"kind":            @(r->kind),
+            @"instruction":     @(r->insn_text),
+        } mutableCopy];
+        d[@"resolved_name"] = r->resolved_name[0] ? @(r->resolved_name)
+                            : ([@(r->kind) isEqualToString:@"call_objc_stub"]
+                               ? [NSString stringWithFormat:@"objc_stub@0x%llx", r->target] : (id)[NSNull null]);
+        if (r->from_func[0]) {
+            d[@"from_func"]        = [NSString stringWithFormat:@"%s+0x%llx", r->from_func, r->from_offset];
+            d[@"from_func_start"]  = [NSString stringWithFormat:@"0x%llx", r->from_func_start];
+            d[@"from_func_offset"] = [NSString stringWithFormat:@"0x%llx", r->from_offset];
+            if (r->from_func_vmaddr)
+                d[@"from_func_vmaddr"] = [NSString stringWithFormat:@"0x%llx", r->from_func_vmaddr];
+        } else {
+            d[@"from_func"]       = [NSNull null];
+            d[@"from_func_start"] = [NSNull null];
+        }
+        [arr addObject:d];
+    }
+    free(rows);
+
+    NSMutableDictionary *out = [@{
+        @"query":         sym ?: addrStr,
+        @"image":         @(imgNm),
+        @"scanned_insns": @(scanned),
+        @"count":         @(n),
+        @"truncated":     truncated ? @YES : @NO,
+        @"results":       arr,
+    } mutableCopy];
+    if (qaddr) out[@"query_address"] = [NSString stringWithFormat:@"0x%llx", qaddr];
+    return tool_ok(out);
+}
+
+// find_string_refs —— tier-2A: 谁引用了某字符串(ADRP+ADD 直接 / ADRP+LDR 间接)
+static NSDictionary *tool_find_string_refs(NSDictionary *args) {
+    NSString *str     = [args[@"string"] isKindOfClass:NSString.class] ? args[@"string"] : nil;
+    NSString *addrStr = [args[@"address"] isKindOfClass:NSString.class] ? args[@"address"] : nil;
+    NSString *image   = [args[@"image"] isKindOfClass:NSString.class] ? args[@"image"] : nil;
+    if (str.length == 0 && addrStr.length == 0)
+        return tool_err(@"need 'string' (substring) or 'address' (exact string address)");
+
+    uint64_t queryAddr = addrStr.length ? strtoull(addrStr.UTF8String, NULL, 0) : 0;
+    int maxR = [args[@"max_results"] isKindOfClass:NSNumber.class] ? [args[@"max_results"] intValue] : 256;
+    if (maxR <= 0 || maxR > 2000) maxR = 256;
+
+    AnalysisStringRef *rows = calloc((size_t)maxR, sizeof(AnalysisStringRef));
+    if (!rows) return tool_err(@"out of memory");
+
+    uint64_t scanned = 0; char imgNm[256] = {0}; int truncated = 0;
+    int n = analysis_find_string_refs(image.length ? image.UTF8String : NULL,
+                                      str.length ? str.UTF8String : NULL, queryAddr,
+                                      rows, maxR, imgNm, sizeof(imgNm), &scanned, &truncated);
+    if (n == -1) { free(rows); return tool_err(@"invalid arguments"); }
+    if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
+
+    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
+    for (int i = 0; i < n; i++) {
+        AnalysisStringRef *r = &rows[i];
+        NSMutableDictionary *d = [@{
+            @"ref_site":       [NSString stringWithFormat:@"0x%llx", r->ref_site],
+            @"string_addr":    [NSString stringWithFormat:@"0x%llx", r->string_addr],
+            @"string_vmaddr":  [NSString stringWithFormat:@"0x%llx", r->string_vmaddr],
+            @"string":         @(r->string),
+            @"section":        @(r->section),
+            @"instruction":    @(r->insn_text),
+            @"xref_type":      @"string_ref",
+            @"indirect":       r->indirect ? @YES : @NO,
+        } mutableCopy];
+        if (r->from_func[0]) {
+            d[@"from_func"]        = [NSString stringWithFormat:@"%s+0x%llx", r->from_func, r->from_offset];
+            d[@"from_func_start"]  = [NSString stringWithFormat:@"0x%llx", r->from_func_start];
+            d[@"from_func_offset"] = [NSString stringWithFormat:@"0x%llx", r->from_offset];
+            if (r->from_func_vmaddr)
+                d[@"from_func_vmaddr"] = [NSString stringWithFormat:@"0x%llx", r->from_func_vmaddr];
+        } else {
+            d[@"from_func"]       = [NSNull null];
+            d[@"from_func_start"] = [NSNull null];
+        }
+        [arr addObject:d];
+    }
+    free(rows);
+
+    NSMutableDictionary *out = [@{
+        @"query":         str ?: addrStr,
+        @"image":         @(imgNm),
+        @"scanned_insns": @(scanned),
+        @"count":         @(n),
+        @"truncated":     truncated ? @YES : @NO,
+        @"results":       arr,
+    } mutableCopy];
+    return tool_ok(out);
+}
+
 // ============================================================
 // 取证工具 —— 复用面板同款数据源 (DHLogStore / dh_files / DHDumpManager / dh_capture / dh_health)
 // ============================================================
@@ -906,6 +1028,32 @@ static NSArray *tool_definitions(void) {
             @"description": @"List loaded Mach-O images in the app bundle with load address and FairPlay encryption status.",
             @"inputSchema": @{@"type": @"object", @"properties": @{}},
         },
+        @{
+            @"name": @"find_xrefs",
+            @"description": @"Find who calls a symbol/address: scan an image's __TEXT,__text for direct `bl` calls to the target. Resolves import stubs to the real symbol via the runtime-bound GOT + dladdr. tier-1 only: direct BL (no BLR/BR indirect calls, no string/selector refs, no CFG). Give 'symbol' (resolved via dlsym) or 'address'.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"symbol": @{@"type": @"string", @"description": @"Target symbol name, e.g. \"CCCrypt\" (no leading underscore). Resolved via dlsym."},
+                    @"address": @{@"type": @"string", @"description": @"Target runtime address (alternative to symbol), e.g. \"0x1a2345678\""},
+                    @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
+                    @"max_results": @{@"type": @"number", @"description": @"Max call sites returned (default 256, max 2000)"},
+                },
+            },
+        },
+        @{
+            @"name": @"find_string_refs",
+            @"description": @"Find who references a string: scan an image's __TEXT,__text for ADRP+ADD (direct) / ADRP+LDR-slot (indirect) address recovery landing in a string section (__cstring / __objc_methname / __objc_classname / __objc_methtype). tier-2A: local-window backtrack only (no cross-block/func dataflow). Give 'string' (substring match) or 'address' (exact string address).",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"string": @{@"type": @"string", @"description": @"Substring to match against string contents, e.g. \"AES\""},
+                    @"address": @{@"type": @"string", @"description": @"Exact string runtime address (alternative to string)"},
+                    @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
+                    @"max_results": @{@"type": @"number", @"description": @"Max ref sites returned (default 256, max 2000)"},
+                },
+            },
+        },
         // ---- 取证: 读 ----
         @{
             @"name": @"get_stats",
@@ -1126,6 +1274,8 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"list_images"])           return tool_list_images(args);
     if ([name isEqualToString:@"list_imports"])          return tool_list_imports(args);
     if ([name isEqualToString:@"get_macho_info"])        return tool_get_macho_info(args);
+    if ([name isEqualToString:@"find_xrefs"])            return tool_find_xrefs(args);
+    if ([name isEqualToString:@"find_string_refs"])      return tool_find_string_refs(args);
     // 取证: 读
     if ([name isEqualToString:@"get_stats"])             return tool_get_stats(args);
     if ([name isEqualToString:@"query_events"])          return tool_query_events(args);

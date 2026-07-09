@@ -72,6 +72,80 @@ else
   ng "无 net 事件, correlate 无法测 (网络探针可能未落库)"
 fi
 
+echo ""; echo "== find_xrefs (tier-1 直接 BL 调用引用) =="
+# import stub 正例: runner 直接调 printf 多次, 应经 __stubs → GOT → dladdr 还原成 printf
+mc '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"find_xrefs","arguments":{"symbol":"printf","max_results":50}}}' > /tmp/dh_xref.json
+ge "$(jq '.result.structuredContent.count' /tmp/dh_xref.json)" 1 "find_xrefs printf ≥1 调用点"
+eq "$(jq -r '.result.structuredContent.results[0].kind' /tmp/dh_xref.json)" "call_import_stub" "printf 归类 call_import_stub"
+eq "$(jq -r '.result.structuredContent.results[0].resolved_name' /tmp/dh_xref.json)" "printf" "stub 还原出 printf"
+# tier-1.5 归属: 有符号 → main+off, 并带 from_func_start / vmaddr
+eq "$(jq -r '.result.structuredContent.results[0].from_func|test("^main\\+0x")' /tmp/dh_xref.json)" "true" "printf 调用点归属到 main+off"
+eq "$(jq -r '.result.structuredContent.results[0].from_func_start|test("^0x")' /tmp/dh_xref.json)" "true" "带 from_func_start"
+eq "$(jq -r '.result.structuredContent.results[0].from_func_vmaddr|test("^0x")' /tmp/dh_xref.json)" "true" "带 from_func_vmaddr(稳定 ID)"
+# objc_stub 路径: objc_msgSend$sel 降级 stub, 前缀匹配 objc_msgSend
+mc '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"find_xrefs","arguments":{"symbol":"objc_msgSend","max_results":50}}}' > /tmp/dh_xref2.json
+ge "$(jq '.result.structuredContent.count' /tmp/dh_xref2.json)" 1 "find_xrefs objc_msgSend ≥1 调用点"
+eq "$(jq -r 'any(.result.structuredContent.results[]; .kind=="call_objc_stub")' /tmp/dh_xref2.json)" "true" "含 call_objc_stub"
+# 缺参防御
+eq "$(mc '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"find_xrefs","arguments":{}}}' | jq -r '.result.isError')" "true" "无 symbol/address → isError"
+
+echo ""; echo "== find_xrefs tier-1.5: strip 目标归属到 sub_xxx =="
+# strip 掉本地符号后 dladdr 失效, 应经 LC_FUNCTION_STARTS 归属到 sub_<runtime>+off。
+cp tests/exercise_runner /tmp/dh_er_stripped && strip /tmp/dh_er_stripped 2>/dev/null
+eq "$(otool -l /tmp/dh_er_stripped 2>/dev/null | grep -c FUNCTION_STARTS)" "1" "strip 后 LC_FUNCTION_STARTS 保留"
+rm -f "$HOME/Documents/.dh_token.conf"
+DYLD_INSERT_LIBRARIES=./decrypt_helper.mac.dylib /tmp/dh_er_stripped >/tmp/dh_host2.log 2>&1 &
+HOST2=$!; sleep 3
+P2=$(grep -oE 'http://[0-9.]+:[0-9]+' /tmp/dh_host2.log | head -1 | grep -oE '[0-9]+$'); P2=${P2:-8088}
+T2=$(cat "$HOME/Documents/.dh_token.conf" 2>/dev/null)
+curl -s -X POST "http://127.0.0.1:$P2/api/mcp?token=$T2" -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_xrefs","arguments":{"symbol":"printf","max_results":5}}}' > /tmp/dh_xref3.json
+ge "$(jq '.result.structuredContent.count' /tmp/dh_xref3.json)" 1 "strip 目标 printf ≥1 调用点"
+eq "$(jq -r '.result.structuredContent.results[0].from_func|test("^sub_[0-9a-f]+\\+0x")' /tmp/dh_xref3.json)" "true" "strip 后归属到 sub_xxx+off"
+eq "$(jq -r '.result.structuredContent.results[0].resolved_name' /tmp/dh_xref3.json)" "printf" "strip 后 import 仍还原 printf"
+kill $HOST2 2>/dev/null; wait $HOST2 2>/dev/null   # 同步收尸, 免 job-control 打印 Terminated
+
+echo ""; echo "== find_string_refs (tier-2A: direct + 归属 + 无误报) =="
+# direct: ADRP+ADD → __cstring; runner 用 printf 打了带 "AES" 的格式串
+mc '{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"find_string_refs","arguments":{"string":"AES","max_results":20}}}' > /tmp/dh_sref.json
+ge "$(jq '.result.structuredContent.count' /tmp/dh_sref.json)" 1 "find_string_refs AES ≥1 引用"
+eq "$(jq -r '.result.structuredContent.results[0].indirect' /tmp/dh_sref.json)" "false" "direct ref indirect=false"
+eq "$(jq -r '.result.structuredContent.results[0].section|test("__cstring")' /tmp/dh_sref.json)" "true" "命中 __TEXT,__cstring"
+eq "$(jq -r '.result.structuredContent.results[0].instruction|test("^add ")' /tmp/dh_sref.json)" "true" "指令是 ADRP+ADD 的 add"
+eq "$(jq -r '.result.structuredContent.results[0].from_func!=null' /tmp/dh_sref.json)" "true" "ref_site 有函数归属"
+# address 模式: 用命中的 string_addr 反查, 应对上
+SADDR=$(jq -r '.result.structuredContent.results[0].string_addr' /tmp/dh_sref.json)
+mc "{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"find_string_refs\",\"arguments\":{\"address\":\"$SADDR\"}}}" > /tmp/dh_sref_a.json
+ge "$(jq '.result.structuredContent.count' /tmp/dh_sref_a.json)" 1 "address 模式反查命中 ($SADDR)"
+# 无误报: 不存在的子串
+eq "$(mc '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"find_string_refs","arguments":{"string":"ZZZ_NOPE_QWERTY_XYZZY"}}}' | jq '.result.structuredContent.count')" "0" "不存在子串 → 0(不误把立即数当串)"
+# 缺参防御
+eq "$(mc '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"find_string_refs","arguments":{}}}' | jq -r '.result.isError')" "true" "无 string/address → isError"
+
+echo ""; echo "== find_string_refs indirect (经典 selref → SEL) =="
+# 用 -fno-objc-msgsend-selector-stubs 强制经典 adrp+ldr selref 模式, 触发间接引用
+CLSDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)
+xcrun --find clang >/dev/null 2>&1 && "$(xcrun --find clang)" -arch arm64 -isysroot "$CLSDK" \
+  -mmacosx-version-min=11.0 -ObjC -fobjc-arc -O0 -fno-objc-msgsend-selector-stubs \
+  -framework Foundation -framework CoreFoundation -framework Security \
+  tests/exercise_runner.m -o /tmp/dh_er_classic >/tmp/dh_classic_build.log 2>&1
+if [ -x /tmp/dh_er_classic ]; then
+  eq "$(otool -l /tmp/dh_er_classic 2>/dev/null | grep -c 'sectname __objc_stubs')" "0" "classic 变体无 __objc_stubs"
+  rm -f "$HOME/Documents/.dh_token.conf"
+  DYLD_INSERT_LIBRARIES=./decrypt_helper.mac.dylib /tmp/dh_er_classic >/tmp/dh_host3.log 2>&1 &
+  HOST3=$!; sleep 3
+  P3=$(grep -oE 'http://[0-9.]+:[0-9]+' /tmp/dh_host3.log | head -1 | grep -oE '[0-9]+$'); P3=${P3:-8088}
+  T3=$(cat "$HOME/Documents/.dh_token.conf" 2>/dev/null)
+  curl -s --max-time 15 -X POST "http://127.0.0.1:$P3/api/mcp?token=$T3" -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_string_refs","arguments":{"string":"dataWithBytes","max_results":5}}}' > /tmp/dh_sref2.json
+  ge "$(jq '.result.structuredContent.count' /tmp/dh_sref2.json)" 1 "indirect: selector dataWithBytes ≥1 引用"
+  eq "$(jq -r 'any(.result.structuredContent.results[]; .indirect==true)' /tmp/dh_sref2.json)" "true" "含 indirect=true(经 selref)"
+  eq "$(jq -r '[.result.structuredContent.results[]|select(.indirect==true)][0].string|test("dataWithBytes")' /tmp/dh_sref2.json)" "true" "间接读出 selector 名"
+  kill $HOST3 2>/dev/null; wait $HOST3 2>/dev/null
+else
+  ng "classic 变体编译失败, 跳过 indirect 验证 (见 /tmp/dh_classic_build.log)"
+fi
+
 echo ""; echo "== 诊断 =="
 eq "$(mc '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_diag","arguments":{"board":"general"}}}' | jq -r '.result.structuredContent.diag|test("hook")')" "true" "get_diag 含 hook 时间线"
 

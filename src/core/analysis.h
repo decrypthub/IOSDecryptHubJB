@@ -84,6 +84,75 @@ typedef struct {
 // 返回镜像数, 或 -1 表示参数错误。
 int analysis_list_macho_images(AnalysisMachoImage *out, int max_count);
 
+// ============================================================
+// 交叉引用 (xref) —— tier-1: 仅「直接 BL 调用」
+// ============================================================
+//
+// 只扫某镜像 __TEXT,__text 里的 `bl imm`, 解析其目标, 建立「谁调用了 target」。
+// 不做 BLR/BR 间接调用、不做 string/selector 引用、不做 CFG、不持久化。
+// 活进程优势: stub → import 符号靠运行时已绑定的 GOT slot + dladdr 直接得到,
+// 不解析 bind 信息; ADRP 页基址由 capstone 算好。lazy slot 未绑定则记为未知目标。
+
+typedef struct {
+    uint64_t call_site;          // BL 指令地址
+    uint64_t target;             // BL 立即数目标 (可能落在 stub 段)
+    uint64_t resolved_target;    // 经 stub/GOT 解析后的真实目标; 无 stub 时 == target
+    char     kind[24];           // "call_direct" | "call_import_stub" | "call_objc_stub"
+    char     resolved_name[256]; // 解析出的符号名(去前导下划线); 未知为空串
+    // 归属(tier-1.5): 有 dladdr 符号 → 符号名; 否则经 LC_FUNCTION_STARTS → "sub_<runtime>"; 都无 → 空串。
+    char     from_func[256];     // 函数名 或 "sub_<runtime-hex>"; 未知为空串
+    uint64_t from_offset;        // call_site 相对函数起点的偏移
+    uint64_t from_func_start;    // 函数起点运行时地址; 0=未知
+    uint64_t from_func_vmaddr;   // 函数起点 vmaddr(去 slide, 稳定 ID, 跨 ASLR 不变); 0=未知
+    char     insn_text[64];      // 如 "bl #0x1029ac1f8"
+} AnalysisXref;
+
+// 在 image_query 指定镜像(名字子串; NULL/"" = 主程序)的 __text 里查找所有直接 BL
+// 到目标的调用点。目标二选一: sym_name(经 dlsym 解析) 或 target_addr(!=0)。
+//   out/max_results:  命中记录缓冲(按 max_results 截断)
+//   out_query_addr:   回填目标运行时地址(dlsym 结果或 target_addr)
+//   out_image:        回填实际扫描的镜像短名
+//   out_scanned:      回填扫描到的指令总数
+//   out_truncated:    因命中数达 max_results 或指令安全上限而截断时置 1
+// 返回命中数; -1 参数错误, -2 找不到镜像/__text, -3 符号无法解析。
+int analysis_find_xrefs(const char *image_query,
+                        const char *sym_name, uint64_t target_addr,
+                        AnalysisXref *out, int max_results,
+                        uint64_t *out_query_addr, char *out_image, size_t image_len,
+                        uint64_t *out_scanned, int *out_truncated);
+
+// ============================================================
+// 字符串引用 (string ref) —— tier-2A
+// ============================================================
+//
+// 扫某镜像 __text, 识别 ADRP+ADD(直接) / ADRP+LDR→指针槽(间接) 恢复出的数据地址,
+// 若落在字符串 section(__cstring/__objc_methname/__objc_classname/__objc_methtype)
+// 则建立「谁引用了这个字符串」。局部窗口回溯(按寄存器缓存最近 ADRP 页, 被写即失效),
+// 不做跨基本块/跨函数数据流。归属复用 tier-1.5 的 function-starts。
+
+typedef struct {
+    uint64_t ref_site;           // 使用点(ADD/LDR 指令)地址
+    char     from_func[256];     // 归属函数名 或 "sub_<runtime>"; 未知空串
+    uint64_t from_offset;
+    uint64_t from_func_start;
+    uint64_t from_func_vmaddr;   // 稳定 ID(去 slide)
+    uint64_t string_addr;        // 字符串运行时地址
+    uint64_t string_vmaddr;      // 去 slide
+    char     string[192];        // 字符串内容(截断)
+    char     section[32];        // "__TEXT,__cstring" 等
+    char     insn_text[64];      // 如 "add x0, x0, #0x8f0"
+    int      indirect;           // 0=ADRP+ADD 直接; 1=ADRP+LDR 经指针槽
+} AnalysisStringRef;
+
+// 在 image_query 指定镜像的 __text 里查找字符串引用。目标二选一:
+//   query_str(子串匹配字符串内容) 或 query_addr(!=0, 精确匹配字符串地址)。
+// 返回命中数; -1 参数错误, -2 找不到镜像/__text。out_* 语义同 find_xrefs。
+int analysis_find_string_refs(const char *image_query,
+                              const char *query_str, uint64_t query_addr,
+                              AnalysisStringRef *out, int max_results,
+                              char *out_image, size_t image_len,
+                              uint64_t *out_scanned, int *out_truncated);
+
 #ifdef __cplusplus
 }
 #endif
