@@ -530,8 +530,9 @@
 <script>
   const GITHUB_REPO = 'taisuii/ios-decrypt-helper';
   const CAT_NAMES = ['摘要','HMAC','对称','非对称','文件','系统','其它'];
-  const CAT_CLS   = ['digest','hmac','sym','asym','file','sys','net','keychain','other'];
-  const TAB_CAT   = { crypto:-2, sys:-3, net:6, keychain:7 };   // net=Network(6) keychain=Keychain(7)
+  // 分类短名: 兜底值; 后端 /api/stats.categoryNames 到达后覆盖(单一真相源在后端分类表)。
+  let CAT_CLS     = ['digest','hmac','sym','asym','file','sys','net','keychain','other'];
+  const TAB_CAT   = { crypto:-2, sys:-3, net: CAT_CLS.indexOf('net'), keychain: CAT_CLS.indexOf('keychain') };
   const LOG_TABS  = ['crypto','sys','net','keychain'];
   const NOISE_BOARD = { crypto:'crypto', sys:'sys' };
   const NOISE_LABEL = { crypto:'加解密', sys:'系统' };
@@ -783,6 +784,7 @@
   async function refreshStats() {
     try {
       stats = await fetchJSON('/api/stats');
+      if (Array.isArray(stats.categoryNames) && stats.categoryNames.length) CAT_CLS = stats.categoryNames;
       const bc = stats.byCategory || [];
       const sp = stats.paused ? '已暂停' : '运行中';
       const dotCls = (stats.health && stats.health.summary) ? 'err' : (stats.paused ? 'paused' : 'ok');
@@ -790,8 +792,9 @@
       const cryptoN = (bc[0]||0)+(bc[1]||0)+(bc[2]||0)+(bc[3]||0);
       $('n-crypto').textContent = cryptoN ? cryptoN : '';
       $('n-sys').textContent = ((bc[4]||0)+(bc[5]||0)) ? ((bc[4]||0)+(bc[5]||0)) : '';
-      $('n-net').textContent = (bc[6]||0) ? (bc[6]||0) : '';
-      $('n-keychain').textContent = (bc[7]||0) ? (bc[7]||0) : '';
+      const iNet = CAT_CLS.indexOf('net'), iKc = CAT_CLS.indexOf('keychain');
+      $('n-net').textContent = (bc[iNet]||0) ? (bc[iNet]||0) : '';
+      $('n-keychain').textContent = (bc[iKc]||0) ? (bc[iKc]||0) : '';
       $('ver').textContent = stats.version ? ('v'+stats.version) : '';
       const p = stats.process || {}; const pb = [];
       if (p.appName) pb.push('<span><b>'+escapeHTML(p.appName)+'</b></span>');

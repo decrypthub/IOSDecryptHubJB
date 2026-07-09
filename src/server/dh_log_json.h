@@ -10,7 +10,9 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-// DHCategory -> 短名 ("digest"/"hmac"/"sym"/"asym"/"file"/"sys"/"other")
+// 分类数量 (= DHCategoryOther + 1); 供各处遍历派生, 替代硬编码平行数组。
+NSInteger dh_log_category_count(void);
+// DHCategory -> 短名 ("digest"/"hmac"/"sym"/.../"net"/"keychain"/"other")
 const char *dh_log_category_name(NSInteger c);
 
 // 摘要 (列表用): seq / category / algorithm / operation / timestamp / in-outLen / detail / preview

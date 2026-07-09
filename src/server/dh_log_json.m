@@ -3,18 +3,20 @@
 #import <Foundation/Foundation.h>
 #import "dh_log_json.h"
 
+// 分类短名单一真相源 —— 顺序必须与 DHCategory 枚举一致。
+// 加分类只改这里(和 log_store.h 枚举 + dh_capture.h 的 DH_CAP_CAT_COUNT), 其余处(http byCat/
+// pausedByCat / mcp get_stats / category_from_string / web CAT_CLS)全部由此派生, 不再各自硬编码。
+static const char *kCategoryNames[] = {
+    "digest", "hmac", "sym", "asym", "file", "sys", "net", "keychain", "other",
+};
+
+NSInteger dh_log_category_count(void) {
+    return (NSInteger)(sizeof(kCategoryNames) / sizeof(kCategoryNames[0]));
+}
+
 const char *dh_log_category_name(NSInteger c) {
-    switch (c) {
-        case DHCategoryDigest:     return "digest";
-        case DHCategoryHMAC:       return "hmac";
-        case DHCategorySymmetric:  return "sym";
-        case DHCategoryAsymmetric: return "asym";
-        case DHCategoryFile:       return "file";
-        case DHCategorySystem:     return "sys";
-        case DHCategoryNetwork:    return "net";
-        case DHCategoryKeychain:   return "keychain";
-        default: return "other";
-    }
+    if (c < 0 || c >= dh_log_category_count()) return "other";
+    return kCategoryNames[c];
 }
 
 NSDictionary *dh_log_entry_summary(DHLogEntry *e) {

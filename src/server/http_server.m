@@ -192,36 +192,22 @@ static void send_text(int fd, int status, NSString *msg) {
 // 路由 handlers
 // ============================================================
 // 日志条目 JSON 成型已抽到 dh_log_json.h (与 mcp_server 共用): dh_log_entry_summary / dh_log_entry_detail
-#define entry_summary  dh_log_entry_summary
-#define entry_detail   dh_log_entry_detail
 
 static void handle_stats(int fd) {
     DHLogStore *s = [DHLogStore shared];
-    NSArray *byCat = @[
-        @([s countForCategory:DHCategoryDigest]),
-        @([s countForCategory:DHCategoryHMAC]),
-        @([s countForCategory:DHCategorySymmetric]),
-        @([s countForCategory:DHCategoryAsymmetric]),
-        @([s countForCategory:DHCategoryFile]),
-        @([s countForCategory:DHCategorySystem]),
-        @([s countForCategory:DHCategoryNetwork]),
-        @([s countForCategory:DHCategoryKeychain]),
-        @([s countForCategory:DHCategoryOther]),
-    ];
+    // 由分类表派生, 不再硬编码平行数组; 顺便给前端 categoryNames 让它也别硬编码 CAT_CLS。
+    NSInteger nCat = dh_log_category_count();
+    NSMutableArray *byCat = [NSMutableArray arrayWithCapacity:nCat];
+    NSMutableArray *pausedByCat = [NSMutableArray arrayWithCapacity:nCat];
+    NSMutableArray *catNames = [NSMutableArray arrayWithCapacity:nCat];
+    for (NSInteger c = 0; c < nCat; c++) {
+        [byCat addObject:@([s countForCategory:(DHCategory)c])];
+        [pausedByCat addObject:@([s isPausedForCategory:(DHCategory)c])];
+        [catNames addObject:@(dh_log_category_name(c))];
+    }
     NSMutableDictionary *capture = [NSMutableDictionary dictionary];
     for (int i = 0; i < DH_CAP_SUB_COUNT; i++)
         capture[[NSString stringWithUTF8String:dh_capture_sub_name((dh_cap_sub)i)]] = @(dh_capture_sub_enabled((dh_cap_sub)i));
-    NSArray *pausedByCat = @[
-        @([s isPausedForCategory:DHCategoryDigest]),
-        @([s isPausedForCategory:DHCategoryHMAC]),
-        @([s isPausedForCategory:DHCategorySymmetric]),
-        @([s isPausedForCategory:DHCategoryAsymmetric]),
-        @([s isPausedForCategory:DHCategoryFile]),
-        @([s isPausedForCategory:DHCategorySystem]),
-        @([s isPausedForCategory:DHCategoryNetwork]),
-        @([s isPausedForCategory:DHCategoryKeychain]),
-        @([s isPausedForCategory:DHCategoryOther]),
-    ];
     const char *hsum = dh_health_summary();
     // 落盘日志字节数: 每条日志已实时写入沙箱文件(App 闪退/被检测杀掉后, 重启仍可经 /download 取全量),
     // 前端据此提示「数据已落盘」并标出可下载大小, 形成崩溃可闭环的取证链路。含已滚动归档的备份段。
@@ -231,6 +217,7 @@ static void handle_stats(int fd) {
         @"paused":      @(s.paused),
         @"byCategory":  byCat,
         @"pausedByCat": pausedByCat,
+        @"categoryNames": catNames,   // 前端据此派生 CAT_CLS, 不再硬编码分类名数组
         @"capture":     capture,
         @"port":        @(gPort),
         @"version":     @DH_HTTP_VERSION,
@@ -265,7 +252,7 @@ static void handle_logs_list(int fd, NSDictionary *q) {
         DHLogEntry *e = src[i];
         if (since  && e.seq <= since)  continue;
         if (before && e.seq >= before) continue;
-        [out addObject:entry_summary(e)];
+        [out addObject:dh_log_entry_summary(e)];
     }
     send_json(fd, 200, out);
 }
@@ -274,7 +261,7 @@ static void handle_log_detail(int fd, NSString *seqStr) {
     uint64_t seq = (uint64_t)[seqStr longLongValue];
     DHLogEntry *e = [[DHLogStore shared] entryWithSeq:seq];
     if (!e) { send_json(fd, 404, @{@"error": @"not found"}); return; }
-    send_json(fd, 200, entry_detail(e));
+    send_json(fd, 200, dh_log_entry_detail(e));
 }
 
 static void handle_clear(int fd, NSDictionary *q) {
@@ -304,7 +291,7 @@ static void handle_noise_list(int fd, NSDictionary *q) {
         DHLogEntry *e = src[i];
         if (since  && e.seq <= since)  continue;
         if (before && e.seq >= before) continue;
-        [out addObject:entry_summary(e)];
+        [out addObject:dh_log_entry_summary(e)];
     }
     send_json(fd, 200, out);
 }

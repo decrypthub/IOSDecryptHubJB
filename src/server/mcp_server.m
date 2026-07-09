@@ -365,27 +365,26 @@ static NSDictionary *tool_get_macho_info(NSDictionary *args) {
 // 取证工具 —— 复用面板同款数据源 (DHLogStore / dh_files / DHDumpManager / dh_capture / dh_health)
 // ============================================================
 
-// 分类字符串 -> DHCategory (0..6); "all"/未知 -> -1
+// 分类字符串 -> DHCategory; "all"/未知 -> -1。规范名查分类表, 另收几个别名。
 static NSInteger category_from_string(NSString *c) {
     if (![c isKindOfClass:NSString.class] || c.length == 0 || [c isEqualToString:@"all"]) return -1;
-    if ([c isEqualToString:@"digest"]) return DHCategoryDigest;
-    if ([c isEqualToString:@"hmac"])   return DHCategoryHMAC;
-    if ([c isEqualToString:@"sym"] || [c isEqualToString:@"symmetric"])  return DHCategorySymmetric;
-    if ([c isEqualToString:@"asym"] || [c isEqualToString:@"asymmetric"]) return DHCategoryAsymmetric;
-    if ([c isEqualToString:@"file"])   return DHCategoryFile;
-    if ([c isEqualToString:@"sys"] || [c isEqualToString:@"system"])     return DHCategorySystem;
-    if ([c isEqualToString:@"net"] || [c isEqualToString:@"network"])    return DHCategoryNetwork;
-    if ([c isEqualToString:@"keychain"] || [c isEqualToString:@"kc"])    return DHCategoryKeychain;
-    if ([c isEqualToString:@"other"])  return DHCategoryOther;
+    for (NSInteger i = 0; i < dh_log_category_count(); i++)
+        if ([c isEqualToString:@(dh_log_category_name(i))]) return i;
+    // 别名
+    if ([c isEqualToString:@"symmetric"])  return DHCategorySymmetric;
+    if ([c isEqualToString:@"asymmetric"]) return DHCategoryAsymmetric;
+    if ([c isEqualToString:@"system"])     return DHCategorySystem;
+    if ([c isEqualToString:@"network"])    return DHCategoryNetwork;
+    if ([c isEqualToString:@"kc"])         return DHCategoryKeychain;
     return -1;
 }
 
 // get_stats —— 取证总览: 事件计数 / 捕获开关 / 进程 / 健康 / 落盘量 / 噪声
 static NSDictionary *tool_get_stats(NSDictionary *args) {
     DHLogStore *s = [DHLogStore shared];
-    NSArray *names = @[@"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"net", @"keychain", @"other"];
     NSMutableDictionary *byCat = [NSMutableDictionary dictionary];
-    for (int c = 0; c < (int)names.count; c++) byCat[names[c]] = @([s countForCategory:(DHCategory)c]);
+    for (NSInteger c = 0; c < dh_log_category_count(); c++)   // 由分类表派生, 不再硬编码
+        byCat[@(dh_log_category_name(c))] = @([s countForCategory:(DHCategory)c]);
     NSMutableDictionary *capture = [NSMutableDictionary dictionary];
     for (int i = 0; i < DH_CAP_SUB_COUNT; i++)
         capture[@(dh_capture_sub_name((dh_cap_sub)i))] = @(dh_capture_sub_enabled((dh_cap_sub)i));
@@ -489,18 +488,14 @@ static NSDictionary *tool_correlate_request(NSDictionary *args) {
         if (colon.location == NSNotFound) continue;
         headers[[kv substringToIndex:colon.location]] = [kv substringFromIndex:colon.location + 2];
     }
-    NSString *validatorB64 = nil;
-    for (NSString *k in headers) if ([k caseInsensitiveCompare:@"X-Validator"] == NSOrderedSame) { validatorB64 = headers[k]; break; }
-    NSString *validatorHex = @"";
-    if (validatorB64.length) {
-        NSData *dec = [[NSData alloc] initWithBase64EncodedString:validatorB64 options:0];
-        if (dec.length) validatorHex = [DHHexFromData(dec) lowercaseString];
-    }
+    // 匹配头: 指定 match_header 则只查它, 否则扫描全部请求头(任何 base64 值都试着反查)。
+    // 不再把 X-Validator 写死 —— 它只是「优先展示」的兼容默认。
+    NSString *matchHeader = [args[@"match_header"] isKindOfClass:NSString.class] ? args[@"match_header"] : nil;
 
-    // 聚合时间窗事件 + 反查命中
+    // 聚合时间窗事件, 同时建 输出hex -> 首个事件 索引
     NSArray *all = [[DHLogStore shared] snapshotMatching:@"" category:-1 minInputSize:0 maxInputSize:0];
     NSMutableArray *events = [NSMutableArray array];
-    BOOL found = NO; uint64_t matchedSeq = 0; NSString *matchedCat = @"", *matchedAlg = @"";
+    NSMutableDictionary *outIndex = [NSMutableDictionary dictionary];   // hex -> @{seq,category,algorithm}
     for (DHLogEntry *e in all) {
         if (e.seq == anchor.seq || e.timestampMs == 0) continue;
         if (!allowAll && ![allow containsObject:@(e.category)]) continue;
@@ -514,14 +509,35 @@ static NSDictionary *tool_correlate_request(NSDictionary *args) {
             @"outLen": @(e.output.length),
             @"outputHexPreview": oh.length > 16 ? [oh substringToIndex:16] : oh,
         }];
-        if (!found && validatorHex.length && [oh isEqualToString:validatorHex]) {
-            found = YES; matchedSeq = e.seq; matchedCat = @(dh_log_category_name(e.category)); matchedAlg = e.algorithm ?: @"";
-        }
+        if (oh.length && !outIndex[oh])
+            outIndex[oh] = @{@"seq": @(e.seq), @"category": @(dh_log_category_name(e.category)), @"algorithm": e.algorithm ?: @""};
     }
     [events sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"deltaMs"] compare:b[@"deltaMs"]]; }];
 
-    NSMutableDictionary *matchDict = [@{@"validatorOutputFound": @(found)} mutableCopy];
-    if (found) { matchDict[@"matchedSeq"] = @(matchedSeq); matchDict[@"matchedCategory"] = matchedCat; matchDict[@"matchedAlgorithm"] = matchedAlg; }
+    // 反查: 每个候选头 base64 解码 -> hex, 在事件输出里找命中(泛化到任意 base64 头, 不止 X-Validator)
+    NSMutableArray *matches = [NSMutableArray array];
+    NSString *validatorHex = @"";   // 兼容: anchor 仍单独给 X-Validator 的解码 hex
+    for (NSString *h in headers) {
+        if (matchHeader && [h caseInsensitiveCompare:matchHeader] != NSOrderedSame) continue;
+        NSData *dec = [[NSData alloc] initWithBase64EncodedString:headers[h] options:0];
+        if (!dec.length) continue;
+        NSString *hex = [DHHexFromData(dec) lowercaseString];
+        if ([h caseInsensitiveCompare:@"X-Validator"] == NSOrderedSame) validatorHex = hex;
+        NSDictionary *hit = outIndex[hex];
+        if (hit) [matches addObject:@{@"header": h, @"decodedHex": hex, @"matchedSeq": hit[@"seq"],
+                                      @"matchedCategory": hit[@"category"], @"matchedAlgorithm": hit[@"algorithm"]}];
+    }
+    // match 块: 兼容旧字段(X-Validator 命中优先, 否则第一个命中) + 全部命中数组 matches
+    NSDictionary *primary = nil;
+    for (NSDictionary *m in matches) if ([m[@"header"] caseInsensitiveCompare:@"X-Validator"] == NSOrderedSame) { primary = m; break; }
+    if (!primary) primary = matches.firstObject;
+    NSMutableDictionary *matchDict = [@{@"validatorOutputFound": @(primary != nil), @"matches": matches} mutableCopy];
+    if (primary) {
+        matchDict[@"matchedHeader"]    = primary[@"header"];
+        matchDict[@"matchedSeq"]       = primary[@"matchedSeq"];
+        matchDict[@"matchedCategory"]  = primary[@"matchedCategory"];
+        matchDict[@"matchedAlgorithm"] = primary[@"matchedAlgorithm"];
+    }
 
     return tool_ok(@{
         @"anchor": @{
@@ -938,7 +954,7 @@ static NSArray *tool_definitions(void) {
         },
         @{
             @"name": @"correlate_request",
-            @"description": @"Anchor on a captured network request (net_seq) and gather all crypto/keychain/net events within window_ms, sorted by deltaMs. Decodes the anchor's X-Validator (base64) and reports which event's output matches it — 'match' closes the formula automatically.",
+            @"description": @"Anchor on a captured network request (net_seq) and gather all crypto/keychain/net events within window_ms, sorted by deltaMs. Base64-decodes the request headers and reports which event's output matches each — 'matches' lists every header→event hit; 'match' surfaces the primary one (X-Validator first, else the first). Pass match_header to restrict to one header.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
@@ -946,6 +962,7 @@ static NSArray *tool_definitions(void) {
                     @"window_ms": @{@"type": @"number", @"description": @"Time window around the anchor (default 300)"},
                     @"include": @{@"type": @"array", @"items": @{@"type": @"string"}, @"description": @"Categories to include, e.g. [\"digest\",\"hmac\",\"sym\",\"keychain\",\"net\"] (default all)"},
                     @"same_thread_only": @{@"type": @"boolean", @"description": @"Only events on the anchor's thread (default false)"},
+                    @"match_header": @{@"type": @"string", @"description": @"Restrict reverse-match to one request header (e.g. \"X-Validator\"); default scans all base64 headers"},
                 },
                 @"required": @[@"net_seq"],
             },
