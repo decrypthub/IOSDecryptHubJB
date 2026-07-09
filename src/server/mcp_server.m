@@ -581,6 +581,46 @@ static NSDictionary *tool_find_function_refs(NSDictionary *args) {
     return tool_ok(out);
 }
 
+// list_functions —— tier-3B: 镜像函数清单 (LC_FUNCTION_STARTS)
+static NSDictionary *tool_list_functions(NSDictionary *args) {
+    NSString *image = [args[@"image"] isKindOfClass:NSString.class] ? args[@"image"] : nil;
+    NSString *query = [args[@"query"] isKindOfClass:NSString.class] ? args[@"query"] : nil;
+    int offset = [args[@"offset"] isKindOfClass:NSNumber.class] ? [args[@"offset"] intValue] : 0;
+    int limit  = [args[@"limit"] isKindOfClass:NSNumber.class] ? [args[@"limit"] intValue] : 200;
+    if (limit <= 0 || limit > 2000) limit = 200;
+
+    AnalysisFunction *rows = calloc((size_t)limit, sizeof(AnalysisFunction));
+    if (!rows) return tool_err(@"out of memory");
+
+    int total = 0; char imgNm[256] = {0};
+    int n = analysis_list_functions(image.length ? image.UTF8String : NULL,
+                                    query.length ? query.UTF8String : NULL,
+                                    offset, limit, rows, limit, imgNm, sizeof(imgNm), &total);
+    if (n == -1) { free(rows); return tool_err(@"invalid arguments"); }
+    if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
+
+    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
+    for (int i = 0; i < n; i++) {
+        AnalysisFunction *r = &rows[i];
+        [arr addObject:@{
+            @"name":       @(r->name),
+            @"start":      [NSString stringWithFormat:@"0x%llx", r->start],
+            @"vmaddr":     [NSString stringWithFormat:@"0x%llx", r->vmaddr],
+            @"size":       @(r->size),
+            @"has_symbol": r->has_symbol ? @YES : @NO,
+        }];
+    }
+    free(rows);
+
+    return tool_ok(@{
+        @"image":    @(imgNm),
+        @"total":    @(total),
+        @"offset":   @(offset),
+        @"shown":    @(n),
+        @"functions": arr,
+    });
+}
+
 // ============================================================
 // 取证工具 —— 复用面板同款数据源 (DHLogStore / dh_files / DHDumpManager / dh_capture / dh_health)
 // ============================================================
@@ -1198,6 +1238,19 @@ static NSArray *tool_definitions(void) {
                 @"required": @[@"target"],
             },
         },
+        @{
+            @"name": @"list_functions",
+            @"description": @"List an image's functions from LC_FUNCTION_STARTS: name (dladdr symbol or sub_<addr>), start, vmaddr (stable ID), size (approx = next start - this start). Supports name substring 'query' and offset/limit paging. The inventory backing the other xref tools.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"image": @{@"type": @"string", @"description": @"Image name substring (default: main executable)"},
+                    @"query": @{@"type": @"string", @"description": @"Optional substring filter on function name"},
+                    @"offset": @{@"type": @"number", @"description": @"Paging offset into the filtered list (default 0)"},
+                    @"limit": @{@"type": @"number", @"description": @"Max functions returned (default 200, max 2000)"},
+                },
+            },
+        },
         // ---- 取证: 读 ----
         @{
             @"name": @"get_stats",
@@ -1422,6 +1475,7 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"find_string_refs"])      return tool_find_string_refs(args);
     if ([name isEqualToString:@"find_selector_refs"])    return tool_find_selector_refs(args);
     if ([name isEqualToString:@"find_function_refs"])    return tool_find_function_refs(args);
+    if ([name isEqualToString:@"list_functions"])        return tool_list_functions(args);
     // 取证: 读
     if ([name isEqualToString:@"get_stats"])             return tool_get_stats(args);
     if ([name isEqualToString:@"query_events"])          return tool_query_events(args);

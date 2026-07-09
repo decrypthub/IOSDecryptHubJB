@@ -25,6 +25,7 @@
 | `find_string_refs` | 「谁引用了这个字符串」：扫 `__text` 的 `ADRP+ADD`（直接）/ `ADRP+LDR`（间接指针槽）恢复的数据地址，落在字符串 section 则记引用点 | `string` 或 `address` |
 | `find_selector_refs` | 「谁把这个 selector 用在了 objc 调用上」：扫 `__text` 的 objc_msgSend 调用点（经典 selref+`blr` 或现代 `__objc_stubs`），只报真实调用不报裸 selref 加载 | `selector` |
 | `find_function_refs` | 内部调用图：本镜像 `__text` 内 `BL` 的 `from_func → to_func` 边，`direction` 取 callers/callees/both；import stub 与 objc_stub 天然排除 | `target` |
+| `list_functions` | 函数清单（`LC_FUNCTION_STARTS`）：name（符号或 `sub_<addr>`）、start、vmaddr、size≈到下一入口；支持 `query` 子串过滤与 offset/limit 分页 | 无 |
 
 可选参数：`disassemble`/`analyze_function` 的 `arch`（`arm64`/`arm`/`thumb`，默认 arm64）；`list_imports` 的 `query`（子串过滤）、`limit`；`find_xrefs` 的 `image`（镜像名子串，默认主程序）、`max_results`（默认 256）。
 
@@ -37,6 +38,8 @@
 **`find_selector_refs`（tier-2B）**：谁把某 selector 用在了 objc 调用上——xref 站点是 `objc_msgSend` 的 **call_site**，不是裸 selref 加载。给 `selector`，可选 `match`（`exact`/`contains`/`prefix`，默认 exact）、`image`、`max_results`。两条路径：**A 经典** `adrp+ldr x1,[__objc_selrefs]` → `blr/bl objc_msgSend`（靠 x1 状态机 + 跟踪哪个寄存器持 msgSend 指针；`target_kind:objc_msgsend`，带 `selector_load_site`/`selector_slot`）；**B 现代** `bl <__objc_stubs 的 objc_msgSend$sel>`（`target_kind:objc_stub`，`selector_source:__objc_stubs`）。x1 被覆盖或只加载未调用不报，仅命中 `__objc_methname` 不报，不还原 receiver。每条结果带 `call_site`、`selector`、`target`、`target_kind`、`selector_source`、`instruction` 及 `from_func` 归属字段。因此 `find_string_refs("bytes")` 可有结果，但 `find_selector_refs("bytes")` 只在它真参与 objc 调用时才有。
 
 **`find_function_refs`（tier-3A）**：本镜像内部的直接调用图。给 `target`（函数地址，通常取自别的工具输出的 `from_func_start`/`to_func_start`），`direction` 取 `callers`（谁调用它，默认）/`callees`（它调用谁）/`both`。只认 `BL imm` 落在本镜像 `__text` 内的目标——import stub（`__stubs`/`__auth_stubs`）与 `__objc_stubs` 在独立 section，天然排除。`BL` 目标可能落在函数中间（branch island/thunk/block invoke），故同时给 `target_addr` 与 `to_func_start`+`to_func_offset`，不假装是入口。每条边带 `relation`（caller/callee）、`call_site`、`from_func*`、`to_func*`、`instruction`。不做 `BLR`/`BR`/switch/CFG——建好 `from_func → to_func` 后再做 basic block / CFG 才自然。
+
+**`list_functions`（tier-3B）**：把内部依赖的 `LC_FUNCTION_STARTS` 对外暴露成函数清单——其余 xref 工具的归属底座。可选 `image`（默认主程序）、`query`（名字子串）、`offset`/`limit`（分页，默认 limit 200）。每条含 `name`（dladdr 符号或 `sub_<runtime>`）、`start`（运行时入口）、`vmaddr`（去 slide，稳定 ID）、`size`（≈ 下一个入口 − 本入口，非精确边界）、`has_symbol`。strip 后仍列出（`LC_FUNCTION_STARTS` 不随 strip 丢失），名字退化为 `sub_<runtime>`。
 
 工具执行错误走 MCP 的 `isError:true` content 信封（非 JSON-RPC 协议错误）；返回同时含 `structuredContent`（机器可读）与 `content[].text`（JSON 文本）。
 

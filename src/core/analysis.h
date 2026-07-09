@@ -223,6 +223,30 @@ int analysis_find_function_refs(const char *image_query,
                                 uint64_t *out_query_start,
                                 uint64_t *out_scanned, int *out_truncated);
 
+// ============================================================
+// 函数清单 (function inventory) —— tier-3B
+// ============================================================
+//
+// 把内部依赖的 LC_FUNCTION_STARTS 对外暴露成函数清单。size 是「到下一个函数入口」的
+// 近似值(非精确边界)。有 dladdr 符号用符号名, 否则 "sub_<runtime>"。
+
+typedef struct {
+    uint64_t start;        // 运行时入口地址
+    uint64_t vmaddr;       // 去 slide, 稳定 ID
+    uint64_t size;         // ≈ 下一个函数入口 - 本入口(近似)
+    char     name[256];    // dladdr 符号名 或 "sub_<runtime>"
+    int      has_symbol;   // 1=有真实符号(入口处), 0=sub_
+} AnalysisFunction;
+
+// 列出 image_query 指定镜像(NULL/"" = 主程序)的函数(来自 LC_FUNCTION_STARTS)。
+//   name_query: 非空则按名字子串过滤; offset/limit: 分页(limit<=0 视为不限, 仍受 max_out 限)。
+// 返回本次填充数; out_total 回填过滤后总数。-1 参数错误, -2 找不到镜像/__text。
+// 无 LC_FUNCTION_STARTS 的镜像返回 0。
+int analysis_list_functions(const char *image_query, const char *name_query,
+                            int offset, int limit,
+                            AnalysisFunction *out, int max_out,
+                            char *out_image, size_t image_len, int *out_total);
+
 #ifdef __cplusplus
 }
 #endif

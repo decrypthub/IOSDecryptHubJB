@@ -110,6 +110,11 @@ curl -s --max-time 15 -X POST "http://127.0.0.1:$P2/api/mcp?token=$T2" -H "Conte
 ge "$(jq '.result.structuredContent.count' /tmp/dh_fref_s.json)" 1 "strip: 内部 callees ≥1"
 eq "$(jq -r '[.result.structuredContent.results[].to_func]|all(test("^sub_"))' /tmp/dh_fref_s.json)" "true" "strip 下 callees 归属到 sub_xxx"
 eq "$(jq -r '.result.structuredContent.results[0].to_func_vmaddr|test("^0x")' /tmp/dh_fref_s.json)" "true" "strip 下带 to_func_vmaddr(稳定 ID)"
+# tier-3B: strip 下 list_functions 仍列出函数(LC_FUNCTION_STARTS), 但名字退化成 sub_xxx
+curl -s --max-time 15 -X POST "http://127.0.0.1:$P2/api/mcp?token=$T2" -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_functions","arguments":{"limit":100}}}' > /tmp/dh_lf_s.json
+ge "$(jq '.result.structuredContent.total' /tmp/dh_lf_s.json)" 5 "strip: list_functions total ≥5"
+eq "$(jq -r '[.result.structuredContent.functions[]|select(.has_symbol==false)]|length>0' /tmp/dh_lf_s.json)" "true" "strip 下含 sub_xxx(has_symbol=false)"
 kill $HOST2 2>/dev/null; wait $HOST2 2>/dev/null   # 同步收尸, 免 job-control 打印 Terminated
 
 echo ""; echo "== find_string_refs (tier-2A: direct + 归属 + 无误报) =="
@@ -163,6 +168,17 @@ eq "$(jq '.result.structuredContent.count' /tmp/dh_fref3.json)" "0" "test_networ
 # 缺参 / 无法归属
 eq "$(mc '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"find_function_refs","arguments":{}}}' | jq -r '.result.isError')" "true" "无 target → isError"
 eq "$(mc '{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"find_function_refs","arguments":{"target":"0x1"}}}' | jq -r '.result.isError')" "true" "无法归属地址 → isError"
+
+echo ""; echo "== list_functions (tier-3B: 函数清单) =="
+mc '{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"list_functions","arguments":{"limit":100}}}' > /tmp/dh_lf.json
+ge "$(jq '.result.structuredContent.total' /tmp/dh_lf.json)" 5 "list_functions total ≥5"
+eq "$(jq -r '[.result.structuredContent.functions[]|select(.name=="main")]|length>0' /tmp/dh_lf.json)" "true" "含 main 函数"
+eq "$(jq -r '[.result.structuredContent.functions[]|select(.name=="main")][0].has_symbol' /tmp/dh_lf.json)" "true" "main has_symbol=true"
+eq "$(jq -r '[.result.structuredContent.functions[]|select(.name=="main")][0]|(.vmaddr|test("^0x")) and (.size>0)' /tmp/dh_lf.json)" "true" "main 带 vmaddr 与 size>0"
+# query 过滤
+eq "$(jq -r '[.result.structuredContent.functions[]|.name]|all(test("test_"))' <(mc '{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"list_functions","arguments":{"query":"test_"}}}'))" "true" "query=test_ 全部含 test_"
+# 分页: offset 生效
+eq "$(mc '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"list_functions","arguments":{"query":"test_","offset":2,"limit":2}}}' | jq '.result.structuredContent.shown')" "2" "分页 shown=2"
 
 echo ""; echo "== find_string_refs indirect (经典 selref → SEL) =="
 # 用 -fno-objc-msgsend-selector-stubs 强制经典 adrp+ldr selref 模式, 触发间接引用

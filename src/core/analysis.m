@@ -1194,3 +1194,54 @@ int analysis_find_function_refs(const char *image_query,
     if (out_truncated) *out_truncated = truncated;
     return found;
 }
+
+// ============================================================
+// 函数清单 (function inventory) —— tier-3B
+// ============================================================
+
+int analysis_list_functions(const char *image_query, const char *name_query,
+                            int offset, int limit,
+                            AnalysisFunction *out, int max_out,
+                            char *out_image, size_t image_len, int *out_total) {
+    if (out_total) *out_total = 0;
+    if (!out || max_out <= 0) return -1;
+    if (offset < 0) offset = 0;
+
+    intptr_t slide = 0; char imgnm[256] = {0};
+    const struct mach_header_64 *mh = xref_select_image(image_query, &slide, imgnm, sizeof(imgnm));
+    if (!mh) return -2;
+    if (out_image && image_len) { strncpy(out_image, imgnm, image_len - 1); out_image[image_len - 1] = '\0'; }
+
+    uint64_t text_lo = 0, text_hi = 0;
+    if (!xref_sect_range(mh, slide, "__TEXT", "__text", &text_lo, &text_hi) &&
+        !xref_sect_range(mh, slide, "__TEXT_EXEC", "__text", &text_lo, &text_hi)) return -2;
+
+    FuncStartsCache *fc = func_starts_for(mh, slide, text_hi);
+    if (!fc || fc->count == 0) return 0;   // 无 LC_FUNCTION_STARTS
+
+    int total = 0, added = 0;
+    for (size_t i = 0; i < fc->count; i++) {
+        uint64_t start = fc->arr[i].runtime;
+        uint64_t vm    = fc->arr[i].vmaddr;
+        uint64_t end   = (i + 1 < fc->count) ? fc->arr[i + 1].runtime : fc->text_hi;
+
+        char nm[256]; uint64_t off = 0;
+        int hassym = name_at(start, nm, sizeof(nm), &off) && off == 0;   // 符号须正好落在入口
+        char name[256];
+        if (hassym) { strncpy(name, nm, sizeof(name) - 1); name[sizeof(name) - 1] = '\0'; }
+        else snprintf(name, sizeof(name), "sub_%llx", start);
+
+        if (name_query && name_query[0] && !strstr(name, name_query)) continue;
+
+        if (total >= offset && added < max_out && (limit <= 0 || added < limit)) {
+            AnalysisFunction *r = &out[added++];
+            r->start = start; r->vmaddr = vm;
+            r->size = (end > start) ? (end - start) : 0;
+            strncpy(r->name, name, sizeof(r->name) - 1); r->name[sizeof(r->name) - 1] = '\0';
+            r->has_symbol = hassym;
+        }
+        total++;
+    }
+    if (out_total) *out_total = total;
+    return added;
+}
