@@ -103,6 +103,13 @@ curl -s -X POST "http://127.0.0.1:$P2/api/mcp?token=$T2" -H "Content-Type: appli
 ge "$(jq '.result.structuredContent.count' /tmp/dh_xref3.json)" 1 "strip 目标 printf ≥1 调用点"
 eq "$(jq -r '.result.structuredContent.results[0].from_func|test("^sub_[0-9a-f]+\\+0x")' /tmp/dh_xref3.json)" "true" "strip 后归属到 sub_xxx+off"
 eq "$(jq -r '.result.structuredContent.results[0].resolved_name' /tmp/dh_xref3.json)" "printf" "strip 后 import 仍还原 printf"
+# tier-3A 在 strip 下: 调 printf 的函数(strip 后 = sub_xxx)的内部 callees 应归属到 sub_xxx 且带稳定 vmaddr
+FSTART=$(jq -r '.result.structuredContent.results[0].from_func_start' /tmp/dh_xref3.json)
+curl -s --max-time 15 -X POST "http://127.0.0.1:$P2/api/mcp?token=$T2" -H "Content-Type: application/json" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"find_function_refs\",\"arguments\":{\"target\":\"$FSTART\",\"direction\":\"callees\",\"max_results\":40}}}" > /tmp/dh_fref_s.json
+ge "$(jq '.result.structuredContent.count' /tmp/dh_fref_s.json)" 1 "strip: 内部 callees ≥1"
+eq "$(jq -r '[.result.structuredContent.results[].to_func]|all(test("^sub_"))' /tmp/dh_fref_s.json)" "true" "strip 下 callees 归属到 sub_xxx"
+eq "$(jq -r '.result.structuredContent.results[0].to_func_vmaddr|test("^0x")' /tmp/dh_fref_s.json)" "true" "strip 下带 to_func_vmaddr(稳定 ID)"
 kill $HOST2 2>/dev/null; wait $HOST2 2>/dev/null   # 同步收尸, 免 job-control 打印 Terminated
 
 echo ""; echo "== find_string_refs (tier-2A: direct + 归属 + 无误报) =="
@@ -136,6 +143,26 @@ eq "$(jq -r '[.result.structuredContent.results[]|.target_kind]|unique|.[]' /tmp
 eq "$(mc '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"find_selector_refs","arguments":{"selector":"nonexistentSelectorXYZ:"}}}' | jq '.result.structuredContent.count')" "0" "不存在 selector → 0"
 # 缺参防御
 eq "$(mc '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"find_selector_refs","arguments":{}}}' | jq -r '.result.isError')" "true" "无 selector → isError"
+
+echo ""; echo "== find_function_refs (tier-3A: 内部调用图) =="
+MAINA=$(mc '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"resolve_symbol","arguments":{"name":"main"}}}' | jq -r '.result.structuredContent.address')
+mc "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"find_function_refs\",\"arguments\":{\"target\":\"$MAINA\",\"direction\":\"callees\",\"max_results\":40}}}" > /tmp/dh_fref.json
+ge "$(jq '.result.structuredContent.count' /tmp/dh_fref.json)" 1 "callees of main ≥1 内部调用"
+eq "$(jq -r '[.result.structuredContent.results[].to_func]|any(test("^test_"))' /tmp/dh_fref.json)" "true" "callees 含内部 test_* 函数"
+eq "$(jq -r '[.result.structuredContent.results[].to_func]|any(test("printf"))' /tmp/dh_fref.json)" "false" "callees 不含 import stub printf(排除 stub)"
+eq "$(jq -r '.result.structuredContent.results[0].relation' /tmp/dh_fref.json)" "callee" "relation=callee"
+# callers 方向: 取 test_network 入口, 查谁调用它
+NETS=$(jq -r '.result.structuredContent.results[]|select(.to_func|startswith("test_network"))|.to_func_start' /tmp/dh_fref.json | head -1)
+mc "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"tools/call\",\"params\":{\"name\":\"find_function_refs\",\"arguments\":{\"target\":\"$NETS\",\"direction\":\"callers\"}}}" > /tmp/dh_fref2.json
+ge "$(jq '.result.structuredContent.count' /tmp/dh_fref2.json)" 1 "callers of test_network ≥1"
+eq "$(jq -r '.result.structuredContent.results[0].from_func|test("^main")' /tmp/dh_fref2.json)" "true" "test_network 的调用者是 main"
+eq "$(jq -r '.result.structuredContent.results[0].relation' /tmp/dh_fref2.json)" "caller" "relation=caller"
+# test_network 只做 objc/import 调用 → 内部 callees 为空(排除 objc_stub/stub)
+mc "{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"tools/call\",\"params\":{\"name\":\"find_function_refs\",\"arguments\":{\"target\":\"$NETS\",\"direction\":\"callees\"}}}" > /tmp/dh_fref3.json
+eq "$(jq '.result.structuredContent.count' /tmp/dh_fref3.json)" "0" "test_network 内部 callees=0(objc_stub/import 不算内部)"
+# 缺参 / 无法归属
+eq "$(mc '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"find_function_refs","arguments":{}}}' | jq -r '.result.isError')" "true" "无 target → isError"
+eq "$(mc '{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"find_function_refs","arguments":{"target":"0x1"}}}' | jq -r '.result.isError')" "true" "无法归属地址 → isError"
 
 echo ""; echo "== find_string_refs indirect (经典 selref → SEL) =="
 # 用 -fno-objc-msgsend-selector-stubs 强制经典 adrp+ldr selref 模式, 触发间接引用

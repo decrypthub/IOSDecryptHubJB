@@ -188,6 +188,41 @@ int analysis_find_selector_refs(const char *image_query,
                                 char *out_image, size_t image_len,
                                 uint64_t *out_scanned, int *out_truncated);
 
+// ============================================================
+// 内部函数调用图 (internal call xref) —— tier-3A
+// ============================================================
+//
+// 只做「直接 BL 到本镜像 __text 内函数」的调用边: from_func → to_func。
+// BL target 落在 __text 之外(__stubs/__auth_stubs/__objc_stubs = import/objc 调用)天然排除。
+// 不做 BLR/BR/switch/tail-call 识别/basic block/CFG。BL 目标不一定是函数入口(branch island/
+// thunk/block invoke), 故同时保留 target_addr 与 to_func_start + to_func_offset, 不假装是入口。
+
+typedef struct {
+    char     relation[8];        // 相对查询函数: "caller" | "callee"
+    uint64_t call_site;          // BL 指令地址
+    char     from_func[256];     // 主调函数名 或 "sub_<runtime>"; 未知空串
+    uint64_t from_offset;
+    uint64_t from_func_start;
+    uint64_t from_func_vmaddr;
+    uint64_t target_addr;        // BL 立即数目标(可能落在函数中间)
+    char     to_func[256];       // 被调函数名 或 "sub_<runtime>"; 未知空串
+    uint64_t to_offset;          // target_addr 相对 to_func_start 的偏移
+    uint64_t to_func_start;
+    uint64_t to_func_vmaddr;
+    char     insn_text[64];      // 如 "bl #0x104900120"
+} AnalysisFuncRef;
+
+// 在 image_query 指定镜像的 __text 里查找 target_addr 所属函数的内部调用边。
+//   direction: 0=callers(谁调用它) 1=callees(它调用谁) 2=both。
+// 返回命中数; -1 参数错误, -2 找不到镜像/__text, -3 target_addr 无法归属到函数。
+// out_query_start 回填查询函数的入口运行时地址。
+int analysis_find_function_refs(const char *image_query,
+                                uint64_t target_addr, int direction,
+                                AnalysisFuncRef *out, int max_results,
+                                char *out_image, size_t image_len,
+                                uint64_t *out_query_start,
+                                uint64_t *out_scanned, int *out_truncated);
+
 #ifdef __cplusplus
 }
 #endif

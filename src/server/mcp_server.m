@@ -525,6 +525,62 @@ static NSDictionary *tool_find_selector_refs(NSDictionary *args) {
     return tool_ok(out);
 }
 
+// find_function_refs —— tier-3A: 内部函数调用图 (from_func → to_func)
+static NSDictionary *tool_find_function_refs(NSDictionary *args) {
+    NSString *addrStr = [args[@"target"] isKindOfClass:NSString.class] ? args[@"target"] : nil;
+    NSString *image   = [args[@"image"] isKindOfClass:NSString.class] ? args[@"image"] : nil;
+    NSString *dir     = [args[@"direction"] isKindOfClass:NSString.class] ? args[@"direction"] : @"callers";
+    if (addrStr.length == 0) return tool_err(@"need 'target' (function address, e.g. \"0x100012340\")");
+    int direction = [dir isEqualToString:@"callees"] ? 1 : ([dir isEqualToString:@"both"] ? 2 : 0);
+    uint64_t targetAddr = strtoull(addrStr.UTF8String, NULL, 0);
+    int maxR = [args[@"max_results"] isKindOfClass:NSNumber.class] ? [args[@"max_results"] intValue] : 256;
+    if (maxR <= 0 || maxR > 2000) maxR = 256;
+
+    AnalysisFuncRef *rows = calloc((size_t)maxR, sizeof(AnalysisFuncRef));
+    if (!rows) return tool_err(@"out of memory");
+
+    uint64_t qstart = 0, scanned = 0; char imgNm[256] = {0}; int truncated = 0;
+    int n = analysis_find_function_refs(image.length ? image.UTF8String : NULL,
+                                        targetAddr, direction, rows, maxR,
+                                        imgNm, sizeof(imgNm), &qstart, &scanned, &truncated);
+    if (n == -1) { free(rows); return tool_err(@"invalid arguments"); }
+    if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
+    if (n == -3) { free(rows); return tool_err([NSString stringWithFormat:@"target 0x%llx not attributable to a function (no symbol / LC_FUNCTION_STARTS)", targetAddr]); }
+
+    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
+    for (int i = 0; i < n; i++) {
+        AnalysisFuncRef *r = &rows[i];
+        NSMutableDictionary *d = [@{
+            @"xref_type":       @"call_internal",
+            @"relation":        @(r->relation),
+            @"call_site":       [NSString stringWithFormat:@"0x%llx", r->call_site],
+            @"target_addr":     [NSString stringWithFormat:@"0x%llx", r->target_addr],
+            @"instruction":     @(r->insn_text),
+        } mutableCopy];
+        d[@"from_func"] = r->from_func[0] ? (id)[NSString stringWithFormat:@"%s+0x%llx", r->from_func, r->from_offset] : (id)[NSNull null];
+        d[@"from_func_start"]  = r->from_func_start ? (id)[NSString stringWithFormat:@"0x%llx", r->from_func_start] : (id)[NSNull null];
+        if (r->from_func_vmaddr) d[@"from_func_vmaddr"] = [NSString stringWithFormat:@"0x%llx", r->from_func_vmaddr];
+        d[@"to_func"] = r->to_func[0] ? (id)[NSString stringWithFormat:@"%s+0x%llx", r->to_func, r->to_offset] : (id)[NSNull null];
+        d[@"to_func_start"]  = r->to_func_start ? (id)[NSString stringWithFormat:@"0x%llx", r->to_func_start] : (id)[NSNull null];
+        d[@"to_func_offset"] = [NSString stringWithFormat:@"0x%llx", r->to_offset];
+        if (r->to_func_vmaddr) d[@"to_func_vmaddr"] = [NSString stringWithFormat:@"0x%llx", r->to_func_vmaddr];
+        [arr addObject:d];
+    }
+    free(rows);
+
+    NSMutableDictionary *out = [@{
+        @"query":         addrStr,
+        @"direction":     dir,
+        @"image":         @(imgNm),
+        @"scanned_insns": @(scanned),
+        @"count":         @(n),
+        @"truncated":     truncated ? @YES : @NO,
+        @"results":       arr,
+    } mutableCopy];
+    if (qstart) out[@"query_func_start"] = [NSString stringWithFormat:@"0x%llx", qstart];
+    return tool_ok(out);
+}
+
 // ============================================================
 // 取证工具 —— 复用面板同款数据源 (DHLogStore / dh_files / DHDumpManager / dh_capture / dh_health)
 // ============================================================
@@ -1128,6 +1184,20 @@ static NSArray *tool_definitions(void) {
                 @"required": @[@"selector"],
             },
         },
+        @{
+            @"name": @"find_function_refs",
+            @"description": @"Internal call graph: direct BL edges between functions in the same image's __text. Give 'target' (a function address) and 'direction' (callers = who calls it, callees = what it calls, both). Only direct BL to in-__text targets (import stubs / objc_stubs are excluded). BL targets that land mid-function keep target_addr + to_func_start + to_func_offset (not assumed to be an entry). tier-3A: no BLR/BR/switch/CFG.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"target": @{@"type": @"string", @"description": @"Function address, e.g. \"0x100012340\" (from a from_func_start/to_func_start of another tool)"},
+                    @"direction": @{@"type": @"string", @"enum": @[@"callers", @"callees", @"both"], @"description": @"callers (default) / callees / both"},
+                    @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
+                    @"max_results": @{@"type": @"number", @"description": @"Max edges returned (default 256, max 2000)"},
+                },
+                @"required": @[@"target"],
+            },
+        },
         // ---- 取证: 读 ----
         @{
             @"name": @"get_stats",
@@ -1351,6 +1421,7 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"find_xrefs"])            return tool_find_xrefs(args);
     if ([name isEqualToString:@"find_string_refs"])      return tool_find_string_refs(args);
     if ([name isEqualToString:@"find_selector_refs"])    return tool_find_selector_refs(args);
+    if ([name isEqualToString:@"find_function_refs"])    return tool_find_function_refs(args);
     // 取证: 读
     if ([name isEqualToString:@"get_stats"])             return tool_get_stats(args);
     if ([name isEqualToString:@"query_events"])          return tool_query_events(args);

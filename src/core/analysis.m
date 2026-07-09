@@ -1101,3 +1101,96 @@ int analysis_find_selector_refs(const char *image_query,
     if (out_truncated) *out_truncated = truncated;
     return found;
 }
+
+// ============================================================
+// 内部函数调用图 (internal call xref) —— tier-3A
+// ============================================================
+
+int analysis_find_function_refs(const char *image_query,
+                                uint64_t target_addr, int direction,
+                                AnalysisFuncRef *out, int max_results,
+                                char *out_image, size_t image_len,
+                                uint64_t *out_query_start,
+                                uint64_t *out_scanned, int *out_truncated) {
+    if (out_scanned) *out_scanned = 0;
+    if (out_truncated) *out_truncated = 0;
+    if (out_query_start) *out_query_start = 0;
+    if (!out || max_results <= 0 || target_addr == 0) return -1;
+    int want_callers = (direction == 0 || direction == 2);
+    int want_callees = (direction == 1 || direction == 2);
+
+    intptr_t slide = 0; char imgnm[256] = {0};
+    const struct mach_header_64 *mh = xref_select_image(image_query, &slide, imgnm, sizeof(imgnm));
+    if (!mh) return -2;
+    if (out_image && image_len) { strncpy(out_image, imgnm, image_len - 1); out_image[image_len - 1] = '\0'; }
+
+    uint64_t text_lo = 0, text_hi = 0;
+    if (!xref_sect_range(mh, slide, "__TEXT", "__text", &text_lo, &text_hi) &&
+        !xref_sect_range(mh, slide, "__TEXT_EXEC", "__text", &text_lo, &text_hi)) return -2;
+
+    FuncStartsCache *fc = func_starts_for(mh, slide, text_hi);
+
+    // 查询函数: 把 target_addr 归属到某函数入口。qstart 是过滤基准。
+    char qname[256]; uint64_t qoff = 0, qstart = 0, qvm = 0;
+    attribute_addr(fc, slide, target_addr, qname, sizeof(qname), &qoff, &qstart, &qvm);
+    if (qstart == 0) return -3;   // 归属不到函数
+    if (out_query_start) *out_query_start = qstart;
+
+    csh h = 0;
+    if (cs_open(CS_ARCH_ARM64, CS_MODE_ARM, &h) != CS_ERR_OK) return -1;
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON);
+    cs_insn *insn = cs_malloc(h);
+    if (!insn) { cs_close(&h); return -1; }
+
+    const uint8_t *code = (const uint8_t *)(uintptr_t)text_lo;
+    size_t remaining = (size_t)(text_hi - text_lo);
+    uint64_t cur = text_lo;
+    uint64_t scanned = 0;
+    int found = 0, truncated = 0;
+
+    while (cs_disasm_iter(h, &code, &remaining, &cur, insn)) {
+        scanned++;
+        if (scanned >= XREF_MAX_SCAN_INSNS) { truncated = 1; break; }
+        if (insn->id != ARM64_INS_BL) continue;
+
+        cs_arm64 *a = &insn->detail->arm64;
+        if (a->op_count < 1 || a->operands[0].type != ARM64_OP_IMM) continue;
+        uint64_t tgt = (uint64_t)a->operands[0].imm;
+        if (!in_range(tgt, text_lo, text_hi)) continue;   // 只认落在 __text 的内部调用
+
+        // 归属主调(call_site)与被调(target)。
+        char ff[256]; uint64_t foff = 0, fstart = 0, fvm = 0;
+        char tf[256]; uint64_t toff = 0, tstart = 0, tvm = 0;
+        attribute_addr(fc, slide, insn->address, ff, sizeof(ff), &foff, &fstart, &fvm);
+        attribute_addr(fc, slide, tgt,           tf, sizeof(tf), &toff, &tstart, &tvm);
+
+        int is_caller = (want_callers && tstart == qstart);   // 有人调用了查询函数
+        int is_callee = (want_callees && fstart == qstart);   // 查询函数调用了别人
+        if (!is_caller && !is_callee) continue;
+
+        // both 模式下一条边可能同时满足(查询函数自调用): 各记一条以标清 relation。
+        for (int pass = 0; pass < 2; pass++) {
+            int rel_caller = (pass == 0);
+            if (rel_caller && !is_caller) continue;
+            if (!rel_caller && !is_callee) continue;
+            if (found >= max_results) { truncated = 1; break; }
+            AnalysisFuncRef *r = &out[found++];
+            memset(r, 0, sizeof(*r));
+            strncpy(r->relation, rel_caller ? "caller" : "callee", sizeof(r->relation) - 1);
+            r->call_site = insn->address;
+            r->target_addr = tgt;
+            strncpy(r->from_func, ff, sizeof(r->from_func) - 1);
+            r->from_offset = foff; r->from_func_start = fstart; r->from_func_vmaddr = fvm;
+            strncpy(r->to_func, tf, sizeof(r->to_func) - 1);
+            r->to_offset = toff; r->to_func_start = tstart; r->to_func_vmaddr = tvm;
+            snprintf(r->insn_text, sizeof(r->insn_text), "%s %s", insn->mnemonic, insn->op_str);
+        }
+        if (truncated) break;
+    }
+
+    cs_free(insn, 1);
+    cs_close(&h);
+    if (out_scanned) *out_scanned = scanned;
+    if (out_truncated) *out_truncated = truncated;
+    return found;
+}
