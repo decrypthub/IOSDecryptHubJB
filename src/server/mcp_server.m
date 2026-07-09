@@ -64,24 +64,7 @@ static NSDictionary *tool_err(NSString *message) {
 // 工具实现 —— 返回「tools/call 结果信封」(tool_ok / tool_err)
 // ============================================================
 
-// hex 串 -> NSData; 容忍 "0x" 前缀、空白、大小写。奇数位末尾忽略。
-static NSData *hex_to_data(NSString *hex) {
-    NSMutableData *d = [NSMutableData data];
-    const char *s = hex.UTF8String;
-    if (!s) return d;
-    int hi = -1;
-    for (; *s; s++) {
-        int v;
-        char c = *s;
-        if (c >= '0' && c <= '9') v = c - '0';
-        else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
-        else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
-        else continue;   // 跳过 0x/空格/分隔符
-        if (hi < 0) { hi = v; }
-        else { uint8_t b = (uint8_t)((hi << 4) | v); [d appendBytes:&b length:1]; hi = -1; }
-    }
-    return d;
-}
+// hex 编解码统一用 log_store 的 DHHexFromData / DHDataFromHex, 不再各处手写。
 
 static NSArray *insns_to_array(const AnalysisInsn *insns, int count) {
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:count];
@@ -108,7 +91,7 @@ static NSDictionary *tool_disassemble(NSDictionary *args) {
     if (![bytesHex isKindOfClass:NSString.class] || bytesHex.length == 0)
         return tool_err(@"missing 'bytes' (hex string)");
 
-    NSData *code = hex_to_data(bytesHex);
+    NSData *code = DHDataFromHex(bytesHex);
     if (code.length == 0) return tool_err(@"'bytes' has no valid hex");
 
     uint64_t addr = addrStr ? strtoull(addrStr.UTF8String, NULL, 0) : 0;
@@ -300,8 +283,7 @@ static NSDictionary *tool_read_memory(NSDictionary *args) {
     if (got == -2) return tool_err([NSString stringWithFormat:@"memory not readable at 0x%llx", addr]);
     if (got < 0)  return tool_err(@"invalid arguments");
 
-    NSMutableString *hex = [NSMutableString stringWithCapacity:got * 2];
-    for (int i = 0; i < got; i++) [hex appendFormat:@"%02x", buf[i]];
+    NSString *hex = DHHexFromData([NSData dataWithBytes:buf length:got]);
     return tool_ok(@{
         @"address": [NSString stringWithFormat:@"0x%llx", addr],
         @"size": @(got),
@@ -323,7 +305,7 @@ static NSDictionary *tool_search_memory(NSDictionary *args) {
     if ([args[@"string"] isKindOfClass:NSString.class])
         pat = [args[@"string"] dataUsingEncoding:NSUTF8StringEncoding];
     else if ([args[@"pattern"] isKindOfClass:NSString.class])
-        pat = hex_to_data(args[@"pattern"]);
+        pat = DHDataFromHex(args[@"pattern"]);
     if (pat.length == 0) return tool_err(@"provide 'string' or 'pattern' (hex)");
 
     uint64_t hits[256];

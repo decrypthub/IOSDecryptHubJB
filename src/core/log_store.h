@@ -105,6 +105,7 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 
 // ===== 工具函数 =====
 NSString *DHHexFromData(NSData * _Nullable d);
+NSData   *DHDataFromHex(NSString * _Nullable hex);   // hex -> bytes; 容忍 0x/空白/大小写, 奇数位末尾忽略
 NSString *DHHexDumpFromData(NSData * _Nullable d);
 NSString *DHUTF8FromData(NSData * _Nullable d);
 NSString *DHCallStackFiltered(void);   // 已过滤系统 / 自身的调用栈

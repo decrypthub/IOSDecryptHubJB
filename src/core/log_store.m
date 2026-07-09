@@ -478,6 +478,24 @@ NSString *DHHexFromData(NSData *d) {
     return s;
 }
 
+NSData *DHDataFromHex(NSString *hex) {
+    NSMutableData *d = [NSMutableData data];
+    const char *s = hex.UTF8String;
+    if (!s) return d;
+    int hi = -1;
+    for (; *s; s++) {
+        int v;
+        char c = *s;
+        if      (c >= '0' && c <= '9') v = c - '0';
+        else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+        else continue;   // 跳过 0x / 空格 / 分隔符
+        if (hi < 0) hi = v;
+        else { uint8_t byte = (uint8_t)((hi << 4) | v); [d appendBytes:&byte length:1]; hi = -1; }
+    }
+    return d;
+}
+
 NSString *DHHexDumpFromData(NSData *d) {
     if (!d || d.length == 0) return @"";
     NSMutableString *s = [NSMutableString string];

@@ -28,13 +28,18 @@ static void set_defaults(void) {
     for (int i = 0; i < DH_CAP_CAT_COUNT; i++) atomic_store(&g_cat_paused[i], 0);
 }
 
-// 文件格式: 一行, 先 SUB_COUNT 个 0/1, 再 CAT_COUNT 个 0/1, 空格分隔。须在持锁状态调用。
+// v2 格式(按名/索引, 每行一项): 首行 "v2", 后跟 "sub <NAME> <0/1>" 与 "cat <index> <0/1>"。
+// 好处: 新增子类/分类时, 旧配置里已有的项按名匹配照常生效, 缺失项保默认、未知项忽略 —— 升级不丢配置。
+// 须在持锁状态调用。
 static void save_locked(void) {
     if (!g_conf_path[0]) return;
     FILE *f = fopen(g_conf_path, "wb");
     if (!f) return;
-    for (int i = 0; i < DH_CAP_SUB_COUNT; i++)  fprintf(f, "%d ", atomic_load(&g_sub[i]));
-    for (int i = 0; i < DH_CAP_CAT_COUNT; i++)  fprintf(f, "%d ", atomic_load(&g_cat_paused[i]));
+    fprintf(f, "v2\n");
+    for (int i = 0; i < DH_CAP_SUB_COUNT; i++)
+        fprintf(f, "sub %s %d\n", dh_capture_sub_name((dh_cap_sub)i), atomic_load(&g_sub[i]));
+    for (int i = 0; i < DH_CAP_CAT_COUNT; i++)
+        fprintf(f, "cat %d %d\n", i, atomic_load(&g_cat_paused[i]));
     fclose(f);
 }
 
@@ -48,15 +53,31 @@ void dh_capture_load(const char *confPath) {
     if (g_conf_path[0]) {
         FILE *f = fopen(g_conf_path, "rb");
         if (f) {
-            const int total = DH_CAP_SUB_COUNT + DH_CAP_CAT_COUNT;
-            int vals[DH_CAP_SUB_COUNT + DH_CAP_CAT_COUNT];
-            int n = 0, v;
-            while (n < total && fscanf(f, "%d", &v) == 1) vals[n++] = v;
-            fclose(f);
-            if (n == total) {   // 仅当格式完全匹配才采用, 否则保持默认(fail-safe)
-                for (int i = 0; i < DH_CAP_SUB_COUNT; i++)  atomic_store(&g_sub[i], vals[i] ? 1 : 0);
-                for (int i = 0; i < DH_CAP_CAT_COUNT; i++)  atomic_store(&g_cat_paused[i], vals[DH_CAP_SUB_COUNT + i] ? 1 : 0);
+            char line[160];
+            if (fgets(line, sizeof(line), f) && strncmp(line, "v2", 2) == 0) {
+                // v2: 按名/索引解析, 已有项覆盖默认, 缺失/未知不影响
+                char name[80]; int idx, val;
+                while (fgets(line, sizeof(line), f)) {
+                    if (sscanf(line, "sub %79s %d", name, &val) == 2) {
+                        for (int i = 0; i < DH_CAP_SUB_COUNT; i++)
+                            if (strcmp(name, dh_capture_sub_name((dh_cap_sub)i)) == 0) { atomic_store(&g_sub[i], val ? 1 : 0); break; }
+                    } else if (sscanf(line, "cat %d %d", &idx, &val) == 2) {
+                        if (idx >= 0 && idx < DH_CAP_CAT_COUNT) atomic_store(&g_cat_paused[idx], val ? 1 : 0);
+                    }
+                }
+            } else {
+                // 旧位置格式(v1): 回到文件头, 仅当项数完全匹配才采用(fail-safe), 否则保持默认。
+                fseek(f, 0, SEEK_SET);
+                const int total = DH_CAP_SUB_COUNT + DH_CAP_CAT_COUNT;
+                int vals[DH_CAP_SUB_COUNT + DH_CAP_CAT_COUNT];
+                int n = 0, v;
+                while (n < total && fscanf(f, "%d", &v) == 1) vals[n++] = v;
+                if (n == total) {
+                    for (int i = 0; i < DH_CAP_SUB_COUNT; i++)  atomic_store(&g_sub[i], vals[i] ? 1 : 0);
+                    for (int i = 0; i < DH_CAP_CAT_COUNT; i++)  atomic_store(&g_cat_paused[i], vals[DH_CAP_SUB_COUNT + i] ? 1 : 0);
+                }
             }
+            fclose(f);
         }
     }
     pthread_mutex_unlock(&g_lock);
