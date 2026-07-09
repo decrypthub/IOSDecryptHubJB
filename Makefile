@@ -9,7 +9,7 @@
 #       export CROSS_CC=/path/to/theos/toolchain/linux/iphone/bin/clang
 #       make linux                 -> decrypt_helper.dylib
 
-VERSION := 1.14.0
+VERSION := 1.15.0
 TARGET  := decrypt_helper.dylib
 
 # Capstone 反汇编库源文件（仅 ARM/ARM64 架构）
@@ -71,8 +71,9 @@ FRAMEWORKS := -framework Foundation -framework UIKit -framework CoreGraphics -fr
 #   CAPSTONE_HAS_ARM / _ARM64 — 注册 ARM/AArch64 架构, 否则 cs_open 返回 CS_ERR_ARCH
 CAPSTONE_DEF := -DCAPSTONE_USE_SYS_DYN_MEM -DCAPSTONE_HAS_ARM -DCAPSTONE_HAS_ARM64
 
-# 挂到共享的 INCLUDES 上, 让 4 个编译目标 (iOS/mac/sim/linux) 都带上
-INCLUDES   := -Isrc/core -Isrc/core/capstone/include -Isrc/server -Isrc/ui $(CAPSTONE_DEF)
+# 挂到共享的 INCLUDES 上, 让 4 个编译目标 (iOS/mac/sim/linux) 都带上。
+# 版本号单一真相源 = 上面的 VERSION; 经 -D 注入, http_server/mcp_server 不再各自硬编码。
+INCLUDES   := -Isrc/core -Isrc/core/capstone/include -Isrc/server -Isrc/ui $(CAPSTONE_DEF) -DDH_VERSION_STR='"$(VERSION)"'
 ARCH       := arm64
 MIN_IOS    := 14.0
 
