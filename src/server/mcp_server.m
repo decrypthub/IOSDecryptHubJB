@@ -18,7 +18,10 @@
 #include <string.h>
 
 #define MCP_SERVER_NAME     "ios-decrypt-helper"
-#define MCP_SERVER_VERSION  "1.14.0"
+#ifndef DH_VERSION_STR
+#define DH_VERSION_STR "0.0.0"   // 兜底; 正常由 Makefile -D 注入(单一真相源)
+#endif
+#define MCP_SERVER_VERSION  DH_VERSION_STR
 #define MCP_DEFAULT_PROTO   "2024-11-05"
 
 // 我方支持的协议版本 (initialize 时若客户端请求其一则原样回应, 否则回默认)

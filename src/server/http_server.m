@@ -41,7 +41,10 @@
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
 #define DH_HTTP_MAX_BODY    (2 * 1024 * 1024)   // 配置导入请求体上限
-#define DH_HTTP_VERSION     "1.14.0"
+#ifndef DH_VERSION_STR
+#define DH_VERSION_STR "0.0.0"   // 兜底; 正常由 Makefile -D 注入(单一真相源)
+#endif
+#define DH_HTTP_VERSION     DH_VERSION_STR
 
 static int        gListenFD = -1;
 static uint16_t   gPort     = 0;
@@ -51,6 +54,33 @@ static dispatch_queue_t gWorkerQ = NULL;
 static dispatch_semaphore_t gConcurrency = NULL;  // 限制同时处理的连接数, 防 slow-client 耗尽 fd
 
 #define DH_HTTP_MAX_CONCURRENCY 8
+
+static NSString *gToken = nil;   // 6 位数字访问令牌 (每 App 一个, 持久化)
+
+// ============================================================
+// 访问令牌: 首次启动生成 6 位数字, 存沙箱, 之后复用。
+// ============================================================
+static void load_or_make_token(void) {
+    NSArray *p = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *path = [[p firstObject] stringByAppendingPathComponent:@".dh_token.conf"];
+    NSString *saved = [[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil]
+                       stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (saved.length == 6 &&
+        [saved rangeOfCharacterFromSet:[[NSCharacterSet decimalDigitCharacterSet] invertedSet]].location == NSNotFound) {
+        gToken = saved; return;
+    }
+    gToken = [NSString stringWithFormat:@"%06u", (unsigned)(arc4random_uniform(900000) + 100000)];
+    int savedHook = dh_in_hook; dh_in_hook = 1;   // 落盘的 open/write 不能被 file hook 记录
+    [gToken writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    dh_in_hook = savedHook;
+}
+
+// HTML 外壳 / favicon / 应用图标 免令牌 (外壳要先进得去才能输令牌; 图标非敏感, 由浏览器直连加载);
+// 其余端点均需令牌。
+static BOOL path_needs_auth(NSString *path) {
+    return !([path isEqualToString:@"/"] || [path isEqualToString:@"/index.html"] ||
+             [path isEqualToString:@"/favicon.ico"] || [path isEqualToString:@"/api/appicon"]);
+}
 
 // ============================================================
 // 工具
@@ -860,6 +890,23 @@ static void handle_connection(int fd) {
         }
     }
 
+    // 访问令牌校验: 除 HTML 外壳与 OPTIONS 预检外, 所有端点需 6 位令牌 (query ?token= 或 X-DH-Token 头)。
+    if (gToken.length && ![method isEqualToString:@"OPTIONS"] && path_needs_auth(path)) {
+        NSString *tok = q[@"token"];
+        if (!tok.length) {
+            for (NSString *line in lines) {
+                if ([[line lowercaseString] hasPrefix:@"x-dh-token:"]) {
+                    tok = [[line substringFromIndex:11] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                    break;
+                }
+            }
+        }
+        if (![tok isEqualToString:gToken]) {
+            send_json(fd, 401, @{@"error": @"unauthorized", @"hint": @"append ?token=<6 位数字> 或带 X-DH-Token 头"});
+            close(fd); return;
+        }
+    }
+
     @try {
         if ([method isEqualToString:@"GET"]) {
             if ([path isEqualToString:@"/"] || [path isEqualToString:@"/index.html"]) {
@@ -1021,8 +1068,10 @@ void dh_http_start(void) {
             dh_health_http_fail("端口 8088..8108 全被占用, 本地服务不可用");
             return;
         }
+        load_or_make_token();
         NSString *ip = get_local_ip();
-        gURL = [NSString stringWithFormat:@"http://%@:%u", ip, (unsigned)gPort];
+        // URL 自带令牌: 悬浮窗展示/复制的地址直接可用, 打开即通过鉴权。
+        gURL = [NSString stringWithFormat:@"http://%@:%u/?token=%@", ip, (unsigned)gPort, gToken];
         gAcceptQ = dispatch_queue_create("com.decrypthelper.http.accept", DISPATCH_QUEUE_SERIAL);
         gWorkerQ = dispatch_queue_create("com.decrypthelper.http.worker", DISPATCH_QUEUE_CONCURRENT);
         gConcurrency = dispatch_semaphore_create(DH_HTTP_MAX_CONCURRENCY);
@@ -1032,5 +1081,6 @@ void dh_http_start(void) {
     });
 }
 
-uint16_t  dh_http_port(void) { return gPort; }
-NSString *dh_http_url(void)  { return gURL ?: @"(not running)"; }
+uint16_t  dh_http_port(void)  { return gPort; }
+NSString *dh_http_url(void)   { return gURL ?: @"(not running)"; }
+NSString *dh_http_token(void) { return gToken ?: @""; }

@@ -19,7 +19,9 @@
 void      dh_http_start(void);
 // 返回成功绑定的端口, 0 表示未启动
 uint16_t  dh_http_port(void);
-// 形如 "http://192.168.x.x:8088" 或 "http://127.0.0.1:8088"
+// 形如 "http://192.168.x.x:8088/?token=123456" (自带访问令牌)
 NSString *dh_http_url(void);
+// 6 位数字访问令牌 (每 App 一个, 持久化到沙箱)
+NSString *dh_http_token(void);
 
 #endif
