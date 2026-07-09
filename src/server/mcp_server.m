@@ -153,6 +153,30 @@ static void sym_collect_cb(const char *name, void *ctx) {
     if (name) [(__bridge NSMutableArray *)ctx addObject:@(name)];
 }
 
+// list_images —— 列出 symtab 镜像索引清单 (list_imports 的 image_index 从这里来)
+// 默认只列有导入符号的镜像(= fishhook 可 rebind 候选; 也是 list_imports 有意义的目标),
+// 主程序排最前; 可用 query 按名过滤。
+static NSDictionary *tool_list_images(NSDictionary *args) {
+    NSString *q = [args[@"query"] isKindOfClass:NSString.class] ? [args[@"query"] lowercaseString] : nil;
+    int n = dh_symtab_image_count();
+    NSMutableArray *arr = [NSMutableArray array];
+    for (int i = 0; i < n; i++) {
+        char nm[256] = {0}; int isMain = 0;
+        dh_symtab_image_name(i, nm, sizeof(nm), &isMain);
+        int imports = dh_symtab_imports(i, NULL, 0, NULL, NULL);   // 只计数
+        if (imports <= 0) continue;
+        NSString *name = @(nm);
+        if (q && [name.lowercaseString rangeOfString:q].location == NSNotFound) continue;
+        [arr addObject:@{@"idx": @(i), @"name": name, @"main": isMain ? @YES : @NO, @"imports": @(imports)}];
+    }
+    [arr sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        BOOL am = [a[@"main"] boolValue], bm = [b[@"main"] boolValue];
+        if (am != bm) return am ? NSOrderedAscending : NSOrderedDescending;   // 主程序最前
+        return [a[@"name"] caseInsensitiveCompare:b[@"name"]];
+    }];
+    return tool_ok(@{@"count": @(arr.count), @"images": arr});
+}
+
 // list_imports —— 真正遍历某镜像的导入符号
 static NSDictionary *tool_list_imports(NSDictionary *args) {
     NSNumber *idxNum = args[@"image_index"];
@@ -400,13 +424,46 @@ static NSDictionary *tool_query_events(NSDictionary *args) {
     return tool_ok(@{@"count": @(out.count), @"matched": @(src.count), @"events": out});
 }
 
-// get_event —— 单条完整详情 (key / iv / 明文 / 密文 / 调用栈)
+// 把格式化调用栈字符串解析成结构化帧, 让 AI 直接拿 address 续接 disassemble_function/symbolicate,
+// 不必自己正则抠地址。每行形如 "[ 0] 0  libSystem.B.dylib  0x... symbol + 44"。
+static NSArray *parse_callstack_frames(NSString *cs) {
+    if (![cs isKindOfClass:NSString.class] || cs.length == 0) return @[];
+    static NSRegularExpression *re = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        re = [NSRegularExpression regularExpressionWithPattern:
+              @"\\d+\\s+(\\S+)\\s+(0x[0-9a-fA-F]+)\\s+(.+?)\\s+\\+\\s+(\\d+)" options:0 error:nil];
+    });
+    NSMutableArray *frames = [NSMutableArray array];
+    int idx = 0;
+    for (NSString *line in [cs componentsSeparatedByString:@"\n"]) {
+        NSTextCheckingResult *m = [re firstMatchInString:line options:0 range:NSMakeRange(0, line.length)];
+        if (!m) continue;
+        [frames addObject:@{
+            @"index":   @(idx++),
+            @"image":   [line substringWithRange:[m rangeAtIndex:1]],
+            @"address": [line substringWithRange:[m rangeAtIndex:2]],
+            @"symbol":  [line substringWithRange:[m rangeAtIndex:3]],
+            @"offset":  @([[line substringWithRange:[m rangeAtIndex:4]] integerValue]),
+        }];
+    }
+    return frames;
+}
+
+// get_event —— 单条完整详情 (key / iv / 明文 / 密文 / 调用栈 + 结构化帧)
 static NSDictionary *tool_get_event(NSDictionary *args) {
     NSNumber *seqN = args[@"seq"];
     if (![seqN isKindOfClass:NSNumber.class]) return tool_err(@"missing 'seq'");
     DHLogEntry *e = [[DHLogStore shared] entryWithSeq:(uint64_t)seqN.unsignedLongLongValue];
     if (!e) return tool_err([NSString stringWithFormat:@"no event with seq %@", seqN]);
-    return tool_ok(dh_log_entry_detail(e));
+    NSDictionary *detail = dh_log_entry_detail(e);
+    NSString *cs = detail[@"callStack"];
+    if (cs.length) {
+        NSMutableDictionary *m = [detail mutableCopy];
+        m[@"callStackFrames"] = parse_callstack_frames(cs);   // [{index,image,address,symbol,offset}]
+        detail = m;
+    }
+    return tool_ok(detail);
 }
 
 // query_noise —— 噪声板块事件 (被过滤掉的高频调用)
@@ -715,12 +772,22 @@ static NSArray *tool_definitions(void) {
             },
         },
         @{
+            @"name": @"list_images",
+            @"description": @"List loaded images (with imports) and their index — call this FIRST to get a valid image_index for list_imports. Main executable listed first.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"query": @{@"type": @"string", @"description": @"Optional substring filter on image name"},
+                },
+            },
+        },
+        @{
             @"name": @"list_imports",
             @"description": @"List the imported (undefined) symbols of a loaded image — the fishhook-rebindable candidates.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
-                    @"image_index": @{@"type": @"number", @"description": @"Image index; use get_macho_info / order of loaded images"},
+                    @"image_index": @{@"type": @"number", @"description": @"Image index from list_images (NOT get_macho_info — different index space)"},
                     @"query": @{@"type": @"string", @"description": @"Optional substring filter"},
                     @"limit": @{@"type": @"number", @"description": @"Max symbols returned (default 500)"},
                 },
@@ -755,7 +822,7 @@ static NSArray *tool_definitions(void) {
         },
         @{
             @"name": @"get_event",
-            @"description": @"Full detail of one captured event by seq: algorithm, key, IV, plaintext, ciphertext (hex + utf8 + hexdump), and the app-level call stack.",
+            @"description": @"Full detail of one captured event by seq: algorithm, key, IV, plaintext, ciphertext (hex + utf8 + hexdump), and the app-level call stack — both as text (callStack) and structured frames (callStackFrames: [{index,image,address,symbol,offset}]) you can feed straight into disassemble_function / symbolicate.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{@"seq": @{@"type": @"number", @"description": @"Event sequence number (from query_events)"}},
@@ -927,6 +994,7 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"symbolicate"])           return tool_symbolicate(args);
     if ([name isEqualToString:@"read_memory"])           return tool_read_memory(args);
     if ([name isEqualToString:@"search_memory"])         return tool_search_memory(args);
+    if ([name isEqualToString:@"list_images"])           return tool_list_images(args);
     if ([name isEqualToString:@"list_imports"])          return tool_list_imports(args);
     if ([name isEqualToString:@"get_macho_info"])        return tool_get_macho_info(args);
     // 取证: 读

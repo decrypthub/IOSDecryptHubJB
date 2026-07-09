@@ -344,7 +344,10 @@ static NSString *chk_device_info(void) {
         if (u) ws.status.text = [NSString stringWithFormat:@"选 tab 点按钮触发, 看悬浮窗 / 浏览器 %@", u];
     });
     // 启动后发一次网络请求, 触发网络抓包 hook (即便无外网, resume 已在请求发出前被 swizzle 捕获)
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ do_network(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        do_network();
+        unsigned char d[CC_MD5_DIGEST_LENGTH]; CC_MD5("iPhone", 6, d);   // 噪声验证: 应进 crypto 噪声桶而非主流
+    });
     if ([[NSProcessInfo processInfo].environment[@"DH_AUTOLOG"] isEqualToString:@"1"]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.3 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [ws triggerByKey:@"log"]; });

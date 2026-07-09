@@ -14,6 +14,7 @@ static void dh_noise_set_defaults_locked(void) {
         gPatterns[i] = [NSMutableArray array];
     }
     [gPatterns[DHNoiseBoardCrypto] addObject:@"MGCopyAnswer"];
+    [gPatterns[DHNoiseBoardCrypto] addObject:@"iPhone"];   // 只对字面量 "iPhone" 做的 MD5/摘要 多为设备探测噪声
 }
 
 // v2 格式:
