@@ -18,7 +18,7 @@
 #include <string.h>
 
 #define MCP_SERVER_NAME     "ios-decrypt-helper"
-#define MCP_SERVER_VERSION  "1.12.0"
+#define MCP_SERVER_VERSION  "1.13.0"
 #define MCP_DEFAULT_PROTO   "2024-11-05"
 
 // 我方支持的协议版本 (initialize 时若客户端请求其一则原样回应, 否则回默认)

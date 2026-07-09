@@ -41,7 +41,7 @@
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
 #define DH_HTTP_MAX_BODY    (2 * 1024 * 1024)   // 配置导入请求体上限
-#define DH_HTTP_VERSION     "1.12.0"
+#define DH_HTTP_VERSION     "1.13.0"
 
 static int        gListenFD = -1;
 static uint16_t   gPort     = 0;
