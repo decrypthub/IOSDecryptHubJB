@@ -12,6 +12,7 @@
 #include "dh_capture.h"
 #include "dh_health.h"
 #include "dh_noise.h"
+#include "dh_spoof.h"
 #include "dh_files.h"
 #include "dump_manager.h"
 #include <string.h>
@@ -505,6 +506,121 @@ static NSDictionary *tool_start_dump(NSDictionary *args) {
     return tool_ok(@{@"started": @YES, @"mode": mode, @"note": @"poll dump_status for progress"});
 }
 
+// ---- 配置面: 改机 / 噪声规则 / 日志配置 / 审查日志 ----
+
+// get_spoof —— 改机/越狱隐藏/反调试的整份配置快照
+static NSDictionary *tool_get_spoof(NSDictionary *args) {
+    return tool_ok(dh_spoof_snapshot() ?: @{});
+}
+
+// set_spoof —— 改写伪装配置 (镜像面板 op 语义), 返回更新后快照
+static NSDictionary *tool_set_spoof(NSDictionary *args) {
+    NSString *group = args[@"group"];
+    NSString *op = args[@"op"];
+    if (![group isKindOfClass:NSString.class] || ![op isKindOfClass:NSString.class])
+        return tool_err(@"need 'group' (jb/anti/device) and 'op'");
+    BOOL on = [args[@"on"] isKindOfClass:NSNumber.class] ? [args[@"on"] boolValue] : YES;
+    NSString *text = [args[@"text"] isKindOfClass:NSString.class] ? args[@"text"] : nil;
+
+    if ([group isEqualToString:@"jb"]) {
+        if      ([op isEqualToString:@"enable"])        dh_spoof_jb_set_on(on);
+        else if ([op isEqualToString:@"add_path"]      && text) dh_spoof_jb_add_path(text);
+        else if ([op isEqualToString:@"remove_path"]   && text) dh_spoof_jb_remove_path(text);
+        else if ([op isEqualToString:@"add_scheme"]    && text) dh_spoof_jb_add_scheme(text);
+        else if ([op isEqualToString:@"remove_scheme"] && text) dh_spoof_jb_remove_scheme(text);
+        else if ([op isEqualToString:@"add_image"]     && text) dh_spoof_jb_add_image(text);
+        else if ([op isEqualToString:@"remove_image"]  && text) dh_spoof_jb_remove_image(text);
+        else return tool_err(@"invalid jb op (enable / add_path|remove_path|add_scheme|remove_scheme|add_image|remove_image + text)");
+    } else if ([group isEqualToString:@"anti"]) {
+        if ([op isEqualToString:@"enable"]) dh_spoof_anti_debug_set_on(on);
+        else return tool_err(@"anti supports op 'enable' only");
+    } else if ([group isEqualToString:@"device"]) {
+        if      ([op isEqualToString:@"enable"])    dh_spoof_device_set_on(on);
+        else if ([op isEqualToString:@"randomize"]) dh_spoof_device_randomize();
+        else if ([op isEqualToString:@"set"]) {
+            NSString *key = args[@"key"];
+            if (![key isKindOfClass:NSString.class]) return tool_err(@"device 'set' needs 'key' (hw_machine/hw_model/os_version/device_name/idfv/idfa)");
+            dh_spoof_device_set_value(key, [args[@"value"] isKindOfClass:NSString.class] ? args[@"value"] : @"");
+        } else return tool_err(@"invalid device op (enable / randomize / set+key+value)");
+    } else {
+        return tool_err(@"group must be jb / anti / device");
+    }
+    return tool_ok(dh_spoof_snapshot() ?: @{});
+}
+
+static DHNoiseBoard noise_board_from(NSDictionary *args) {
+    return [args[@"board"] isEqualToString:@"sys"] ? DHNoiseBoardSys : DHNoiseBoardCrypto;
+}
+
+static NSDictionary *noise_config_snapshot(DHNoiseBoard b) {
+    return @{@"board": (b == DHNoiseBoardSys) ? @"sys" : @"crypto",
+             @"enabled": @(dh_noise_enabled_for_board(b)),
+             @"patterns": dh_noise_patterns_for_board(b) ?: @[]};
+}
+
+// get_noise_config —— 某板块噪声过滤开关 + 特征串清单
+static NSDictionary *tool_get_noise_config(NSDictionary *args) {
+    return tool_ok(noise_config_snapshot(noise_board_from(args)));
+}
+
+// set_noise_config —— 开关 / 增删噪声特征串
+static NSDictionary *tool_set_noise_config(NSDictionary *args) {
+    DHNoiseBoard b = noise_board_from(args);
+    NSString *op = args[@"op"];
+    NSString *text = [args[@"text"] isKindOfClass:NSString.class] ? args[@"text"] : nil;
+    if ([op isEqualToString:@"enable"])
+        dh_noise_set_enabled_for_board(b, [args[@"on"] isKindOfClass:NSNumber.class] ? [args[@"on"] boolValue] : YES);
+    else if ([op isEqualToString:@"add"] && text)    dh_noise_add_pattern_for_board(b, text);
+    else if ([op isEqualToString:@"remove"] && text) dh_noise_remove_pattern_for_board(b, text);
+    else return tool_err(@"op must be enable / add / remove (add|remove need 'text')");
+    return tool_ok(noise_config_snapshot(b));
+}
+
+// clear_noise —— 清空某板块噪声事件 (内存, 不动落盘)
+static NSDictionary *tool_clear_noise(NSDictionary *args) {
+    DHNoiseBoard b = noise_board_from(args);
+    [[DHLogStore shared] clearNoiseForBoard:b];
+    return tool_ok(@{@"cleared": (b == DHNoiseBoardSys) ? @"sys" : @"crypto"});
+}
+
+// get_config —— 日志保留配置
+static NSDictionary *tool_get_config(NSDictionary *args) {
+    DHLogStore *s = [DHLogStore shared];
+    return tool_ok(@{@"maxPerCategory": @([s maxPerCategory]), @"maxLogFileBytes": @([s maxLogFileBytes])});
+}
+
+// set_config —— 改日志保留 (每类内存条数 / 单文件落盘上限, 0=不限)
+static NSDictionary *tool_set_config(NSDictionary *args) {
+    DHLogStore *s = [DHLogStore shared];
+    if ([args[@"maxEntries"] isKindOfClass:NSNumber.class]) {
+        NSInteger n = [args[@"maxEntries"] integerValue];
+        if (n > 0) [s setMaxPerCategory:(NSUInteger)n];
+    }
+    if ([args[@"maxFileBytes"] isKindOfClass:NSNumber.class]) {
+        long long n = [args[@"maxFileBytes"] longLongValue];
+        if (n >= 0) [s setMaxLogFileBytes:(unsigned long long)n];
+    }
+    return tool_ok(@{@"maxPerCategory": @([s maxPerCategory]), @"maxLogFileBytes": @([s maxLogFileBytes])});
+}
+
+// get_diag —— 审查/诊断日志时间线 (board 省略=全部板块) + 未挂上的符号清单
+static NSDictionary *tool_get_diag(NSDictionary *args) {
+    NSString *b = args[@"board"];
+    int board = -1;
+    if      ([b isEqualToString:@"general"]) board = DH_DIAG_GENERAL;
+    else if ([b isEqualToString:@"crypto"])  board = DH_DIAG_CRYPTO;
+    else if ([b isEqualToString:@"file"])    board = DH_DIAG_FILE;
+    else if ([b isEqualToString:@"sys"])     board = DH_DIAG_SYS;
+    else if ([b isEqualToString:@"dump"])    board = DH_DIAG_DUMP;
+    const char *txt = dh_diag_dump(board);
+    const char *unh = dh_health_hook_unhooked();
+    return tool_ok(@{
+        @"board":    [b isKindOfClass:NSString.class] ? b : @"all",
+        @"diag":     (txt && txt[0]) ? @(txt) : @"",
+        @"unhooked": (unh && unh[0]) ? @(unh) : @"",
+    });
+}
+
 // ============================================================
 // 工具元数据 (tools/list 用) + 分发
 // ============================================================
@@ -723,6 +839,82 @@ static NSArray *tool_definitions(void) {
                 @"properties": @{@"mode": @{@"type": @"string", @"enum": @[@"bin", @"ipa"], @"description": @"'bin' = decrypted binaries zip; 'ipa' = re-signable IPA (default bin)"}},
             },
         },
+        // ---- 配置面: 改机 / 噪声规则 / 日志配置 / 审查日志 ----
+        @{
+            @"name": @"get_spoof",
+            @"description": @"Get the anti-detection config: jailbreak-hiding (paths/schemes/injection-image cloaking), anti-debug, and device-spoofing (改机) values.",
+            @"inputSchema": @{@"type": @"object", @"properties": @{}},
+        },
+        @{
+            @"name": @"set_spoof",
+            @"description": @"Change anti-detection config. Returns the updated snapshot. group=jb: enable / add_path|remove_path|add_scheme|remove_scheme|add_image|remove_image (+text). group=anti: enable. group=device: enable / randomize / set (+key +value).",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"group": @{@"type": @"string", @"enum": @[@"jb", @"anti", @"device"], @"description": @"jb=jailbreak-hide, anti=anti-debug, device=改机"},
+                    @"op": @{@"type": @"string", @"description": @"enable/randomize/set or jb list ops"},
+                    @"on": @{@"type": @"boolean", @"description": @"For op=enable"},
+                    @"text": @{@"type": @"string", @"description": @"Path/scheme/image for jb add|remove ops"},
+                    @"key": @{@"type": @"string", @"description": @"device set key: hw_machine/hw_model/os_version/device_name/idfv/idfa"},
+                    @"value": @{@"type": @"string", @"description": @"device set value"},
+                },
+                @"required": @[@"group", @"op"],
+            },
+        },
+        @{
+            @"name": @"get_noise_config",
+            @"description": @"Get a noise board's filter state: enabled flag + pattern list (events matching a pattern are diverted from the main feed).",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{@"board": @{@"type": @"string", @"enum": @[@"crypto", @"sys"], @"description": @"Default crypto"}},
+            },
+        },
+        @{
+            @"name": @"set_noise_config",
+            @"description": @"Toggle a noise board or add/remove a noise pattern. Returns updated config.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"board": @{@"type": @"string", @"enum": @[@"crypto", @"sys"]},
+                    @"op": @{@"type": @"string", @"enum": @[@"enable", @"add", @"remove"]},
+                    @"on": @{@"type": @"boolean", @"description": @"For op=enable"},
+                    @"text": @{@"type": @"string", @"description": @"Pattern for add/remove"},
+                },
+                @"required": @[@"op"],
+            },
+        },
+        @{
+            @"name": @"clear_noise",
+            @"description": @"Clear a noise board's in-memory events (on-disk untouched).",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{@"board": @{@"type": @"string", @"enum": @[@"crypto", @"sys"]}},
+            },
+        },
+        @{
+            @"name": @"get_config",
+            @"description": @"Get log retention config: in-memory entries per category and on-disk log file cap.",
+            @"inputSchema": @{@"type": @"object", @"properties": @{}},
+        },
+        @{
+            @"name": @"set_config",
+            @"description": @"Change log retention. Returns updated config.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"maxEntries": @{@"type": @"number", @"description": @"Max in-memory events per category"},
+                    @"maxFileBytes": @{@"type": @"number", @"description": @"On-disk log cap in bytes (0 = unlimited)"},
+                },
+            },
+        },
+        @{
+            @"name": @"get_diag",
+            @"description": @"Get the diagnostic/audit log timeline (hook health, persistence, service events) and the list of symbols that failed to hook. Omit board for all boards.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{@"board": @{@"type": @"string", @"enum": @[@"general", @"crypto", @"file", @"sys", @"dump"], @"description": @"Diag board (default all)"}},
+            },
+        },
     ];
 }
 
@@ -749,6 +941,15 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"set_pause"])             return tool_set_pause(args);
     if ([name isEqualToString:@"clear_events"])          return tool_clear_events(args);
     if ([name isEqualToString:@"start_dump"])            return tool_start_dump(args);
+    // 配置面: 改机 / 噪声规则 / 日志配置 / 审查日志
+    if ([name isEqualToString:@"get_spoof"])             return tool_get_spoof(args);
+    if ([name isEqualToString:@"set_spoof"])             return tool_set_spoof(args);
+    if ([name isEqualToString:@"get_noise_config"])      return tool_get_noise_config(args);
+    if ([name isEqualToString:@"set_noise_config"])      return tool_set_noise_config(args);
+    if ([name isEqualToString:@"clear_noise"])           return tool_clear_noise(args);
+    if ([name isEqualToString:@"get_config"])            return tool_get_config(args);
+    if ([name isEqualToString:@"set_config"])            return tool_set_config(args);
+    if ([name isEqualToString:@"get_diag"])              return tool_get_diag(args);
     return nil;   // 未知工具
 }
 
