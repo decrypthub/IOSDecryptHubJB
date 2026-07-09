@@ -18,7 +18,7 @@
 #include <string.h>
 
 #define MCP_SERVER_NAME     "ios-decrypt-helper"
-#define MCP_SERVER_VERSION  "1.13.0"
+#define MCP_SERVER_VERSION  "1.14.0"
 #define MCP_DEFAULT_PROTO   "2024-11-05"
 
 // 我方支持的协议版本 (initialize 时若客户端请求其一则原样回应, 否则回默认)
@@ -372,6 +372,7 @@ static NSInteger category_from_string(NSString *c) {
     if ([c isEqualToString:@"file"])   return DHCategoryFile;
     if ([c isEqualToString:@"sys"] || [c isEqualToString:@"system"])     return DHCategorySystem;
     if ([c isEqualToString:@"net"] || [c isEqualToString:@"network"])    return DHCategoryNetwork;
+    if ([c isEqualToString:@"keychain"] || [c isEqualToString:@"kc"])    return DHCategoryKeychain;
     if ([c isEqualToString:@"other"])  return DHCategoryOther;
     return -1;
 }
@@ -379,7 +380,7 @@ static NSInteger category_from_string(NSString *c) {
 // get_stats —— 取证总览: 事件计数 / 捕获开关 / 进程 / 健康 / 落盘量 / 噪声
 static NSDictionary *tool_get_stats(NSDictionary *args) {
     DHLogStore *s = [DHLogStore shared];
-    NSArray *names = @[@"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"net", @"other"];
+    NSArray *names = @[@"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"net", @"keychain", @"other"];
     NSMutableDictionary *byCat = [NSMutableDictionary dictionary];
     for (int c = 0; c < (int)names.count; c++) byCat[names[c]] = @([s countForCategory:(DHCategory)c]);
     NSMutableDictionary *capture = [NSMutableDictionary dictionary];
@@ -404,6 +405,24 @@ static NSDictionary *tool_get_stats(NSDictionary *args) {
     });
 }
 
+// 事件是否通过「增量过滤」(output_hex/output_len/thread_id/时间窗/stack_contains)。
+// 复用于 query_events 与 correlate_request。传入的过滤值缺省(nil/0)即不约束该项。
+static BOOL event_passes_extra(DHLogEntry *e,
+                               NSString *outHexEq, NSString *outHexPrefix, NSNumber *outLen,
+                               NSNumber *tid, uint64_t sinceMs, uint64_t untilMs, NSString *stackHas) {
+    if (outLen && e.output.length != outLen.unsignedIntegerValue) return NO;
+    if (tid && e.threadId != tid.unsignedLongLongValue) return NO;
+    if (sinceMs && e.timestampMs < sinceMs) return NO;
+    if (untilMs && e.timestampMs > untilMs) return NO;
+    if (stackHas.length && [e.callStack rangeOfString:stackHas].location == NSNotFound) return NO;
+    if (outHexEq.length || outHexPrefix.length) {
+        NSString *oh = e.output.length ? [DHHexFromData(e.output) lowercaseString] : @"";
+        if (outHexEq.length && ![oh isEqualToString:[outHexEq lowercaseString]]) return NO;
+        if (outHexPrefix.length && ![oh hasPrefix:[outHexPrefix lowercaseString]]) return NO;
+    }
+    return YES;
+}
+
 // query_events —— 过滤检索捕获事件 (最新在前), 返回摘要
 static NSDictionary *tool_query_events(NSDictionary *args) {
     NSInteger cat = category_from_string(args[@"category"]);
@@ -414,14 +433,101 @@ static NSDictionary *tool_query_events(NSDictionary *args) {
     NSInteger limit = [args[@"limit"] isKindOfClass:NSNumber.class] ? [args[@"limit"] integerValue] : 100;
     if (limit <= 0 || limit > 1000) limit = 100;
 
+    // 增量过滤参数 (Batch 1)
+    NSString *outHexEq   = [args[@"output_hex"] isKindOfClass:NSString.class] ? args[@"output_hex"] : nil;
+    NSString *outHexPre  = [args[@"output_hex_prefix"] isKindOfClass:NSString.class] ? args[@"output_hex_prefix"] : nil;
+    NSNumber *outLen     = [args[@"output_len"] isKindOfClass:NSNumber.class] ? args[@"output_len"] : nil;
+    NSNumber *tid        = [args[@"thread_id"] isKindOfClass:NSNumber.class] ? args[@"thread_id"] : nil;
+    uint64_t sinceMs     = [args[@"since_ts_ms"] isKindOfClass:NSNumber.class] ? [args[@"since_ts_ms"] unsignedLongLongValue] : 0;
+    uint64_t untilMs     = [args[@"until_ts_ms"] isKindOfClass:NSNumber.class] ? [args[@"until_ts_ms"] unsignedLongLongValue] : 0;
+    NSString *stackHas   = [args[@"stack_contains"] isKindOfClass:NSString.class] ? args[@"stack_contains"] : nil;
+
     NSArray *src = [[DHLogStore shared] snapshotMatching:q category:cat minInputSize:minSize maxInputSize:maxSize];
     NSMutableArray *out = [NSMutableArray array];
-    for (NSInteger i = (NSInteger)src.count - 1; i >= 0 && (NSInteger)out.count < limit; i--) {
+    NSUInteger matched = 0;
+    for (NSInteger i = (NSInteger)src.count - 1; i >= 0; i--) {
         DHLogEntry *e = src[i];
         if (since && e.seq <= since) continue;
-        [out addObject:dh_log_entry_summary(e)];
+        if (!event_passes_extra(e, outHexEq, outHexPre, outLen, tid, sinceMs, untilMs, stackHas)) continue;
+        matched++;
+        if ((NSInteger)out.count < limit) [out addObject:dh_log_entry_summary(e)];
     }
-    return tool_ok(@{@"count": @(out.count), @"matched": @(src.count), @"events": out});
+    return tool_ok(@{@"count": @(out.count), @"matched": @(matched), @"events": out});
+}
+
+// correlate_request —— 以一次 net 请求为锚, 聚合时间窗内 crypto/sys 事件, 并按 X-Validator 反查命中。
+// 把「AES→Hash→设 Header→发包」串成一次请求, match 块给 AI「命中即闭合」的自动化验收。
+static NSDictionary *tool_correlate_request(NSDictionary *args) {
+    NSNumber *netSeqN = args[@"net_seq"];
+    if (![netSeqN isKindOfClass:NSNumber.class]) return tool_err(@"missing 'net_seq'");
+    DHLogEntry *anchor = [[DHLogStore shared] entryWithSeq:(uint64_t)netSeqN.unsignedLongLongValue];
+    if (!anchor) return tool_err([NSString stringWithFormat:@"no event with seq %@", netSeqN]);
+    if (anchor.timestampMs == 0) return tool_err(@"anchor is a legacy event without timestampMs — re-capture after 1.14.0");
+
+    uint64_t windowMs = [args[@"window_ms"] isKindOfClass:NSNumber.class] ? [args[@"window_ms"] unsignedLongLongValue] : 300;
+    BOOL sameThread = [args[@"same_thread_only"] isKindOfClass:NSNumber.class] ? [args[@"same_thread_only"] boolValue] : NO;
+
+    // include 分类集合 (默认全部)
+    NSMutableSet *allow = [NSMutableSet set];
+    NSArray *inc = [args[@"include"] isKindOfClass:NSArray.class] ? args[@"include"] : nil;
+    for (id s in inc) { NSInteger c = category_from_string(s); if (c >= 0) [allow addObject:@(c)]; }
+    BOOL allowAll = (allow.count == 0);
+
+    // 解析锚点 request headers ("> KEY: VALUE") + URL + X-Validator
+    NSMutableDictionary *headers = [NSMutableDictionary dictionary];
+    NSString *method = anchor.operation ?: @"";
+    NSArray *lines = [(anchor.detail ?: @"") componentsSeparatedByString:@"\n"];
+    NSString *url = lines.count ? lines[0] : @"";
+    if ([url hasPrefix:[method stringByAppendingString:@" "]]) url = [url substringFromIndex:method.length + 1];
+    for (NSString *ln in lines) {
+        if (![ln hasPrefix:@"> "]) continue;
+        NSString *kv = [ln substringFromIndex:2];
+        NSRange colon = [kv rangeOfString:@": "];
+        if (colon.location == NSNotFound) continue;
+        headers[[kv substringToIndex:colon.location]] = [kv substringFromIndex:colon.location + 2];
+    }
+    NSString *validatorB64 = nil;
+    for (NSString *k in headers) if ([k caseInsensitiveCompare:@"X-Validator"] == NSOrderedSame) { validatorB64 = headers[k]; break; }
+    NSString *validatorHex = @"";
+    if (validatorB64.length) {
+        NSData *dec = [[NSData alloc] initWithBase64EncodedString:validatorB64 options:0];
+        if (dec.length) validatorHex = [DHHexFromData(dec) lowercaseString];
+    }
+
+    // 聚合时间窗事件 + 反查命中
+    NSArray *all = [[DHLogStore shared] snapshotMatching:@"" category:-1 minInputSize:0 maxInputSize:0];
+    NSMutableArray *events = [NSMutableArray array];
+    BOOL found = NO; uint64_t matchedSeq = 0; NSString *matchedCat = @"", *matchedAlg = @"";
+    for (DHLogEntry *e in all) {
+        if (e.seq == anchor.seq || e.timestampMs == 0) continue;
+        if (!allowAll && ![allow containsObject:@(e.category)]) continue;
+        if (sameThread && e.threadId != anchor.threadId) continue;
+        long long delta = (long long)e.timestampMs - (long long)anchor.timestampMs;
+        if (llabs(delta) > (long long)windowMs) continue;
+        NSString *oh = e.output.length ? [DHHexFromData(e.output) lowercaseString] : @"";
+        [events addObject:@{
+            @"seq": @(e.seq), @"category": @(dh_log_category_name(e.category)),
+            @"deltaMs": @(delta), @"algorithm": e.algorithm ?: @"",
+            @"outLen": @(e.output.length),
+            @"outputHexPreview": oh.length > 16 ? [oh substringToIndex:16] : oh,
+        }];
+        if (!found && validatorHex.length && [oh isEqualToString:validatorHex]) {
+            found = YES; matchedSeq = e.seq; matchedCat = @(dh_log_category_name(e.category)); matchedAlg = e.algorithm ?: @"";
+        }
+    }
+    [events sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"deltaMs"] compare:b[@"deltaMs"]]; }];
+
+    NSMutableDictionary *matchDict = [@{@"validatorOutputFound": @(found)} mutableCopy];
+    if (found) { matchDict[@"matchedSeq"] = @(matchedSeq); matchDict[@"matchedCategory"] = matchedCat; matchDict[@"matchedAlgorithm"] = matchedAlg; }
+
+    return tool_ok(@{
+        @"anchor": @{
+            @"seq": @(anchor.seq), @"timestampMs": @(anchor.timestampMs), @"threadId": @(anchor.threadId),
+            @"method": method, @"url": url, @"headers": headers, @"validatorDecodedHex": validatorHex,
+        },
+        @"events": events,
+        @"match": matchDict,
+    });
 }
 
 // 把格式化调用栈字符串解析成结构化帧, 让 AI 直接拿 address 续接 disassemble_function/symbolicate,
@@ -811,13 +917,34 @@ static NSArray *tool_definitions(void) {
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
-                    @"category": @{@"type": @"string", @"enum": @[@"all", @"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"net", @"other"], @"description": @"Filter by category (default all). 'net' = captured network traffic."},
+                    @"category": @{@"type": @"string", @"enum": @[@"all", @"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"net", @"keychain", @"other"], @"description": @"Filter by category (default all). 'net'=network, 'keychain'=Keychain items."},
                     @"query": @{@"type": @"string", @"description": @"Keyword filter (algorithm/path/preview)"},
                     @"min_size": @{@"type": @"number", @"description": @"Min input bytes"},
                     @"max_size": @{@"type": @"number", @"description": @"Max input bytes (0 = no cap)"},
                     @"since_seq": @{@"type": @"number", @"description": @"Only events with seq > this (incremental polling)"},
+                    @"output_hex": @{@"type": @"string", @"description": @"Exact output match (case-insensitive hex). Decode a header/token to hex and find which crypto op produced it."},
+                    @"output_hex_prefix": @{@"type": @"string", @"description": @"Output hex prefix match (e.g. MD5 s= first 8 chars)"},
+                    @"output_len": @{@"type": @"number", @"description": @"Exact output byte length (e.g. 32 for SHA256/AES block)"},
+                    @"thread_id": @{@"type": @"number", @"description": @"Only events on this thread"},
+                    @"since_ts_ms": @{@"type": @"number", @"description": @"Only events with timestampMs >= this"},
+                    @"until_ts_ms": @{@"type": @"number", @"description": @"Only events with timestampMs <= this"},
+                    @"stack_contains": @{@"type": @"string", @"description": @"Only events whose call stack contains this substring (e.g. an address/module)"},
                     @"limit": @{@"type": @"number", @"description": @"Max results (default 100, max 1000)"},
                 },
+            },
+        },
+        @{
+            @"name": @"correlate_request",
+            @"description": @"Anchor on a captured network request (net_seq) and gather all crypto/keychain/net events within window_ms, sorted by deltaMs. Decodes the anchor's X-Validator (base64) and reports which event's output matches it — 'match' closes the formula automatically.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"net_seq": @{@"type": @"number", @"description": @"seq of the anchor network event (from query_events category=net)"},
+                    @"window_ms": @{@"type": @"number", @"description": @"Time window around the anchor (default 300)"},
+                    @"include": @{@"type": @"array", @"items": @{@"type": @"string"}, @"description": @"Categories to include, e.g. [\"digest\",\"hmac\",\"sym\",\"keychain\",\"net\"] (default all)"},
+                    @"same_thread_only": @{@"type": @"boolean", @"description": @"Only events on the anchor's thread (default false)"},
+                },
+                @"required": @[@"net_seq"],
             },
         },
         @{
@@ -1000,6 +1127,7 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     // 取证: 读
     if ([name isEqualToString:@"get_stats"])             return tool_get_stats(args);
     if ([name isEqualToString:@"query_events"])          return tool_query_events(args);
+    if ([name isEqualToString:@"correlate_request"])     return tool_correlate_request(args);
     if ([name isEqualToString:@"get_event"])             return tool_get_event(args);
     if ([name isEqualToString:@"query_noise"])           return tool_query_noise(args);
     if ([name isEqualToString:@"list_files"])            return tool_list_files(args);

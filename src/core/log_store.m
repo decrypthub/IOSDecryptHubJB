@@ -4,6 +4,8 @@
 #import "dh_capture.h"
 #import "dh_noise.h"
 #import <sys/sysctl.h>
+#import <sys/time.h>
+#import <pthread.h>
 #import <errno.h>
 
 @implementation DHLogEntry
@@ -127,6 +129,12 @@ static BOOL dh_noise_entry_matches_board(DHLogEntry *entry, DHNoiseBoard board) 
 
 - (void)append:(DHLogEntry *)entry {
     if (self.paused || entry == nil) return;
+    // tid/tsMs 必须在调用(被 hook)线程上取, 即 dispatch_async 之前 —— 否则线程号会变成串行队列的。
+    if (entry.timestampMs == 0) {
+        struct timeval tv; gettimeofday(&tv, NULL);
+        entry.timestampMs = (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)(tv.tv_usec / 1000);
+    }
+    if (entry.threadId == 0) { uint64_t t = 0; pthread_threadid_np(NULL, &t); entry.threadId = t; }
     NSInteger ci = (entry.category >= 0 && entry.category <= DHCategoryOther) ? entry.category : DHCategoryOther;
     if (dh_capture_cat_paused((int)ci)) return;            // 该分类已暂停(单一真相源在 dh_capture, 已持久化)
     DHNoiseBoard board = dh_noise_board_for_category(ci);

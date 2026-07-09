@@ -14,6 +14,8 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <sys/time.h>
+#import <pthread.h>
 #import "fishhook.h"
 #import "log_store.h"
 #define DH_BOARD DH_DIAG_SYS
@@ -23,6 +25,10 @@
 
 // 标记「此 task 的响应会由 completion 配对捕获」, 供 resume 兜底去重。
 static const void *kDHNetHandled = &kDHNetHandled;
+
+// 请求时刻的 ms/tid —— 配对事件用它做锚点(而非响应到达时刻), 否则慢请求会跳出关联时间窗。
+static uint64_t dh_now_ms(void) { struct timeval tv; gettimeofday(&tv, NULL); return (uint64_t)tv.tv_sec * 1000ULL + tv.tv_usec / 1000; }
+static uint64_t dh_cur_tid(void) { uint64_t t = 0; pthread_threadid_np(NULL, &t); return t; }
 
 // ============================================================
 // 记录
@@ -39,8 +45,10 @@ static void net_log(NSString *algo, NSString *op, NSString *detail, NSData *body
 }
 
 // 请求↔响应配对记录: 一条 entry 里 input=请求体 / output=响应体 / detail=URL+状态+头。
+// tsMs/tid 为「请求构建时刻」的值(不是响应到达时刻), 保证与算 Header 的 crypto 落在同一时间窗/线程。
 static void net_log_pair(NSString *method, NSString *urlStr, NSDictionary *reqHdrs, NSData *reqBody,
-                         NSData *respData, NSURLResponse *resp, NSError *err, NSString *callStack) {
+                         NSData *respData, NSURLResponse *resp, NSError *err, NSString *callStack,
+                         uint64_t tsMs, uint64_t tid) {
     if (!dh_capture_sub_enabled(DH_CAP_NETWORK)) return;
     NSMutableString *d = [NSMutableString stringWithFormat:@"%@ %@\n", method ?: @"GET", urlStr ?: @"?"];
     if ([resp isKindOfClass:[NSHTTPURLResponse class]]) {
@@ -59,10 +67,12 @@ static void net_log_pair(NSString *method, NSString *urlStr, NSDictionary *reqHd
     e.algorithm = @"HTTP";
     e.operation = method ?: @"GET";
     e.detail    = d;
-    e.input     = reqBody;      // 请求体
-    e.output    = respData;     // 响应体
-    e.timestamp = DHTimestampNow();
-    e.callStack = callStack ?: DHCallStackFiltered();
+    e.input       = reqBody;      // 请求体
+    e.output      = respData;     // 响应体
+    e.timestamp   = DHTimestampNow();
+    e.timestampMs = tsMs;         // 请求时刻 (供 correlate_request 锚点)
+    e.threadId    = tid;          // 请求线程
+    e.callStack   = callStack ?: DHCallStackFiltered();
     [[DHLogStore shared] append:e];
 }
 
@@ -85,8 +95,9 @@ static id swz_dtReqCH(id self, SEL _cmd, NSURLRequest *req, DHDataCH ch) {
     if (!ch || !dh_capture_sub_enabled(DH_CAP_NETWORK)) return orig_dtReqCH(self, _cmd, req, ch);
     NSURLRequest *rc = req;
     NSString *cs = DHCallStackFiltered();
+    uint64_t reqMs = dh_now_ms(), reqTid = dh_cur_tid();
     DHDataCH wrapped = ^(NSData *data, NSURLResponse *resp, NSError *err) {
-        @try { net_log_pair(rc.HTTPMethod, rc.URL.absoluteString, rc.allHTTPHeaderFields, rc.HTTPBody, data, resp, err, cs); }
+        @try { net_log_pair(rc.HTTPMethod, rc.URL.absoluteString, rc.allHTTPHeaderFields, rc.HTTPBody, data, resp, err, cs, reqMs, reqTid); }
         @catch (__unused NSException *e) {}
         ch(data, resp, err);
     };
@@ -98,8 +109,9 @@ static id swz_dtURLCH(id self, SEL _cmd, NSURL *url, DHDataCH ch) {
     if (!ch || !dh_capture_sub_enabled(DH_CAP_NETWORK)) return orig_dtURLCH(self, _cmd, url, ch);
     NSURL *uc = url;
     NSString *cs = DHCallStackFiltered();
+    uint64_t reqMs = dh_now_ms(), reqTid = dh_cur_tid();
     DHDataCH wrapped = ^(NSData *data, NSURLResponse *resp, NSError *err) {
-        @try { net_log_pair(@"GET", uc.absoluteString, nil, nil, data, resp, err, cs); }
+        @try { net_log_pair(@"GET", uc.absoluteString, nil, nil, data, resp, err, cs, reqMs, reqTid); }
         @catch (__unused NSException *e) {}
         ch(data, resp, err);
     };
@@ -111,8 +123,9 @@ static id swz_upReqCH(id self, SEL _cmd, NSURLRequest *req, NSData *bodyData, DH
     if (!ch || !dh_capture_sub_enabled(DH_CAP_NETWORK)) return orig_upReqCH(self, _cmd, req, bodyData, ch);
     NSURLRequest *rc = req; NSData *bc = bodyData ?: req.HTTPBody;
     NSString *cs = DHCallStackFiltered();
+    uint64_t reqMs = dh_now_ms(), reqTid = dh_cur_tid();
     DHDataCH wrapped = ^(NSData *data, NSURLResponse *resp, NSError *err) {
-        @try { net_log_pair(rc.HTTPMethod, rc.URL.absoluteString, rc.allHTTPHeaderFields, bc, data, resp, err, cs); }
+        @try { net_log_pair(rc.HTTPMethod, rc.URL.absoluteString, rc.allHTTPHeaderFields, bc, data, resp, err, cs, reqMs, reqTid); }
         @catch (__unused NSException *e) {}
         ch(data, resp, err);
     };

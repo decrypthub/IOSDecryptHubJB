@@ -12,6 +12,7 @@ const char *dh_log_category_name(NSInteger c) {
         case DHCategoryFile:       return "file";
         case DHCategorySystem:     return "sys";
         case DHCategoryNetwork:    return "net";
+        case DHCategoryKeychain:   return "keychain";
         default: return "other";
     }
 }
@@ -35,6 +36,12 @@ NSDictionary *dh_log_entry_summary(DHLogEntry *e) {
             preview = DHHexFromData(d);
         }
     }
+    // outputHexPreview: 输出前 16 个 hex 字符, 便于 query_events 不逐条 get_event 就能眼判命中
+    NSString *outPrev = @"";
+    if (e.output.length) {
+        NSString *oh = DHHexFromData(e.output);
+        outPrev = oh.length > 16 ? [oh substringToIndex:16] : oh;
+    }
     return @{
         @"seq":          @(e.seq),
         @"category":     @(e.category),
@@ -42,8 +49,11 @@ NSDictionary *dh_log_entry_summary(DHLogEntry *e) {
         @"algorithm":    e.algorithm ?: @"",
         @"operation":    e.operation ?: @"",
         @"timestamp":    e.timestamp ?: @"",
+        @"timestampMs":  @(e.timestampMs),
+        @"threadId":     @(e.threadId),
         @"inLen":        @(e.input.length),
         @"outLen":       @(e.output.length),
+        @"outputHexPreview": outPrev,
         @"detail":       e.detail ?: @"",
         @"preview":      preview ?: @"",
     };

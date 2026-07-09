@@ -41,7 +41,7 @@
 #define DH_HTTP_BACKLOG     16
 #define DH_HTTP_MAX_HEADER  (64 * 1024)
 #define DH_HTTP_MAX_BODY    (2 * 1024 * 1024)   // 配置导入请求体上限
-#define DH_HTTP_VERSION     "1.13.0"
+#define DH_HTTP_VERSION     "1.14.0"
 
 static int        gListenFD = -1;
 static uint16_t   gPort     = 0;
@@ -175,6 +175,7 @@ static void handle_stats(int fd) {
         @([s countForCategory:DHCategoryFile]),
         @([s countForCategory:DHCategorySystem]),
         @([s countForCategory:DHCategoryNetwork]),
+        @([s countForCategory:DHCategoryKeychain]),
         @([s countForCategory:DHCategoryOther]),
     ];
     NSMutableDictionary *capture = [NSMutableDictionary dictionary];
@@ -188,6 +189,7 @@ static void handle_stats(int fd) {
         @([s isPausedForCategory:DHCategoryFile]),
         @([s isPausedForCategory:DHCategorySystem]),
         @([s isPausedForCategory:DHCategoryNetwork]),
+        @([s isPausedForCategory:DHCategoryKeychain]),
         @([s isPausedForCategory:DHCategoryOther]),
     ];
     const char *hsum = dh_health_summary();

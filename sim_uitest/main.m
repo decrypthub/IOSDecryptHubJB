@@ -159,14 +159,19 @@ static void do_dlsym(void) {
     }
 }
 static void do_network(void) {
-    // 发一个带 body 的 POST, 触发 -[NSURLSessionTask resume] swizzle (抓 URL/header/body)
+    // 模拟微博 X-Validator 场景: SHA256(body) -> base64 设为请求头, 供 correlate_request 反查命中。
+    NSData *body = [@"{\"probe\":\"network-capture\",\"secret\":\"s3cr3t\"}" dataUsingEncoding:NSUTF8StringEncoding];
+    unsigned char dg[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(body.bytes, (CC_LONG)body.length, dg);   // 被 hook -> 产生一条 SHA256 事件, output=dg
+    NSString *validator = [[NSData dataWithBytes:dg length:sizeof(dg)] base64EncodedStringWithOptions:0];
+
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://httpbin.org/post"]];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    [req setValue:@"DecryptHubTest/1.0" forHTTPHeaderField:@"X-DH-Probe"];
-    req.HTTPBody = [@"{\"probe\":\"network-capture\",\"secret\":\"s3cr3t\"}" dataUsingEncoding:NSUTF8StringEncoding];
+    [req setValue:validator forHTTPHeaderField:@"X-Validator"];   // = base64(SHA256(body))
+    req.HTTPBody = body;
     NSURLSessionDataTask *t = [[NSURLSession sharedSession] dataTaskWithRequest:req
-        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) { /* 结果无所谓, 目的是触发 resume */ }];
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) { /* 结果无所谓 */ }];
     [t resume];
 }
 

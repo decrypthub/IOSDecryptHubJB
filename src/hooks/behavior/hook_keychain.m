@@ -84,7 +84,7 @@ static NSData *kc_extract_result_data(CFTypeRef result) {
 
 static void kc_log(NSString *api, NSString *summary, NSData *input, NSData *output, OSStatus st) {
     DHLogEntry *e = [DHLogEntry new];
-    e.category  = DHCategorySystem;   // 复用系统板块, 靠 algorithm 区分
+    e.category  = DHCategoryKeychain;   // 独立 Keychain 分类 (被写入/读出的 data 明文在 output)
     e.algorithm = api;
     e.operation = (st == errSecSuccess) ? @"ok" : [NSString stringWithFormat:@"status=%d", (int)st];
     e.detail    = summary;
