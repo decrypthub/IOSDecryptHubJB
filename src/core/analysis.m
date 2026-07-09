@@ -841,3 +841,263 @@ int analysis_find_string_refs(const char *image_query,
     if (out_truncated) *out_truncated = truncated;
     return found;
 }
+
+// ============================================================
+// selector 引用 (selector ref) —— tier-2B
+// ============================================================
+
+// objc_msgSend 家族(x1 放 selector 的那几个变体) → 规范静态名; 非家族返回 NULL。
+static const char *msgsend_canon(const char *nm) {
+    if (!nm) return NULL;
+    if (strcmp(nm, "objc_msgSend") == 0)       return "objc_msgSend";
+    if (strcmp(nm, "objc_msgSendSuper") == 0)  return "objc_msgSendSuper";
+    if (strcmp(nm, "objc_msgSendSuper2") == 0) return "objc_msgSendSuper2";
+    return NULL;
+}
+
+// selector 匹配: 0=精确 1=包含 2=前缀。
+static int sel_match(const char *sel, const char *q, int mode) {
+    if (!sel[0] || !q || !q[0]) return 0;
+    if (mode == 1) return strstr(sel, q) != NULL;
+    if (mode == 2) return strncmp(sel, q, strlen(q)) == 0;
+    return strcmp(sel, q) == 0;
+}
+
+// bl 直接目标 → 符号名(去下划线)。经 import stub 则解运行时 GOT。命中返回 1。
+static int resolve_bl_name(csh hstub, cs_insn *sinsn, uint64_t target,
+                           uint64_t st_lo, uint64_t st_hi, uint64_t au_lo, uint64_t au_hi,
+                           char *buf, size_t len) {
+    buf[0] = '\0'; uint64_t off = 0;
+    if (in_range(target, st_lo, st_hi) || in_range(target, au_lo, au_hi)) {
+        uint64_t slot = 0, raw = 0;
+        if (decode_stub_slot(hstub, sinsn, target, &slot) && read_ptr(slot, &raw)) {
+            uint64_t p = strip_pac(raw);
+            if (name_at(p, buf, len, &off)) return 1;
+            if (name_at(raw, buf, len, &off)) return 1;
+        }
+        return 0;
+    }
+    return name_at(target, buf, len, &off);
+}
+
+// 解析 __objc_stubs 里某 stub 对应的 selector。优先 dladdr 名 "objc_msgSend$sel";
+// 拿不到则反汇编 stub 找 selref 加载读串。命中回填 out_sel 返回 1。
+static int objc_stub_selector(csh hstub, cs_insn *sinsn, uint64_t stub_addr,
+                              uint64_t sr_lo, uint64_t sr_hi,
+                              char *out_sel, size_t len, uint64_t *out_slot) {
+    out_sel[0] = '\0'; if (out_slot) *out_slot = 0;
+    char nm[320]; uint64_t off = 0;
+    if (name_at(stub_addr, nm, sizeof(nm), &off)) {
+        const char *d = strchr(nm, '$');
+        if (d && d[1]) { strncpy(out_sel, d + 1, len - 1); out_sel[len - 1] = '\0'; return 1; }
+    }
+    // fallback: 反汇编 stub 找 ADRP+LDR selref
+    uint8_t buf[48]; vm_size_t got = 0;
+    if (vm_read_overwrite(mach_task_self(), (vm_address_t)stub_addr, sizeof(buf),
+                          (vm_address_t)buf, &got) != KERN_SUCCESS || got < 8) return 0;
+    const uint8_t *p = buf; size_t rem = (size_t)got; uint64_t cur = stub_addr;
+    int adrp_reg = -1; uint64_t page = 0; int steps = 0;
+    while (steps < 6 && cs_disasm_iter(hstub, &p, &rem, &cur, sinsn)) {
+        steps++;
+        cs_arm64 *a = &sinsn->detail->arm64;
+        if (sinsn->id == ARM64_INS_ADRP && a->op_count >= 2 &&
+            a->operands[0].type == ARM64_OP_REG && a->operands[1].type == ARM64_OP_IMM) {
+            adrp_reg = xreg_idx(a->operands[0].reg); page = (uint64_t)a->operands[1].imm;
+        } else if (sinsn->id == ARM64_INS_LDR && adrp_reg >= 0 && a->op_count >= 2 &&
+                   a->operands[1].type == ARM64_OP_MEM &&
+                   xreg_idx(a->operands[1].mem.base) == adrp_reg) {
+            uint64_t slot = page + (uint64_t)a->operands[1].mem.disp;
+            if (in_range(slot, sr_lo, sr_hi)) {
+                uint64_t raw = 0;
+                if (read_ptr(slot, &raw) && read_cstring(strip_pac(raw), out_sel, len) > 0) {
+                    if (out_slot) *out_slot = slot;
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// x1 里 selector 的来源状态
+typedef struct { int valid; uint64_t slot, load_site, sel_addr; char sel[256]; } SelReg;
+
+int analysis_find_selector_refs(const char *image_query,
+                                const char *selector_q, int match_mode,
+                                AnalysisSelectorRef *out, int max_results,
+                                char *out_image, size_t image_len,
+                                uint64_t *out_scanned, int *out_truncated) {
+    if (out_scanned) *out_scanned = 0;
+    if (out_truncated) *out_truncated = 0;
+    if (!out || max_results <= 0) return -1;
+    if (!selector_q || !selector_q[0]) return -1;
+
+    intptr_t slide = 0; char imgnm[256] = {0};
+    const struct mach_header_64 *mh = xref_select_image(image_query, &slide, imgnm, sizeof(imgnm));
+    if (!mh) return -2;
+    if (out_image && image_len) { strncpy(out_image, imgnm, image_len - 1); out_image[image_len - 1] = '\0'; }
+
+    uint64_t text_lo = 0, text_hi = 0;
+    if (!xref_sect_range(mh, slide, "__TEXT", "__text", &text_lo, &text_hi) &&
+        !xref_sect_range(mh, slide, "__TEXT_EXEC", "__text", &text_lo, &text_hi)) return -2;
+
+    uint64_t st_lo=0, st_hi=0, au_lo=0, au_hi=0, oc_lo=0, oc_hi=0;
+    uint64_t sr_lo=0, sr_hi=0, got_lo=0, got_hi=0, agot_lo=0, agot_hi=0;
+    xref_sect_range(mh, slide, "__TEXT", "__stubs", &st_lo, &st_hi);
+    xref_sect_range(mh, slide, "__TEXT", "__auth_stubs", &au_lo, &au_hi);
+    xref_sect_range(mh, slide, "__TEXT", "__objc_stubs", &oc_lo, &oc_hi);
+    xref_sect_range(mh, slide, "__DATA", "__objc_selrefs", &sr_lo, &sr_hi);
+    if (!sr_lo) xref_sect_range(mh, slide, "__DATA_CONST", "__objc_selrefs", &sr_lo, &sr_hi);
+    xref_sect_range(mh, slide, "__DATA", "__got", &got_lo, &got_hi);
+    if (!got_lo) xref_sect_range(mh, slide, "__DATA_CONST", "__got", &got_lo, &got_hi);
+    xref_sect_range(mh, slide, "__DATA_CONST", "__auth_got", &agot_lo, &agot_hi);
+
+    FuncStartsCache *fc = func_starts_for(mh, slide, text_hi);
+
+    csh h = 0, hs = 0;
+    if (cs_open(CS_ARCH_ARM64, CS_MODE_ARM, &h) != CS_ERR_OK) return -1;
+    if (cs_open(CS_ARCH_ARM64, CS_MODE_ARM, &hs) != CS_ERR_OK) { cs_close(&h); return -1; }
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON);
+    cs_option(hs, CS_OPT_DETAIL, CS_OPT_ON);
+    cs_insn *insn = cs_malloc(h), *sinsn = cs_malloc(hs);
+    if (!insn || !sinsn) {
+        if (insn) cs_free(insn, 1); if (sinsn) cs_free(sinsn, 1);
+        cs_close(&h); cs_close(&hs); return -1;
+    }
+
+    const uint8_t *code = (const uint8_t *)(uintptr_t)text_lo;
+    size_t remaining = (size_t)(text_hi - text_lo);
+    uint64_t cur = text_lo;
+    uint64_t scanned = 0;
+    int found = 0, truncated = 0;
+
+    uint64_t reg_page[31]; uint8_t reg_valid[31];       // ADRP 页缓存
+    SelReg   sel_state[31];                             // 各寄存器是否持 selector(来自 selref)
+    uint8_t  msg_state[31]; const char *msg_name[31];   // 各寄存器是否持 objc_msgSend(来自 GOT)
+    memset(reg_valid, 0, sizeof(reg_valid));
+    memset(sel_state, 0, sizeof(sel_state));
+    memset(msg_state, 0, sizeof(msg_state));
+
+    while (cs_disasm_iter(h, &code, &remaining, &cur, insn)) {
+        scanned++;
+        if (scanned >= XREF_MAX_SCAN_INSNS) { truncated = 1; break; }
+        cs_arm64 *a = &insn->detail->arm64;
+
+        // ADRP: 设页缓存, 清该寄存器的 selector/msgSend 状态
+        if (insn->id == ARM64_INS_ADRP && a->op_count >= 2 &&
+            a->operands[0].type == ARM64_OP_REG && a->operands[1].type == ARM64_OP_IMM) {
+            int di = xreg_idx(a->operands[0].reg);
+            if (di >= 0) { reg_page[di] = (uint64_t)a->operands[1].imm; reg_valid[di] = 1;
+                           sel_state[di].valid = 0; msg_state[di] = 0; }
+            continue;
+        }
+
+        // === 阶段1: 用「当前(旧)状态」识别 objc 调用点并记录 ===
+        int x1 = 1;   // ARM64_REG_X1 → 索引 1
+        int recorded = 0;
+        // 路径 B: bl 到 __objc_stubs
+        if (insn->id == ARM64_INS_BL && a->op_count >= 1 && a->operands[0].type == ARM64_OP_IMM &&
+            in_range((uint64_t)a->operands[0].imm, oc_lo, oc_hi)) {
+            uint64_t stubt = (uint64_t)a->operands[0].imm;
+            char sel[256]; uint64_t sslot = 0;
+            if (objc_stub_selector(hs, sinsn, stubt, sr_lo, sr_hi, sel, sizeof(sel), &sslot) &&
+                sel_match(sel, selector_q, match_mode)) {
+                if (found >= max_results) { truncated = 1; break; }
+                AnalysisSelectorRef *r = &out[found++];
+                memset(r, 0, sizeof(*r));
+                r->call_site = insn->address;
+                r->selector_slot = sslot;
+                strncpy(r->selector, sel, sizeof(r->selector) - 1);
+                char nm[320]; uint64_t off;
+                if (name_at(stubt, nm, sizeof(nm), &off)) snprintf(r->target, sizeof(r->target), "%s", nm);
+                else snprintf(r->target, sizeof(r->target), "objc_stub@0x%llx", stubt);
+                strncpy(r->target_kind, "objc_stub", sizeof(r->target_kind) - 1);
+                strncpy(r->selector_source, "__objc_stubs", sizeof(r->selector_source) - 1);
+                attribute_addr(fc, slide, insn->address, r->from_func, sizeof(r->from_func),
+                               &r->from_offset, &r->from_func_start, &r->from_func_vmaddr);
+                snprintf(r->insn_text, sizeof(r->insn_text), "%s %s", insn->mnemonic, insn->op_str);
+                recorded = 1;
+            }
+        }
+        // 路径 A: (bl/blr) 到 objc_msgSend, x1 持 selector
+        else if (sel_state[x1].valid) {
+            const char *variant = NULL;
+            if (insn->id == ARM64_INS_BL && a->op_count >= 1 && a->operands[0].type == ARM64_OP_IMM) {
+                char nm[256];
+                if (resolve_bl_name(hs, sinsn, (uint64_t)a->operands[0].imm,
+                                    st_lo, st_hi, au_lo, au_hi, nm, sizeof(nm)))
+                    variant = msgsend_canon(nm);
+            } else if (insn->id == ARM64_INS_BLR && a->op_count >= 1 && a->operands[0].type == ARM64_OP_REG) {
+                int ri = xreg_idx(a->operands[0].reg);
+                if (ri >= 0 && msg_state[ri]) variant = msg_name[ri];
+            }
+            if (variant && sel_match(sel_state[x1].sel, selector_q, match_mode)) {
+                if (found >= max_results) { truncated = 1; break; }
+                AnalysisSelectorRef *r = &out[found++];
+                memset(r, 0, sizeof(*r));
+                r->call_site = insn->address;
+                r->selector_load_site = sel_state[x1].load_site;
+                r->selector_slot = sel_state[x1].slot;
+                strncpy(r->selector, sel_state[x1].sel, sizeof(r->selector) - 1);
+                snprintf(r->target, sizeof(r->target), "_%s", variant);
+                strncpy(r->target_kind, "objc_msgsend", sizeof(r->target_kind) - 1);
+                strncpy(r->selector_source, "__objc_selrefs", sizeof(r->selector_source) - 1);
+                attribute_addr(fc, slide, insn->address, r->from_func, sizeof(r->from_func),
+                               &r->from_offset, &r->from_func_start, &r->from_func_vmaddr);
+                snprintf(r->insn_text, sizeof(r->insn_text), "%s %s", insn->mnemonic, insn->op_str);
+                recorded = 1;
+            }
+        }
+        (void)recorded;
+
+        // === 阶段1.5: LDR 新状态「预计算」—— 必须在写失效之前读 reg_valid/reg_page,
+        //   否则 ldr xN,[xN,#off] 这种 base==dest 会被阶段2 先清掉 base 的 ADRP 页。===
+        int new_di = -1, new_is_sel = 0; SelReg ns; const char *new_msg = NULL;
+        memset(&ns, 0, sizeof(ns));
+        if (insn->id == ARM64_INS_LDR && a->op_count >= 2 &&
+            a->operands[0].type == ARM64_OP_REG &&
+            a->operands[1].type == ARM64_OP_MEM &&
+            a->operands[1].mem.index == ARM64_REG_INVALID) {
+            int bi = xreg_idx(a->operands[1].mem.base);
+            int di = xreg_idx(a->operands[0].reg);
+            if (bi >= 0 && reg_valid[bi] && di >= 0) {
+                uint64_t slot = reg_page[bi] + (uint64_t)a->operands[1].mem.disp;
+                if (in_range(slot, sr_lo, sr_hi)) {
+                    uint64_t raw = 0; char sbuf[256];
+                    if (read_ptr(slot, &raw) && read_cstring(strip_pac(raw), sbuf, sizeof(sbuf)) > 0) {
+                        new_di = di; new_is_sel = 1;
+                        ns.valid = 1; ns.slot = slot; ns.load_site = insn->address; ns.sel_addr = strip_pac(raw);
+                        strncpy(ns.sel, sbuf, sizeof(ns.sel) - 1);
+                    }
+                } else if (in_range(slot, got_lo, got_hi) || in_range(slot, agot_lo, agot_hi)) {
+                    uint64_t raw = 0; char nm[256]; uint64_t off; const char *canon = NULL;
+                    if (read_ptr(slot, &raw) && name_at(strip_pac(raw), nm, sizeof(nm), &off) &&
+                        (canon = msgsend_canon(nm)) != NULL) { new_di = di; new_msg = canon; }
+                }
+            }
+        }
+
+        // === 阶段2: 写失效(先用后失效); 调用后清 caller-saved x0..x18 ===
+        for (uint8_t i = 0; i < a->op_count; i++) {
+            if (a->operands[i].type == ARM64_OP_REG && (a->operands[i].access & CS_AC_WRITE)) {
+                int wi = xreg_idx(a->operands[i].reg);
+                if (wi >= 0) { reg_valid[wi] = 0; sel_state[wi].valid = 0; msg_state[wi] = 0; }
+            }
+        }
+        if (insn->id == ARM64_INS_BL || insn->id == ARM64_INS_BLR) {
+            for (int i = 0; i <= 18; i++) { sel_state[i].valid = 0; msg_state[i] = 0; }
+        }
+
+        // === 阶段3: 应用阶段1.5 预算出的新状态(覆盖阶段2 对该 dest 的失效) ===
+        if (new_di >= 0) {
+            if (new_is_sel) { sel_state[new_di] = ns; }
+            else if (new_msg) { msg_state[new_di] = 1; msg_name[new_di] = new_msg; }
+        }
+    }
+
+    cs_free(insn, 1); cs_free(sinsn, 1);
+    cs_close(&h); cs_close(&hs);
+    if (out_scanned) *out_scanned = scanned;
+    if (out_truncated) *out_truncated = truncated;
+    return found;
+}

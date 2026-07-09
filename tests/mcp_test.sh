@@ -122,6 +122,21 @@ eq "$(mc '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"find_
 # 缺参防御
 eq "$(mc '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"find_string_refs","arguments":{}}}' | jq -r '.result.isError')" "true" "无 string/address → isError"
 
+echo ""; echo "== find_selector_refs (tier-2B path B: __objc_stubs) =="
+# 默认 runner 走 __objc_stubs; dataWithBytes:length: 应作为 objc_stub 调用点命中
+mc '{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"find_selector_refs","arguments":{"selector":"dataWithBytes:length:"}}}' > /tmp/dh_selr.json
+ge "$(jq '.result.structuredContent.count' /tmp/dh_selr.json)" 1 "find_selector_refs dataWithBytes:length: ≥1"
+eq "$(jq -r '.result.structuredContent.results[0].target_kind' /tmp/dh_selr.json)" "objc_stub" "path B kind=objc_stub"
+eq "$(jq -r '.result.structuredContent.results[0].selector_source' /tmp/dh_selr.json)" "__objc_stubs" "selector_source=__objc_stubs"
+eq "$(jq -r '.result.structuredContent.results[0].from_func!=null' /tmp/dh_selr.json)" "true" "call_site 有函数归属"
+# 无误报: "bytes" 既是 cstring 又是 selector; selector_ref 只应报真正的 objc 调用点(不含 cstring)
+mc '{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"find_selector_refs","arguments":{"selector":"bytes"}}}' > /tmp/dh_selb.json
+eq "$(jq -r '[.result.structuredContent.results[]|.target_kind]|unique|.[]' /tmp/dh_selb.json)" "objc_stub" "bytes 只命中 objc 调用(cstring 不误报)"
+# 不存在 selector → 0
+eq "$(mc '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"find_selector_refs","arguments":{"selector":"nonexistentSelectorXYZ:"}}}' | jq '.result.structuredContent.count')" "0" "不存在 selector → 0"
+# 缺参防御
+eq "$(mc '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"find_selector_refs","arguments":{}}}' | jq -r '.result.isError')" "true" "无 selector → isError"
+
 echo ""; echo "== find_string_refs indirect (经典 selref → SEL) =="
 # 用 -fno-objc-msgsend-selector-stubs 强制经典 adrp+ldr selref 模式, 触发间接引用
 CLSDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)
@@ -141,6 +156,14 @@ if [ -x /tmp/dh_er_classic ]; then
   ge "$(jq '.result.structuredContent.count' /tmp/dh_sref2.json)" 1 "indirect: selector dataWithBytes ≥1 引用"
   eq "$(jq -r 'any(.result.structuredContent.results[]; .indirect==true)' /tmp/dh_sref2.json)" "true" "含 indirect=true(经 selref)"
   eq "$(jq -r '[.result.structuredContent.results[]|select(.indirect==true)][0].string|test("dataWithBytes")' /tmp/dh_sref2.json)" "true" "间接读出 selector 名"
+  # 同一 classic 宿主验 find_selector_refs path A (selref + blr objc_msgSend)
+  curl -s --max-time 15 -X POST "http://127.0.0.1:$P3/api/mcp?token=$T3" -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_selector_refs","arguments":{"selector":"dataWithBytes:length:"}}}' > /tmp/dh_selr3.json
+  ge "$(jq '.result.structuredContent.count' /tmp/dh_selr3.json)" 1 "path A: classic selref ≥1 调用点"
+  eq "$(jq -r '.result.structuredContent.results[0].target_kind' /tmp/dh_selr3.json)" "objc_msgsend" "path A kind=objc_msgsend"
+  eq "$(jq -r '.result.structuredContent.results[0].selector_source' /tmp/dh_selr3.json)" "__objc_selrefs" "selector_source=__objc_selrefs"
+  eq "$(jq -r '.result.structuredContent.results[0].selector_load_site!=null' /tmp/dh_selr3.json)" "true" "带 selector_load_site"
+  eq "$(jq -r '.result.structuredContent.results[0].selector_slot!=null' /tmp/dh_selr3.json)" "true" "带 selector_slot(__objc_selrefs)"
   kill $HOST3 2>/dev/null; wait $HOST3 2>/dev/null
 else
   ng "classic 变体编译失败, 跳过 indirect 验证 (见 /tmp/dh_classic_build.log)"

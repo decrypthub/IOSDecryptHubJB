@@ -465,6 +465,66 @@ static NSDictionary *tool_find_string_refs(NSDictionary *args) {
     return tool_ok(out);
 }
 
+// find_selector_refs —— tier-2B: 谁把某 selector 用在了 objc 调用上
+static NSDictionary *tool_find_selector_refs(NSDictionary *args) {
+    NSString *sel   = [args[@"selector"] isKindOfClass:NSString.class] ? args[@"selector"] : nil;
+    NSString *image = [args[@"image"] isKindOfClass:NSString.class] ? args[@"image"] : nil;
+    NSString *m     = [args[@"match"] isKindOfClass:NSString.class] ? args[@"match"] : @"exact";
+    if (sel.length == 0) return tool_err(@"need 'selector'");
+    int match_mode = [m isEqualToString:@"contains"] ? 1 : ([m isEqualToString:@"prefix"] ? 2 : 0);
+    int maxR = [args[@"max_results"] isKindOfClass:NSNumber.class] ? [args[@"max_results"] intValue] : 256;
+    if (maxR <= 0 || maxR > 2000) maxR = 256;
+
+    AnalysisSelectorRef *rows = calloc((size_t)maxR, sizeof(AnalysisSelectorRef));
+    if (!rows) return tool_err(@"out of memory");
+
+    uint64_t scanned = 0; char imgNm[256] = {0}; int truncated = 0;
+    int n = analysis_find_selector_refs(image.length ? image.UTF8String : NULL,
+                                        sel.UTF8String, match_mode,
+                                        rows, maxR, imgNm, sizeof(imgNm), &scanned, &truncated);
+    if (n == -1) { free(rows); return tool_err(@"invalid arguments"); }
+    if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
+
+    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
+    for (int i = 0; i < n; i++) {
+        AnalysisSelectorRef *r = &rows[i];
+        NSMutableDictionary *d = [@{
+            @"call_site":       [NSString stringWithFormat:@"0x%llx", r->call_site],
+            @"selector":        r->selector[0] ? @(r->selector) : (id)[NSNull null],
+            @"target":          @(r->target),
+            @"target_kind":     @(r->target_kind),
+            @"selector_source": @(r->selector_source),
+            @"xref_type":       @"selector_ref",
+            @"instruction":     @(r->insn_text),
+        } mutableCopy];
+        d[@"selector_load_site"] = r->selector_load_site ? (id)[NSString stringWithFormat:@"0x%llx", r->selector_load_site] : (id)[NSNull null];
+        d[@"selector_slot"]      = r->selector_slot ? (id)[NSString stringWithFormat:@"0x%llx", r->selector_slot] : (id)[NSNull null];
+        if (r->from_func[0]) {
+            d[@"from_func"]        = [NSString stringWithFormat:@"%s+0x%llx", r->from_func, r->from_offset];
+            d[@"from_func_start"]  = [NSString stringWithFormat:@"0x%llx", r->from_func_start];
+            d[@"from_func_offset"] = [NSString stringWithFormat:@"0x%llx", r->from_offset];
+            if (r->from_func_vmaddr)
+                d[@"from_func_vmaddr"] = [NSString stringWithFormat:@"0x%llx", r->from_func_vmaddr];
+        } else {
+            d[@"from_func"]       = [NSNull null];
+            d[@"from_func_start"] = [NSNull null];
+        }
+        [arr addObject:d];
+    }
+    free(rows);
+
+    NSMutableDictionary *out = [@{
+        @"query":         sel,
+        @"match":         m,
+        @"image":         @(imgNm),
+        @"scanned_insns": @(scanned),
+        @"count":         @(n),
+        @"truncated":     truncated ? @YES : @NO,
+        @"results":       arr,
+    } mutableCopy];
+    return tool_ok(out);
+}
+
 // ============================================================
 // 取证工具 —— 复用面板同款数据源 (DHLogStore / dh_files / DHDumpManager / dh_capture / dh_health)
 // ============================================================
@@ -1054,6 +1114,20 @@ static NSArray *tool_definitions(void) {
                 },
             },
         },
+        @{
+            @"name": @"find_selector_refs",
+            @"description": @"Find who sends an ObjC selector: scan __TEXT,__text for objc_msgSend call sites using the given selector. Two paths: classic (adrp+ldr x1,[__objc_selrefs] then blr/bl objc_msgSend, tracked via an x1 state machine) and modern __objc_stubs (bl objc_msgSend$sel). Only reports actual call sites (not bare selref loads); doesn't recover the receiver. tier-2B.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"selector": @{@"type": @"string", @"description": @"Selector, e.g. \"dataWithBytes:length:\""},
+                    @"match": @{@"type": @"string", @"enum": @[@"exact", @"contains", @"prefix"], @"description": @"Match mode (default exact)"},
+                    @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
+                    @"max_results": @{@"type": @"number", @"description": @"Max call sites returned (default 256, max 2000)"},
+                },
+                @"required": @[@"selector"],
+            },
+        },
         // ---- 取证: 读 ----
         @{
             @"name": @"get_stats",
@@ -1276,6 +1350,7 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"get_macho_info"])        return tool_get_macho_info(args);
     if ([name isEqualToString:@"find_xrefs"])            return tool_find_xrefs(args);
     if ([name isEqualToString:@"find_string_refs"])      return tool_find_string_refs(args);
+    if ([name isEqualToString:@"find_selector_refs"])    return tool_find_selector_refs(args);
     // 取证: 读
     if ([name isEqualToString:@"get_stats"])             return tool_get_stats(args);
     if ([name isEqualToString:@"query_events"])          return tool_query_events(args);

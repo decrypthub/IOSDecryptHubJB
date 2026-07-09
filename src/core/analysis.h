@@ -153,6 +153,41 @@ int analysis_find_string_refs(const char *image_query,
                               char *out_image, size_t image_len,
                               uint64_t *out_scanned, int *out_truncated);
 
+// ============================================================
+// selector 引用 (selector ref) —— tier-2B
+// ============================================================
+//
+// 找「哪里把某 selector 用在了 objc 调用上」—— xref 站点是 objc 调用的 call_site,
+// 不是单纯的 selref 加载。两条路径:
+//   A 经典: adrp+ldr x1,[__objc_selrefs] → (blr/bl) objc_msgSend/Super/Super2  (x1 状态机)
+//   B 现代: bl <__objc_stubs 的 objc_msgSend$sel>                              (stub 快路径)
+// 只在 objc_msgSend 调用点报; x1 被覆盖或仅加载未调用不报; 只命中 __objc_methname 不报。
+// 不还原 receiver。复用 tier-2A 的地址恢复 / 读串 / 归属能力。
+
+typedef struct {
+    uint64_t call_site;            // objc_msgSend 调用点
+    uint64_t selector_load_site;   // selref 加载指令地址(路径A); 0=不适用
+    uint64_t selector_slot;        // __objc_selrefs 槽地址(路径A); 0=不适用
+    char     selector[256];        // selector 名; 拿不到为空串
+    char     target[80];           // "_objc_msgSend" / "objc_msgSend$sel" / "objc_stub@0x.."
+    char     target_kind[16];      // "objc_msgsend" | "objc_stub"
+    char     selector_source[16];  // "__objc_selrefs" | "__objc_stubs"
+    char     from_func[256];
+    uint64_t from_offset;
+    uint64_t from_func_start;
+    uint64_t from_func_vmaddr;
+    char     insn_text[64];        // 如 "blr x8" / "bl #0x..."
+} AnalysisSelectorRef;
+
+// 在 image_query 指定镜像的 __text 里查找 selector 调用引用。
+//   selector_q: 目标 selector 名; match_mode: 0=精确 1=包含 2=前缀。
+// 返回命中数; -1 参数错误, -2 找不到镜像/__text。out_* 语义同 find_xrefs。
+int analysis_find_selector_refs(const char *image_query,
+                                const char *selector_q, int match_mode,
+                                AnalysisSelectorRef *out, int max_results,
+                                char *out_image, size_t image_len,
+                                uint64_t *out_scanned, int *out_truncated);
+
 #ifdef __cplusplus
 }
 #endif

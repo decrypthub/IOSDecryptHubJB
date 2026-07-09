@@ -23,6 +23,7 @@
 | `get_macho_info` | 列举 App bundle 内已加载镜像：load_address、cryptid、加密状态 | 无 |
 | `find_xrefs` | 「谁调用了它」：扫某镜像 `__TEXT,__text` 里所有直接 `bl` 到目标符号/地址的调用点，经运行时已绑定的 GOT + dladdr 把 import stub 还原成真实符号 | `symbol` 或 `address` |
 | `find_string_refs` | 「谁引用了这个字符串」：扫 `__text` 的 `ADRP+ADD`（直接）/ `ADRP+LDR`（间接指针槽）恢复的数据地址，落在字符串 section 则记引用点 | `string` 或 `address` |
+| `find_selector_refs` | 「谁把这个 selector 用在了 objc 调用上」：扫 `__text` 的 objc_msgSend 调用点（经典 selref+`blr` 或现代 `__objc_stubs`），只报真实调用不报裸 selref 加载 | `selector` |
 
 可选参数：`disassemble`/`analyze_function` 的 `arch`（`arm64`/`arm`/`thumb`，默认 arm64）；`list_imports` 的 `query`（子串过滤）、`limit`；`find_xrefs` 的 `image`（镜像名子串，默认主程序）、`max_results`（默认 256）。
 
@@ -30,7 +31,9 @@
 
 **函数归属（tier-1.5）**：每条结果带 `from_func`（`main+0x50` 或 strip 后 `sub_<runtime>+0x50`）、`from_func_start`（函数起点运行时地址）、`from_func_offset`、`from_func_vmaddr`（起点 vmaddr，去 slide，跨 ASLR 稳定，宜作 ID）。归属优先用 `dladdr` 符号，无符号时用 `LC_FUNCTION_STARTS`；`from_func` is resolved by `LC_FUNCTION_STARTS` when available, and function end is approximated by the next function start（不是完整函数边界恢复）。
 
-**`find_string_refs`（tier-2A）**：谁引用了某字符串。给 `string`（子串匹配）或 `address`（精确字符串地址），可选 `image`（默认主程序）、`max_results`。识别两种取址模式——`ADRP+ADD`（直接，`indirect:false`，目标在被扫镜像的 `__cstring`/`__objc_methname`/`__objc_classname`/`__objc_methtype`）与 `ADRP+LDR`→指针槽（间接，`indirect:true`，仅认 `__objc_selrefs`/`__got`/... 白名单槽；运行时 selref 已定到别处的 SEL，目标可能跨镜像，section 标 `(external)` 但字符串内容仍如实读出）。局部窗口回溯：按寄存器缓存最近 `ADRP` 页，寄存器被写即失效，不做跨基本块/跨函数数据流。每条结果带 `ref_site`、`string`、`string_addr`、`string_vmaddr`、`section`、`instruction`、`indirect`，以及与 find_xrefs 同款的 `from_func` 归属字段。selector ref 就是间接串引用的特化（selref 槽 + 使用点旁的 `objc_msgSend`），tier-2B 再做。
+**`find_string_refs`（tier-2A）**：谁引用了某字符串。给 `string`（子串匹配）或 `address`（精确字符串地址），可选 `image`（默认主程序）、`max_results`。识别两种取址模式——`ADRP+ADD`（直接，`indirect:false`，目标在被扫镜像的 `__cstring`/`__objc_methname`/`__objc_classname`/`__objc_methtype`）与 `ADRP+LDR`→指针槽（间接，`indirect:true`，仅认 `__objc_selrefs`/`__got`/... 白名单槽；运行时 selref 已定到别处的 SEL，目标可能跨镜像，section 标 `(external)` 但字符串内容仍如实读出）。局部窗口回溯：按寄存器缓存最近 `ADRP` 页，寄存器被写即失效，不做跨基本块/跨函数数据流。每条结果带 `ref_site`、`string`、`string_addr`、`string_vmaddr`、`section`、`instruction`、`indirect`，以及与 find_xrefs 同款的 `from_func` 归属字段。
+
+**`find_selector_refs`（tier-2B）**：谁把某 selector 用在了 objc 调用上——xref 站点是 `objc_msgSend` 的 **call_site**，不是裸 selref 加载。给 `selector`，可选 `match`（`exact`/`contains`/`prefix`，默认 exact）、`image`、`max_results`。两条路径：**A 经典** `adrp+ldr x1,[__objc_selrefs]` → `blr/bl objc_msgSend`（靠 x1 状态机 + 跟踪哪个寄存器持 msgSend 指针；`target_kind:objc_msgsend`，带 `selector_load_site`/`selector_slot`）；**B 现代** `bl <__objc_stubs 的 objc_msgSend$sel>`（`target_kind:objc_stub`，`selector_source:__objc_stubs`）。x1 被覆盖或只加载未调用不报，仅命中 `__objc_methname` 不报，不还原 receiver。每条结果带 `call_site`、`selector`、`target`、`target_kind`、`selector_source`、`instruction` 及 `from_func` 归属字段。因此 `find_string_refs("bytes")` 可有结果，但 `find_selector_refs("bytes")` 只在它真参与 objc 调用时才有。
 
 工具执行错误走 MCP 的 `isError:true` content 信封（非 JSON-RPC 协议错误）；返回同时含 `structuredContent`（机器可读）与 `content[].text`（JSON 文本）。
 
