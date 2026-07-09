@@ -199,6 +199,12 @@ test-mac: $(MAC_TARGET) $(TEST_BIN)
 	@echo "[*] 一秒后请打开 http://127.0.0.1:8088"
 	DYLD_INSERT_LIBRARIES=./$(MAC_TARGET) ./$(TEST_BIN)
 
+# 自动化集成测试: 注入 dylib 到 runner, 驱动真实 MCP/HTTP 端点断言 (认证/工具/查询/关联/诊断)。
+.PHONY: test-mcp
+test-mcp:
+	@chmod +x tests/mcp_test.sh
+	./tests/mcp_test.sh
+
 $(TEST_BIN): tests/exercise_runner.m
 	@if [ -z "$(MAC_SDK)" ]; then echo "❌ 没找到 macOS SDK"; exit 1; fi
 	@echo "[*] 编 exercise_runner ..."

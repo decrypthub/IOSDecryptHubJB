@@ -129,7 +129,7 @@ static NSDictionary *tool_analyze_function(NSDictionary *args) {
         @"address": [NSString stringWithFormat:@"0x%llx", addr],
         @"arch": arch,
         @"count": @(n),
-        @"truncated": @(n == 512),
+        @"truncated": (n == 512) ? @YES : @NO,
         @"instructions": insns_to_array(insns, n),
     });
 }
@@ -315,7 +315,7 @@ static NSDictionary *tool_search_memory(NSDictionary *args) {
     for (int i = 0; i < n; i++) [arr addObject:[NSString stringWithFormat:@"0x%llx", hits[i]]];
     return tool_ok(@{
         @"count": @(n),
-        @"truncated": @(n == 256),
+        @"truncated": (n == 256) ? @YES : @NO,
         @"hits": arr,
     });
 }
@@ -513,7 +513,7 @@ static NSDictionary *tool_correlate_request(NSDictionary *args) {
     NSDictionary *primary = nil;
     for (NSDictionary *m in matches) if ([m[@"header"] caseInsensitiveCompare:@"X-Validator"] == NSOrderedSame) { primary = m; break; }
     if (!primary) primary = matches.firstObject;
-    NSMutableDictionary *matchDict = [@{@"validatorOutputFound": @(primary != nil), @"matches": matches} mutableCopy];
+    NSMutableDictionary *matchDict = [@{@"validatorOutputFound": (primary != nil) ? @YES : @NO, @"matches": matches} mutableCopy];
     if (primary) {
         matchDict[@"matchedHeader"]    = primary[@"header"];
         matchDict[@"matchedSeq"]       = primary[@"matchedSeq"];

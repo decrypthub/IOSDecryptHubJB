@@ -330,6 +330,26 @@ static void test_inject(void) {
     printf("  image 总数=%u, 含 decrypt_helper 的可见项=%d (期望 0=已隐藏)\n", cnt, visible);
 }
 
+// 网络 + X-Validator 场景: SHA256(body) -> base64 设为请求头, 供 correlate_request 反查命中。
+// 打本机 8088(HTML 外壳免鉴权、瞬时响应), 让配对 net 事件快速落库。
+static void test_network(void) {
+    const char *bodyC = "{\"probe\":\"test\",\"secret\":\"s3cr3t\"}";
+    NSData *body = [NSData dataWithBytes:bodyC length:strlen(bodyC)];
+    unsigned char dg[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(body.bytes, (CC_LONG)body.length, dg);
+    NSString *validator = [[NSData dataWithBytes:dg length:sizeof(dg)] base64EncodedStringWithOptions:0];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"http://127.0.0.1:8088/"]];
+    req.HTTPMethod = @"POST";
+    [req setValue:validator forHTTPHeaderField:@"X-Validator"];
+    req.HTTPBody = body;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    NSURLSessionDataTask *t = [[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) { dispatch_semaphore_signal(sem); }];
+    [t resume];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)));
+    printf("[exercise] network: X-Validator = base64(SHA256(body)) 已发\n");
+}
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -349,6 +369,7 @@ int main(int argc, char **argv) {
     @autoreleasepool { test_keychain(); }
     test_env();
     test_inject();
+    @autoreleasepool { test_network(); }
 
     printf("\n[exercise] 全部 hook 调用完毕.\n");
     printf("[exercise] 用浏览器打开 http://127.0.0.1:8088\n");
