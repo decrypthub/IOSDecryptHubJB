@@ -7,6 +7,13 @@
 #include "mcp_server.h"
 #include "analysis.h"
 #include "dh_symtab.h"
+#include "log_store.h"
+#include "dh_log_json.h"
+#include "dh_capture.h"
+#include "dh_health.h"
+#include "dh_noise.h"
+#include "dh_files.h"
+#include "dump_manager.h"
 #include <string.h>
 
 #define MCP_SERVER_NAME     "ios-decrypt-helper"
@@ -175,6 +182,134 @@ static NSDictionary *tool_list_imports(NSDictionary *args) {
     });
 }
 
+// disassemble_function —— 从地址反汇编, 遇 ret 停 (函数边界)
+static NSDictionary *tool_disassemble_function(NSDictionary *args) {
+    NSString *addrStr = args[@"address"];
+    NSString *arch    = args[@"arch"] ?: @"arm64";
+    if (![addrStr isKindOfClass:NSString.class]) return tool_err(@"missing 'address'");
+    uint64_t addr = strtoull(addrStr.UTF8String, NULL, 0);
+    if (addr == 0) return tool_err(@"'address' must be non-zero");
+    size_t maxBytes = [args[@"max_bytes"] isKindOfClass:NSNumber.class] ? (size_t)[args[@"max_bytes"] unsignedLongLongValue] : 4096;
+
+    AnalysisInsn insns[1024];
+    int n = analysis_disassemble_func(addr, maxBytes, arch.UTF8String, insns, 1024);
+    if (n == -2) return tool_err([NSString stringWithFormat:@"memory not readable at 0x%llx", addr]);
+    if (n < 0)  return tool_err(@"capstone init failed");
+    BOOL endsWithRet = (n > 0 && strcmp(insns[n-1].mnemonic, "ret") == 0);
+    return tool_ok(@{
+        @"address": [NSString stringWithFormat:@"0x%llx", addr],
+        @"arch": arch,
+        @"count": @(n),
+        @"ends_with_ret": @(endsWithRet),
+        @"instructions": insns_to_array(insns, n),
+    });
+}
+
+// resolve_symbol —— 符号名 -> 运行时地址
+static NSDictionary *tool_resolve_symbol(NSDictionary *args) {
+    NSString *name = args[@"name"];
+    if (![name isKindOfClass:NSString.class] || name.length == 0) return tool_err(@"missing 'name'");
+    uint64_t addr = 0; char img[256] = {0};
+    if (analysis_resolve_symbol(name.UTF8String, &addr, img, sizeof(img)) != 0)
+        return tool_err([NSString stringWithFormat:@"symbol not found: %@", name]);
+    return tool_ok(@{
+        @"name": name,
+        @"address": [NSString stringWithFormat:@"0x%llx", addr],
+        @"image": @(img),
+    });
+}
+
+// symbolicate —— 地址 -> 最近符号 + 偏移
+static NSDictionary *tool_symbolicate(NSDictionary *args) {
+    NSString *addrStr = args[@"address"];
+    if (![addrStr isKindOfClass:NSString.class]) return tool_err(@"missing 'address'");
+    uint64_t addr = strtoull(addrStr.UTF8String, NULL, 0);
+    char sym[512] = {0}, img[256] = {0}; uint64_t off = 0;
+    if (analysis_symbolicate(addr, sym, sizeof(sym), &off, img, sizeof(img)) != 0)
+        return tool_ok(@{@"address": [NSString stringWithFormat:@"0x%llx", addr], @"found": @NO});
+    return tool_ok(@{
+        @"address": [NSString stringWithFormat:@"0x%llx", addr],
+        @"found": @YES,
+        @"symbol": @(sym),
+        @"offset": @(off),
+        @"display": [NSString stringWithFormat:@"%s+0x%llx", sym, off],
+        @"image": @(img),
+    });
+}
+
+// 经典 hexdump 格式 (地址 / 16 字节 hex / ASCII)
+static NSString *format_hexdump(uint64_t base, const uint8_t *buf, int n) {
+    NSMutableString *s = [NSMutableString string];
+    for (int i = 0; i < n; i += 16) {
+        [s appendFormat:@"%016llx  ", base + (uint64_t)i];
+        NSMutableString *asc = [NSMutableString string];
+        for (int j = 0; j < 16; j++) {
+            if (i + j < n) {
+                uint8_t c = buf[i + j];
+                [s appendFormat:@"%02x ", c];
+                [asc appendFormat:@"%c", (c >= 32 && c < 127) ? c : '.'];
+            } else {
+                [s appendString:@"   "];
+            }
+            if (j == 7) [s appendString:@" "];
+        }
+        [s appendFormat:@" |%@|\n", asc];
+    }
+    return s;
+}
+
+// read_memory —— 读内存并 hexdump
+static NSDictionary *tool_read_memory(NSDictionary *args) {
+    NSString *addrStr = args[@"address"];
+    NSNumber *sizeNum = args[@"size"];
+    if (![addrStr isKindOfClass:NSString.class]) return tool_err(@"missing 'address'");
+    uint64_t addr = strtoull(addrStr.UTF8String, NULL, 0);
+    size_t size = [sizeNum isKindOfClass:NSNumber.class] ? (size_t)sizeNum.unsignedLongLongValue : 256;
+    if (size == 0) size = 256;
+
+    uint8_t buf[4096];
+    int got = analysis_read_memory(addr, size, buf, sizeof(buf));
+    if (got == -2) return tool_err([NSString stringWithFormat:@"memory not readable at 0x%llx", addr]);
+    if (got < 0)  return tool_err(@"invalid arguments");
+
+    NSMutableString *hex = [NSMutableString stringWithCapacity:got * 2];
+    for (int i = 0; i < got; i++) [hex appendFormat:@"%02x", buf[i]];
+    return tool_ok(@{
+        @"address": [NSString stringWithFormat:@"0x%llx", addr],
+        @"size": @(got),
+        @"hex": hex,
+        @"hexdump": format_hexdump(addr, buf, got),
+    });
+}
+
+// search_memory —— 在 [address, address+length) 搜索 pattern(hex) 或 string
+static NSDictionary *tool_search_memory(NSDictionary *args) {
+    NSString *addrStr = args[@"address"];
+    NSNumber *lenNum  = args[@"length"];
+    if (![addrStr isKindOfClass:NSString.class]) return tool_err(@"missing 'address'");
+    if (![lenNum isKindOfClass:NSNumber.class])  return tool_err(@"missing 'length'");
+    uint64_t addr = strtoull(addrStr.UTF8String, NULL, 0);
+    size_t length = (size_t)lenNum.unsignedLongLongValue;
+
+    NSData *pat = nil;
+    if ([args[@"string"] isKindOfClass:NSString.class])
+        pat = [args[@"string"] dataUsingEncoding:NSUTF8StringEncoding];
+    else if ([args[@"pattern"] isKindOfClass:NSString.class])
+        pat = hex_to_data(args[@"pattern"]);
+    if (pat.length == 0) return tool_err(@"provide 'string' or 'pattern' (hex)");
+
+    uint64_t hits[256];
+    int n = analysis_search_memory(addr, length, pat.bytes, pat.length, hits, 256);
+    if (n < 0) return tool_err(@"invalid arguments");
+    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:n];
+    for (int i = 0; i < n; i++) [arr addObject:[NSString stringWithFormat:@"0x%llx", hits[i]]];
+    return tool_ok(@{
+        @"count": @(n),
+        @"truncated": @(n == 256),
+        @"hits": arr,
+    });
+}
+
 // get_macho_info —— 列举 App bundle 内已加载镜像
 static NSDictionary *tool_get_macho_info(NSDictionary *args) {
     AnalysisMachoImage imgs[64];
@@ -196,6 +331,178 @@ static NSDictionary *tool_get_macho_info(NSDictionary *args) {
         }];
     }
     return tool_ok(@{@"count": @(n), @"encrypted_count": @(encrypted), @"images": arr});
+}
+
+// ============================================================
+// 取证工具 —— 复用面板同款数据源 (DHLogStore / dh_files / DHDumpManager / dh_capture / dh_health)
+// ============================================================
+
+// 分类字符串 -> DHCategory (0..6); "all"/未知 -> -1
+static NSInteger category_from_string(NSString *c) {
+    if (![c isKindOfClass:NSString.class] || c.length == 0 || [c isEqualToString:@"all"]) return -1;
+    if ([c isEqualToString:@"digest"]) return DHCategoryDigest;
+    if ([c isEqualToString:@"hmac"])   return DHCategoryHMAC;
+    if ([c isEqualToString:@"sym"] || [c isEqualToString:@"symmetric"])  return DHCategorySymmetric;
+    if ([c isEqualToString:@"asym"] || [c isEqualToString:@"asymmetric"]) return DHCategoryAsymmetric;
+    if ([c isEqualToString:@"file"])   return DHCategoryFile;
+    if ([c isEqualToString:@"sys"] || [c isEqualToString:@"system"])     return DHCategorySystem;
+    if ([c isEqualToString:@"other"])  return DHCategoryOther;
+    return -1;
+}
+
+// get_stats —— 取证总览: 事件计数 / 捕获开关 / 进程 / 健康 / 落盘量 / 噪声
+static NSDictionary *tool_get_stats(NSDictionary *args) {
+    DHLogStore *s = [DHLogStore shared];
+    NSArray *names = @[@"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"other"];
+    NSMutableDictionary *byCat = [NSMutableDictionary dictionary];
+    for (int c = 0; c < 7; c++) byCat[names[c]] = @([s countForCategory:(DHCategory)c]);
+    NSMutableDictionary *capture = [NSMutableDictionary dictionary];
+    for (int i = 0; i < DH_CAP_SUB_COUNT; i++)
+        capture[@(dh_capture_sub_name((dh_cap_sub)i))] = @(dh_capture_sub_enabled((dh_cap_sub)i));
+    const char *hsum = dh_health_summary();
+    return tool_ok(@{
+        @"total":      @([s totalCount]),
+        @"paused":     @(s.paused),
+        @"byCategory": byCat,
+        @"capture":    capture,
+        @"logBytes":   @([s totalLogBytes]),
+        @"process":    [s processInfo] ?: @{},
+        @"noise":      @{@"crypto": @([s noiseCountForBoard:DHNoiseBoardCrypto]),
+                         @"sys":    @([s noiseCountForBoard:DHNoiseBoardSys])},
+        @"health":     @{
+            @"hookFails":     @(dh_health_hook_fail_count()),
+            @"persistFailed": dh_health_persist_failed() ? @YES : @NO,
+            @"httpFailed":    dh_health_http_failed() ? @YES : @NO,
+            @"summary":       (hsum && hsum[0]) ? @(hsum) : @"",
+        },
+    });
+}
+
+// query_events —— 过滤检索捕获事件 (最新在前), 返回摘要
+static NSDictionary *tool_query_events(NSDictionary *args) {
+    NSInteger cat = category_from_string(args[@"category"]);
+    NSString *q = [args[@"query"] isKindOfClass:NSString.class] ? args[@"query"] : @"";
+    NSUInteger minSize = [args[@"min_size"] isKindOfClass:NSNumber.class] ? [args[@"min_size"] unsignedIntegerValue] : 0;
+    NSUInteger maxSize = [args[@"max_size"] isKindOfClass:NSNumber.class] ? [args[@"max_size"] unsignedIntegerValue] : 0;
+    uint64_t since = [args[@"since_seq"] isKindOfClass:NSNumber.class] ? [args[@"since_seq"] unsignedLongLongValue] : 0;
+    NSInteger limit = [args[@"limit"] isKindOfClass:NSNumber.class] ? [args[@"limit"] integerValue] : 100;
+    if (limit <= 0 || limit > 1000) limit = 100;
+
+    NSArray *src = [[DHLogStore shared] snapshotMatching:q category:cat minInputSize:minSize maxInputSize:maxSize];
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSInteger i = (NSInteger)src.count - 1; i >= 0 && (NSInteger)out.count < limit; i--) {
+        DHLogEntry *e = src[i];
+        if (since && e.seq <= since) continue;
+        [out addObject:dh_log_entry_summary(e)];
+    }
+    return tool_ok(@{@"count": @(out.count), @"matched": @(src.count), @"events": out});
+}
+
+// get_event —— 单条完整详情 (key / iv / 明文 / 密文 / 调用栈)
+static NSDictionary *tool_get_event(NSDictionary *args) {
+    NSNumber *seqN = args[@"seq"];
+    if (![seqN isKindOfClass:NSNumber.class]) return tool_err(@"missing 'seq'");
+    DHLogEntry *e = [[DHLogStore shared] entryWithSeq:(uint64_t)seqN.unsignedLongLongValue];
+    if (!e) return tool_err([NSString stringWithFormat:@"no event with seq %@", seqN]);
+    return tool_ok(dh_log_entry_detail(e));
+}
+
+// query_noise —— 噪声板块事件 (被过滤掉的高频调用)
+static NSDictionary *tool_query_noise(NSDictionary *args) {
+    NSString *b = args[@"board"];
+    DHNoiseBoard board = [b isEqualToString:@"sys"] ? DHNoiseBoardSys : DHNoiseBoardCrypto;
+    NSString *q = [args[@"query"] isKindOfClass:NSString.class] ? args[@"query"] : @"";
+    NSInteger limit = [args[@"limit"] isKindOfClass:NSNumber.class] ? [args[@"limit"] integerValue] : 100;
+    if (limit <= 0 || limit > 1000) limit = 100;
+    NSArray *src = [[DHLogStore shared] snapshotNoiseMatching:q board:board];
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSInteger i = (NSInteger)src.count - 1; i >= 0 && (NSInteger)out.count < limit; i--)
+        [out addObject:dh_log_entry_summary(src[i])];
+    return tool_ok(@{@"board": (board == DHNoiseBoardSys) ? @"sys" : @"crypto",
+                     @"count": @(out.count), @"events": out});
+}
+
+// list_files —— 沙箱目录列举 (Documents/Library/tmp)
+static NSDictionary *tool_list_files(NSDictionary *args) {
+    NSString *path = [args[@"path"] isKindOfClass:NSString.class] ? args[@"path"] : nil;
+    NSError *err = nil;
+    NSDictionary *d = dh_files_list_dict(path, &err);
+    if (!d) return tool_err(err.localizedDescription ?: @"list failed");
+    return tool_ok(d);
+}
+
+// read_file —— 沙箱文件预览 (UTF-8 文本或 Hex Dump)
+static NSDictionary *tool_read_file(NSDictionary *args) {
+    NSString *path = args[@"path"];
+    if (![path isKindOfClass:NSString.class]) return tool_err(@"missing 'path'");
+    NSUInteger limit = [args[@"limit"] isKindOfClass:NSNumber.class] ? [args[@"limit"] unsignedIntegerValue] : 4096;
+    NSError *err = nil;
+    NSDictionary *d = dh_files_preview_dict(path, limit, &err);
+    if (!d) return tool_err(err.localizedDescription ?: @"read failed");
+    return tool_ok(d);
+}
+
+// dump_status —— 可砸壳镜像清单 + 当前砸壳任务状态
+static NSDictionary *tool_dump_status(NSDictionary *args) {
+    return tool_ok(@{
+        @"dump_images": [[DHDumpManager shared] listImagesDict] ?: @{},
+        @"task_status": [[DHDumpManager shared] statusDict] ?: @{},
+    });
+}
+
+// ---- 控制类 (有副作用) ----
+
+// set_capture —— 开关某个捕获子类 (名称见 get_stats.capture)
+static NSDictionary *tool_set_capture(NSDictionary *args) {
+    NSString *name = args[@"name"];
+    NSNumber *on = args[@"enabled"];
+    if (![name isKindOfClass:NSString.class] || ![on isKindOfClass:NSNumber.class])
+        return tool_err(@"need 'name' and 'enabled'");
+    for (int i = 0; i < DH_CAP_SUB_COUNT; i++) {
+        if ([name isEqualToString:@(dh_capture_sub_name((dh_cap_sub)i))]) {
+            dh_capture_set_sub((dh_cap_sub)i, on.boolValue ? 1 : 0);
+            return tool_ok(@{@"name": name, @"enabled": @(on.boolValue)});
+        }
+    }
+    return tool_err([NSString stringWithFormat:@"unknown capture name: %@ (see get_stats.capture)", name]);
+}
+
+// set_pause —— 暂停/恢复记录 (全局或按分类)
+static NSDictionary *tool_set_pause(NSDictionary *args) {
+    NSNumber *paused = args[@"paused"];
+    if (![paused isKindOfClass:NSNumber.class]) return tool_err(@"need 'paused' (bool)");
+    DHLogStore *s = [DHLogStore shared];
+    NSString *cat = args[@"category"];
+    if ([cat isKindOfClass:NSString.class] && ![cat isEqualToString:@"all"]) {
+        NSInteger c = category_from_string(cat);
+        if (c < 0) return tool_err([NSString stringWithFormat:@"invalid category: %@", cat]);
+        [s setPaused:paused.boolValue forCategory:(DHCategory)c];
+        return tool_ok(@{@"category": cat, @"paused": @(paused.boolValue)});
+    }
+    s.paused = paused.boolValue;
+    return tool_ok(@{@"category": @"all", @"paused": @(paused.boolValue)});
+}
+
+// clear_events —— 清空内存事件 (破坏性; 落盘文件不动, 仍可 /download 取回)
+static NSDictionary *tool_clear_events(NSDictionary *args) {
+    NSString *cat = args[@"category"];
+    DHLogStore *s = [DHLogStore shared];
+    if ([cat isKindOfClass:NSString.class] && ![cat isEqualToString:@"all"]) {
+        NSInteger c = category_from_string(cat);
+        if (c < 0) return tool_err([NSString stringWithFormat:@"invalid category: %@", cat]);
+        [s clearCategory:c];
+        return tool_ok(@{@"cleared": cat});
+    }
+    [s clearAll];
+    return tool_ok(@{@"cleared": @"all"});
+}
+
+// start_dump —— 触发砸壳 (异步, 轮询 dump_status)
+static NSDictionary *tool_start_dump(NSDictionary *args) {
+    NSString *mode = [args[@"mode"] isKindOfClass:NSString.class] ? args[@"mode"] : @"bin";
+    if (![[DHDumpManager shared] startDump:mode])
+        return tool_err(@"dump already running or invalid mode (use 'bin' or 'ipa')");
+    return tool_ok(@{@"started": @YES, @"mode": mode, @"note": @"poll dump_status for progress"});
 }
 
 // ============================================================
@@ -230,6 +537,67 @@ static NSArray *tool_definitions(void) {
             },
         },
         @{
+            @"name": @"disassemble_function",
+            @"description": @"Disassemble process memory starting at `address` until a `ret` (function-boundary heuristic) or max_bytes. Better than analyze_function for reading a whole function.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"address": @{@"type": @"string", @"description": @"Function start address, e.g. \"0x1029ac000\""},
+                    @"max_bytes": @{@"type": @"number", @"description": @"Read cap before forced stop (default 4096, max 65536)"},
+                    @"arch": @{@"type": @"string", @"enum": @[@"arm64", @"arm", @"thumb"], @"description": @"Default arm64"},
+                },
+                @"required": @[@"address"],
+            },
+        },
+        @{
+            @"name": @"resolve_symbol",
+            @"description": @"Resolve a symbol name to its runtime address via dlsym (exported/dynamic symbols). Feed the result to disassemble_function.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"name": @{@"type": @"string", @"description": @"Symbol name, e.g. \"CCCrypt\" (no leading underscore)"},
+                },
+                @"required": @[@"name"],
+            },
+        },
+        @{
+            @"name": @"symbolicate",
+            @"description": @"Resolve an address to the nearest symbol + offset via dladdr. Use to label branch targets and call-stack addresses.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"address": @{@"type": @"string", @"description": @"In-process address, e.g. \"0x1029ac1f8\""},
+                },
+                @"required": @[@"address"],
+            },
+        },
+        @{
+            @"name": @"read_memory",
+            @"description": @"Read process memory at `address` and return a hex + ASCII hexdump. Safe against unmapped addresses. For inspecting data/keys/structs (not code).",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"address": @{@"type": @"string", @"description": @"In-process address"},
+                    @"size": @{@"type": @"number", @"description": @"Bytes to read (default 256, max 4096)"},
+                },
+                @"required": @[@"address"],
+            },
+        },
+        @{
+            @"name": @"search_memory",
+            @"description": @"Scan [address, address+length) for a byte pattern or string. Skips unmapped pages. Returns hit addresses. Use to find constants/keys/xrefs.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"address": @{@"type": @"string", @"description": @"Start address (e.g. an image load_address)"},
+                    @"length": @{@"type": @"number", @"description": @"Bytes to scan (capped at 256MB)"},
+                    @"string": @{@"type": @"string", @"description": @"UTF-8 string to find (alternative to pattern)"},
+                    @"pattern": @{@"type": @"string", @"description": @"Hex byte pattern to find, e.g. \"deadbeef\""},
+                },
+                @"required": @[@"address", @"length"],
+            },
+        },
+        @{
             @"name": @"list_imports",
             @"description": @"List the imported (undefined) symbols of a loaded image — the fishhook-rebindable candidates.",
             @"inputSchema": @{
@@ -247,14 +615,140 @@ static NSArray *tool_definitions(void) {
             @"description": @"List loaded Mach-O images in the app bundle with load address and FairPlay encryption status.",
             @"inputSchema": @{@"type": @"object", @"properties": @{}},
         },
+        // ---- 取证: 读 ----
+        @{
+            @"name": @"get_stats",
+            @"description": @"Forensic overview: captured-event counts per category, capture toggles, host process info, hook health, on-disk log bytes, noise counts.",
+            @"inputSchema": @{@"type": @"object", @"properties": @{}},
+        },
+        @{
+            @"name": @"query_events",
+            @"description": @"Search captured runtime events (crypto/file/system) — the core forensic feed. Returns summaries newest-first. Use get_event for a full record.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"category": @{@"type": @"string", @"enum": @[@"all", @"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"other"], @"description": @"Filter by category (default all)"},
+                    @"query": @{@"type": @"string", @"description": @"Keyword filter (algorithm/path/preview)"},
+                    @"min_size": @{@"type": @"number", @"description": @"Min input bytes"},
+                    @"max_size": @{@"type": @"number", @"description": @"Max input bytes (0 = no cap)"},
+                    @"since_seq": @{@"type": @"number", @"description": @"Only events with seq > this (incremental polling)"},
+                    @"limit": @{@"type": @"number", @"description": @"Max results (default 100, max 1000)"},
+                },
+            },
+        },
+        @{
+            @"name": @"get_event",
+            @"description": @"Full detail of one captured event by seq: algorithm, key, IV, plaintext, ciphertext (hex + utf8 + hexdump), and the app-level call stack.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{@"seq": @{@"type": @"number", @"description": @"Event sequence number (from query_events)"}},
+                @"required": @[@"seq"],
+            },
+        },
+        @{
+            @"name": @"query_noise",
+            @"description": @"List noise-filtered events (high-frequency calls diverted from the main feed).",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"board": @{@"type": @"string", @"enum": @[@"crypto", @"sys"], @"description": @"Noise board (default crypto)"},
+                    @"query": @{@"type": @"string", @"description": @"Keyword filter"},
+                    @"limit": @{@"type": @"number", @"description": @"Max results (default 100)"},
+                },
+            },
+        },
+        @{
+            @"name": @"list_files",
+            @"description": @"List sandbox files/dirs under the host app's Documents/Library/tmp (empty path = the three roots).",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{@"path": @{@"type": @"string", @"description": @"Relative sandbox path (empty for roots)"}},
+            },
+        },
+        @{
+            @"name": @"read_file",
+            @"description": @"Preview a sandbox file as UTF-8 text or hex dump.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"path": @{@"type": @"string", @"description": @"Relative sandbox file path"},
+                    @"limit": @{@"type": @"number", @"description": @"Max bytes to preview (default 4096)"},
+                },
+                @"required": @[@"path"],
+            },
+        },
+        @{
+            @"name": @"dump_status",
+            @"description": @"List dumpable (in-memory, App-bundle) Mach-O images with encryption status, plus current unpacking task state.",
+            @"inputSchema": @{@"type": @"object", @"properties": @{}},
+        },
+        // ---- 取证: 控制 (有副作用) ----
+        @{
+            @"name": @"set_capture",
+            @"description": @"Enable/disable a capture subtype (names from get_stats.capture, e.g. CCCrypt, open, dlopen).",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"name": @{@"type": @"string", @"description": @"Capture subtype name"},
+                    @"enabled": @{@"type": @"boolean", @"description": @"true to capture, false to skip"},
+                },
+                @"required": @[@"name", @"enabled"],
+            },
+        },
+        @{
+            @"name": @"set_pause",
+            @"description": @"Pause/resume event recording, globally or for one category.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"paused": @{@"type": @"boolean", @"description": @"true to pause, false to resume"},
+                    @"category": @{@"type": @"string", @"description": @"Category to target, or 'all' (default all)"},
+                },
+                @"required": @[@"paused"],
+            },
+        },
+        @{
+            @"name": @"clear_events",
+            @"description": @"Clear in-memory captured events (destructive). On-disk log is untouched and still downloadable.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{@"category": @{@"type": @"string", @"description": @"Category to clear, or 'all' (default all)"}},
+            },
+        },
+        @{
+            @"name": @"start_dump",
+            @"description": @"Trigger on-device unpacking (decrypt loaded images). Async — poll dump_status for progress and artifacts.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{@"mode": @{@"type": @"string", @"enum": @[@"bin", @"ipa"], @"description": @"'bin' = decrypted binaries zip; 'ipa' = re-signable IPA (default bin)"}},
+            },
+        },
     ];
 }
 
 static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
-    if ([name isEqualToString:@"disassemble"])       return tool_disassemble(args);
-    if ([name isEqualToString:@"analyze_function"])  return tool_analyze_function(args);
-    if ([name isEqualToString:@"list_imports"])      return tool_list_imports(args);
-    if ([name isEqualToString:@"get_macho_info"])    return tool_get_macho_info(args);
+    if ([name isEqualToString:@"disassemble"])           return tool_disassemble(args);
+    if ([name isEqualToString:@"analyze_function"])      return tool_analyze_function(args);
+    if ([name isEqualToString:@"disassemble_function"])  return tool_disassemble_function(args);
+    if ([name isEqualToString:@"resolve_symbol"])        return tool_resolve_symbol(args);
+    if ([name isEqualToString:@"symbolicate"])           return tool_symbolicate(args);
+    if ([name isEqualToString:@"read_memory"])           return tool_read_memory(args);
+    if ([name isEqualToString:@"search_memory"])         return tool_search_memory(args);
+    if ([name isEqualToString:@"list_imports"])          return tool_list_imports(args);
+    if ([name isEqualToString:@"get_macho_info"])        return tool_get_macho_info(args);
+    // 取证: 读
+    if ([name isEqualToString:@"get_stats"])             return tool_get_stats(args);
+    if ([name isEqualToString:@"query_events"])          return tool_query_events(args);
+    if ([name isEqualToString:@"get_event"])             return tool_get_event(args);
+    if ([name isEqualToString:@"query_noise"])           return tool_query_noise(args);
+    if ([name isEqualToString:@"list_files"])            return tool_list_files(args);
+    if ([name isEqualToString:@"read_file"])             return tool_read_file(args);
+    if ([name isEqualToString:@"dump_status"])           return tool_dump_status(args);
+    // 取证: 控制 (有副作用)
+    if ([name isEqualToString:@"set_capture"])           return tool_set_capture(args);
+    if ([name isEqualToString:@"set_pause"])             return tool_set_pause(args);
+    if ([name isEqualToString:@"clear_events"])          return tool_clear_events(args);
+    if ([name isEqualToString:@"start_dump"])            return tool_start_dump(args);
     return nil;   // 未知工具
 }
 

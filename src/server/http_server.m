@@ -33,6 +33,7 @@
 #import "dump_manager.h"
 #import "dh_symtab.h"
 #import "dh_files.h"
+#import "dh_log_json.h"
 #import "mcp_server.h"
 
 #define DH_HTTP_PORT_FIRST  8088
@@ -101,18 +102,6 @@ static NSDictionary *parse_query(NSString *qs) {
     return out;
 }
 
-static const char *category_name(NSInteger c) {
-    switch (c) {
-        case DHCategoryDigest:     return "digest";
-        case DHCategoryHMAC:       return "hmac";
-        case DHCategorySymmetric:  return "sym";
-        case DHCategoryAsymmetric: return "asym";
-        case DHCategoryFile:       return "file";
-        case DHCategorySystem:     return "sys";
-        default: return "other";
-    }
-}
-
 // ============================================================
 // I/O helpers
 // ============================================================
@@ -172,62 +161,9 @@ static void send_text(int fd, int status, NSString *msg) {
 // ============================================================
 // 路由 handlers
 // ============================================================
-static NSDictionary *entry_summary(DHLogEntry *e) {
-    NSString *preview = nil;
-    if (e.input.length) {
-        // 预览取前 256 字节足以填满一整行(前端单行 + 按可见宽度自动省略);
-        // 整体解码后按字符截断, 避免在多字节 UTF-8 中点切断导致整体回退成乱码
-        NSUInteger cap = MIN(e.input.length, (NSUInteger)256);
-        NSString *u = nil;
-        for (NSUInteger n = cap; n >= (cap > 3 ? cap - 3 : 1); n--) {   // 末尾多字节字符可能被切断, 回退最多 3 字节
-            u = [[NSString alloc] initWithData:[e.input subdataWithRange:NSMakeRange(0, n)] encoding:NSUTF8StringEncoding];
-            if (u) break;
-        }
-        if (u.length) {
-            BOOL more = e.input.length > cap || u.length > 200;
-            if (u.length > 200) u = [u substringToIndex:200];
-            preview = more ? [u stringByAppendingString:@"…"] : u;
-        } else {
-            NSData *d = e.input.length > 32 ? [e.input subdataWithRange:NSMakeRange(0, 32)] : e.input;
-            preview = DHHexFromData(d);
-        }
-    }
-    return @{
-        @"seq":        @(e.seq),
-        @"category":   @(e.category),
-        @"categoryName": @(category_name(e.category)),
-        @"algorithm":  e.algorithm ?: @"",
-        @"operation":  e.operation ?: @"",
-        @"timestamp":  e.timestamp ?: @"",
-        @"inLen":      @(e.input.length),
-        @"outLen":     @(e.output.length),
-        @"detail":     e.detail ?: @"",
-        @"preview":    preview ?: @"",
-    };
-}
-
-static NSDictionary *entry_detail(DHLogEntry *e) {
-    NSMutableDictionary *m = [entry_summary(e) mutableCopy] ?: [NSMutableDictionary dictionary];
-    if (e.key)    { m[@"key"]    = @(e.key.length);    m[@"keyHex"]    = DHHexFromData(e.key); }
-    if (e.iv)     { m[@"iv"]     = @(e.iv.length);     m[@"ivHex"]     = DHHexFromData(e.iv); }
-    if (e.input)  {
-        m[@"input"]    = @(e.input.length);
-        m[@"inputHex"] = DHHexFromData(e.input);
-        NSString *u = DHUTF8FromData(e.input);
-        if (![u isEqualToString:@"(非UTF-8)"]) m[@"inputUtf8"] = u;
-        m[@"inputDump"] = DHHexDumpFromData(e.input);
-    }
-    if (e.output) {
-        m[@"output"]    = @(e.output.length);
-        m[@"outputHex"] = DHHexFromData(e.output);
-        NSString *u = DHUTF8FromData(e.output);
-        if (![u isEqualToString:@"(非UTF-8)"]) m[@"outputUtf8"] = u;
-        m[@"outputDump"] = DHHexDumpFromData(e.output);
-    }
-    if (e.publicKeyInfo) m[@"publicKeyInfo"] = e.publicKeyInfo;
-    if (e.callStack)     m[@"callStack"] = e.callStack;
-    return m;
-}
+// 日志条目 JSON 成型已抽到 dh_log_json.h (与 mcp_server 共用): dh_log_entry_summary / dh_log_entry_detail
+#define entry_summary  dh_log_entry_summary
+#define entry_detail   dh_log_entry_detail
 
 static void handle_stats(int fd) {
     DHLogStore *s = [DHLogStore shared];
