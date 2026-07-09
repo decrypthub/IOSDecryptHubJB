@@ -33,6 +33,7 @@
 #import "dump_manager.h"
 #import "dh_symtab.h"
 #import "dh_files.h"
+#import "mcp_server.h"
 
 #define DH_HTTP_PORT_FIRST  8088
 #define DH_HTTP_PORT_LAST   8108
@@ -130,17 +131,24 @@ static BOOL write_all(int fd, const void *buf, size_t len) {
     return YES;
 }
 
-static void send_response(int fd, int status, NSString *statusMsg, NSString *contentType, NSData *body) {
+// extraHeaders: 每行需自带 "\r\n" 结尾; 传 nil 表示无额外头。
+static void send_response_ex(int fd, int status, NSString *statusMsg, NSString *contentType,
+                             NSData *body, NSString *extraHeaders) {
     NSMutableString *headers = [NSMutableString string];
     [headers appendFormat:@"HTTP/1.1 %d %@\r\n", status, statusMsg];
-    [headers appendFormat:@"Content-Type: %@\r\n", contentType];
+    if (contentType) [headers appendFormat:@"Content-Type: %@\r\n", contentType];
     [headers appendFormat:@"Content-Length: %lu\r\n", (unsigned long)body.length];
     [headers appendString:@"Cache-Control: no-store\r\n"];
     [headers appendString:@"Access-Control-Allow-Origin: *\r\n"];
+    if (extraHeaders) [headers appendString:extraHeaders];
     [headers appendString:@"Connection: close\r\n\r\n"];
     NSData *hd = [headers dataUsingEncoding:NSUTF8StringEncoding];
     write_all(fd, hd.bytes, hd.length);
     if (body.length) write_all(fd, body.bytes, body.length);
+}
+
+static void send_response(int fd, int status, NSString *statusMsg, NSString *contentType, NSData *body) {
+    send_response_ex(fd, status, statusMsg, contentType, body, nil);
 }
 
 static void send_json(int fd, int status, id obj) {
@@ -763,6 +771,82 @@ static void handle_symbols(int fd, NSDictionary *q) {
     });
 }
 
+// ============================================================
+// MCP (Model Context Protocol) — Streamable HTTP 传输
+//
+// POST /api/mcp  接收单条 JSON-RPC 消息或批量数组。
+//   - 通知(无 id): 回 202 Accepted, 空体。
+//   - 请求: 按 Accept 头协商 —— 含 text/event-stream 则以单帧 SSE 返回, 否则 application/json。
+//   - initialize 应答带 Mcp-Session-Id 头。
+// GET  /api/mcp  不提供服务端主动推流, 回 405 (Streamable HTTP 允许)。
+// ============================================================
+
+// 会话头 (所有 MCP 应答都带, 客户端后续请求回带即可)
+static NSString *mcp_session_header(void) {
+    return [NSString stringWithFormat:@"Mcp-Session-Id: %@\r\n", [MCPServer sessionId]];
+}
+
+// 把 JSON 对象作为应答发出: wantsSSE 时包成单帧 SSE, 否则普通 JSON。
+static void send_mcp(int fd, id jsonObj, BOOL wantsSSE) {
+    NSError *jerr = nil;
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:jsonObj options:0 error:&jerr];
+    if (!jd) {
+        DH_ERR(@"MCP JSON 序列化失败: %@", jerr.localizedDescription);
+        send_response(fd, 500, @"Error", @"application/json; charset=utf-8",
+                      [@"{\"error\":\"json encode failed\"}" dataUsingEncoding:NSUTF8StringEncoding]);
+        return;
+    }
+    if (wantsSSE) {
+        NSString *js = [[NSString alloc] initWithData:jd encoding:NSUTF8StringEncoding] ?: @"{}";
+        NSData *frame = [[NSString stringWithFormat:@"event: message\ndata: %@\n\n", js]
+                         dataUsingEncoding:NSUTF8StringEncoding];
+        send_response_ex(fd, 200, @"OK", @"text/event-stream", frame, mcp_session_header());
+    } else {
+        send_response_ex(fd, 200, @"OK", @"application/json; charset=utf-8", jd, mcp_session_header());
+    }
+}
+
+static void handle_mcp(int fd, NSString *body, BOOL wantsSSE) {
+    NSError *jerr = nil;
+    id obj = [NSJSONSerialization JSONObjectWithData:[body dataUsingEncoding:NSUTF8StringEncoding]
+                                             options:0 error:&jerr];
+    if (!obj) {
+        send_mcp(fd, @{@"jsonrpc": @"2.0", @"id": [NSNull null],
+                       @"error": @{@"code": @(-32700), @"message": @"Parse error"}}, wantsSSE);
+        return;
+    }
+
+    // 批量数组: 逐条处理, 收集有应答的; 全是通知则 202。
+    if ([obj isKindOfClass:[NSArray class]]) {
+        NSMutableArray *responses = [NSMutableArray array];
+        for (id msg in (NSArray *)obj) {
+            if (![msg isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *r = [MCPServer handleMessage:msg];
+            if (r) [responses addObject:r];
+        }
+        if (responses.count == 0) {
+            send_response_ex(fd, 202, @"Accepted", nil, [NSData data], mcp_session_header());
+        } else {
+            send_mcp(fd, responses, wantsSSE);
+        }
+        return;
+    }
+
+    if (![obj isKindOfClass:[NSDictionary class]]) {
+        send_mcp(fd, @{@"jsonrpc": @"2.0", @"id": [NSNull null],
+                       @"error": @{@"code": @(-32600), @"message": @"Invalid Request"}}, wantsSSE);
+        return;
+    }
+
+    NSDictionary *response = [MCPServer handleMessage:(NSDictionary *)obj];
+    if (!response) {
+        // 通知: 无应答体
+        send_response_ex(fd, 202, @"Accepted", nil, [NSData data], mcp_session_header());
+        return;
+    }
+    send_mcp(fd, response, wantsSSE);
+}
+
 static void handle_index(int fd) {
     NSData *body = [NSData dataWithBytes:kDHIndexHTML length:kDHIndexHTML_len];   // 字节数组, 非 NUL 结尾
     send_response(fd, 200, @"OK", @"text/html; charset=utf-8", body);
@@ -802,6 +886,15 @@ static void handle_connection(int fd) {
     if (qrange.location == NSNotFound) { path = target; qs = @""; }
     else { path = [target substringToIndex:qrange.location]; qs = [target substringFromIndex:qrange.location + 1]; }
     NSDictionary *q = parse_query(qs);
+
+    // Accept 头: MCP 传输据此协商 application/json vs text/event-stream (SSE)。
+    BOOL acceptsSSE = NO;
+    for (NSString *line in lines) {
+        if ([[line lowercaseString] hasPrefix:@"accept:"]) {
+            acceptsSSE = ([line rangeOfString:@"text/event-stream"].location != NSNotFound);
+            break;
+        }
+    }
 
     // 读取请求体(POST import 等需要): 头部已在 buf 中(以 \r\n\r\n 分隔), 按 Content-Length 补齐剩余字节。
     NSString *reqBody = @"";
@@ -879,6 +972,11 @@ static void handle_connection(int fd) {
                 handle_files_download(fd, q);
             } else if ([path isEqualToString:@"/favicon.ico"]) {
                 send_response(fd, 204, @"No Content", @"image/x-icon", [NSData data]);
+            } else if ([path isEqualToString:@"/api/mcp"]) {
+                // MCP over Streamable HTTP: 本服务不提供 GET 主动推流, 按规范回 405。
+                send_response_ex(fd, 405, @"Method Not Allowed", @"text/plain; charset=utf-8",
+                                 [@"MCP endpoint accepts POST only" dataUsingEncoding:NSUTF8StringEncoding],
+                                 @"Allow: POST, OPTIONS\r\n");
             } else {
                 send_text(fd, 404, @"not found");
             }
@@ -901,6 +999,8 @@ static void handle_connection(int fd) {
                 handle_config_set(fd, q);
             } else if ([path isEqualToString:@"/api/dump"]) {
                 handle_dump_start(fd, q);
+            } else if ([path isEqualToString:@"/api/mcp"]) {
+                handle_mcp(fd, reqBody, acceptsSSE);
             } else {
                 send_text(fd, 404, @"not found");
             }

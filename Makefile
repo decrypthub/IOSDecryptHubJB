@@ -11,6 +11,25 @@
 
 VERSION := 1.11.0
 TARGET  := decrypt_helper.dylib
+
+# Capstone 反汇编库源文件（仅 ARM/ARM64 架构）
+CAPSTONE_SRC := src/core/capstone/cs.c \
+                src/core/capstone/utils.c \
+                src/core/capstone/SStream.c \
+                src/core/capstone/MCInst.c \
+                src/core/capstone/MCInstrDesc.c \
+                src/core/capstone/MCRegisterInfo.c \
+                src/core/capstone/Mapping.c \
+                src/core/capstone/arch/ARM/ARMDisassembler.c \
+                src/core/capstone/arch/ARM/ARMInstPrinter.c \
+                src/core/capstone/arch/ARM/ARMMapping.c \
+                src/core/capstone/arch/ARM/ARMModule.c \
+                src/core/capstone/arch/AArch64/AArch64BaseInfo.c \
+                src/core/capstone/arch/AArch64/AArch64Disassembler.c \
+                src/core/capstone/arch/AArch64/AArch64InstPrinter.c \
+                src/core/capstone/arch/AArch64/AArch64Mapping.c \
+                src/core/capstone/arch/AArch64/AArch64Module.c
+
 SRC     := src/core/fishhook.c \
            src/core/dh_health.c \
            src/core/dh_capture.c \
@@ -23,6 +42,7 @@ SRC     := src/core/fishhook.c \
            src/core/macho_dump.m \
            src/core/dump_manager.m \
            src/core/dh_files.m \
+           src/core/analysis.m \
            src/hooks/crypto/hook_digest.m \
            src/hooks/crypto/hook_hmac.m \
            src/hooks/crypto/hook_symmetric.m \
@@ -36,12 +56,21 @@ SRC     := src/core/fishhook.c \
            src/hooks/behavior/hook_spoof_objc.m \
            src/hooks/behavior/hook_dyld.m \
            src/server/http_server.m \
+           src/server/mcp_server.m \
            src/ui/ui_float.m \
            src/ui/ui_logview.m \
-           src/core/main.m
+           src/core/main.m \
+           $(CAPSTONE_SRC)
 
 FRAMEWORKS := -framework Foundation -framework UIKit -framework CoreGraphics -framework Security
-INCLUDES   := -Isrc/core -Isrc/server -Isrc/ui
+
+# Capstone 编译宏 (缺一不可, 否则运行时失败):
+#   CAPSTONE_USE_SYS_DYN_MEM — 用系统 malloc/free, 否则 cs_open 返回 CS_ERR_MEMSETUP
+#   CAPSTONE_HAS_ARM / _ARM64 — 注册 ARM/AArch64 架构, 否则 cs_open 返回 CS_ERR_ARCH
+CAPSTONE_DEF := -DCAPSTONE_USE_SYS_DYN_MEM -DCAPSTONE_HAS_ARM -DCAPSTONE_HAS_ARM64
+
+# 挂到共享的 INCLUDES 上, 让 4 个编译目标 (iOS/mac/sim/linux) 都带上
+INCLUDES   := -Isrc/core -Isrc/core/capstone/include -Isrc/server -Isrc/ui $(CAPSTONE_DEF)
 ARCH       := arm64
 MIN_IOS    := 14.0
 
