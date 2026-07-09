@@ -20,6 +20,7 @@ static const char *kSubNames[DH_CAP_SUB_COUNT] = {
     "EVP",
     "KEYCHAIN",
     "ENV_PROBE",
+    "NETWORK",
 };
 
 static void set_defaults(void) {

@@ -17,6 +17,7 @@ typedef NS_ENUM(NSInteger, DHCategory) {
     DHCategoryAsymmetric,        // RSA / EC sign / encrypt / verify / decrypt
     DHCategoryFile,              // open / write / unlink / rename
     DHCategorySystem,            // dlopen 载入模块
+    DHCategoryNetwork,           // NSURLSession 请求 / TLS 明文收发
     DHCategoryOther,
 };
 

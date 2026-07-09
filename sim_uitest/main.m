@@ -158,6 +158,17 @@ static void do_dlsym(void) {
                  kMsg, strlen(kMsg), out, sizeof(out), &mv);
     }
 }
+static void do_network(void) {
+    // 发一个带 body 的 POST, 触发 -[NSURLSessionTask resume] swizzle (抓 URL/header/body)
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://httpbin.org/post"]];
+    req.HTTPMethod = @"POST";
+    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    [req setValue:@"DecryptHubTest/1.0" forHTTPHeaderField:@"X-DH-Probe"];
+    req.HTTPBody = [@"{\"probe\":\"network-capture\",\"secret\":\"s3cr3t\"}" dataUsingEncoding:NSUTF8StringEncoding];
+    NSURLSessionDataTask *t = [[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) { /* 结果无所谓, 目的是触发 resume */ }];
+    [t resume];
+}
 
 // ==================== 伪装/绕过自检(自检 tab) ====================
 // 每项直接调用检测手法, 反推伪装是否生效, 返回可读结果。同时这些调用会被 dylib 观测并落日志。
@@ -332,6 +343,8 @@ static NSString *chk_device_info(void) {
         gUrlHint = u ?: @"";
         if (u) ws.status.text = [NSString stringWithFormat:@"选 tab 点按钮触发, 看悬浮窗 / 浏览器 %@", u];
     });
+    // 启动后发一次网络请求, 触发网络抓包 hook (即便无外网, resume 已在请求发出前被 swizzle 捕获)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ do_network(); });
     if ([[NSProcessInfo processInfo].environment[@"DH_AUTOLOG"] isEqualToString:@"1"]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.3 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ [ws triggerByKey:@"log"]; });

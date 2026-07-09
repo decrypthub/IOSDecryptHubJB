@@ -258,6 +258,7 @@
 <nav class='tabbar' id='tabbar'>
   <button class='tab active' data-tab='crypto'>加解密<span class='n' id='n-crypto'></span></button>
   <button class='tab' data-tab='sys'>系统<span class='n' id='n-sys'></span></button>
+  <button class='tab' data-tab='net'>网络<span class='n' id='n-net'></span></button>
   <button class='tab' data-tab='files'>文件</button>
   <button class='tab' data-tab='symbols'>符号</button>
   <button class='tab' data-tab='dump'>Dump</button>
@@ -516,9 +517,9 @@
 <script>
   const GITHUB_REPO = 'taisuii/ios-decrypt-helper';
   const CAT_NAMES = ['摘要','HMAC','对称','非对称','文件','系统','其它'];
-  const CAT_CLS   = ['digest','hmac','sym','asym','file','sys','other'];
-  const TAB_CAT   = { crypto:-2, sys:-3 };
-  const LOG_TABS  = ['crypto','sys'];
+  const CAT_CLS   = ['digest','hmac','sym','asym','file','sys','net','other'];
+  const TAB_CAT   = { crypto:-2, sys:-3, net:6 };   // net = DHCategoryNetwork
+  const LOG_TABS  = ['crypto','sys','net'];
   const NOISE_BOARD = { crypto:'crypto', sys:'sys' };
   const NOISE_LABEL = { crypto:'加解密', sys:'系统' };
   // 捕获子开关 — 按 hook 函数粒度, 映射后端 /api/capture?sub=
@@ -667,6 +668,7 @@
     if (noiseView) { updateNoiseToolbar(); return; }
     const pbc=(stats&&stats.pausedByCat)||[];
     const paused = activeTab==='crypto' ? !!pbc[0]
+      : activeTab==='net' ? !!pbc[6]
       : (!!pbc[4] && !!pbc[5]);   // 系统组: 文件+模块都暂停才算暂停
     const pb=$('tabPauseBtn'); if(pb){ pb.textContent = paused?'继续':'暂停'; pb.classList.toggle('danger', paused); }
     updateNoiseToolbar();
@@ -751,6 +753,7 @@
       const cryptoN = (bc[0]||0)+(bc[1]||0)+(bc[2]||0)+(bc[3]||0);
       $('n-crypto').textContent = cryptoN ? cryptoN : '';
       $('n-sys').textContent = ((bc[4]||0)+(bc[5]||0)) ? ((bc[4]||0)+(bc[5]||0)) : '';
+      $('n-net').textContent = (bc[6]||0) ? (bc[6]||0) : '';
       $('ver').textContent = stats.version ? ('v'+stats.version) : '';
       const p = stats.process || {}; const pb = [];
       if (p.appName) pb.push('<span><b>'+escapeHTML(p.appName)+'</b></span>');
@@ -1277,7 +1280,7 @@
   $('tabPauseBtn').addEventListener('click', async () => {
     const c=tabCat();
     const pbc=(stats.pausedByCat||[]);
-    const paused = activeTab==='crypto' ? pbc[0] : (pbc[4] && pbc[5]);
+    const paused = activeTab==='crypto' ? pbc[0] : activeTab==='net' ? pbc[6] : (pbc[4] && pbc[5]);
     await fetch('/api/pause?cat='+c+'&paused='+(paused?'0':'1'),{method:'POST'});
     await refreshStats(); refreshList();
   });

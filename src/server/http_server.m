@@ -174,6 +174,7 @@ static void handle_stats(int fd) {
         @([s countForCategory:DHCategoryAsymmetric]),
         @([s countForCategory:DHCategoryFile]),
         @([s countForCategory:DHCategorySystem]),
+        @([s countForCategory:DHCategoryNetwork]),
         @([s countForCategory:DHCategoryOther]),
     ];
     NSMutableDictionary *capture = [NSMutableDictionary dictionary];
@@ -186,6 +187,7 @@ static void handle_stats(int fd) {
         @([s isPausedForCategory:DHCategoryAsymmetric]),
         @([s isPausedForCategory:DHCategoryFile]),
         @([s isPausedForCategory:DHCategorySystem]),
+        @([s isPausedForCategory:DHCategoryNetwork]),
         @([s isPausedForCategory:DHCategoryOther]),
     ];
     const char *hsum = dh_health_summary();

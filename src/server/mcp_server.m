@@ -347,6 +347,7 @@ static NSInteger category_from_string(NSString *c) {
     if ([c isEqualToString:@"asym"] || [c isEqualToString:@"asymmetric"]) return DHCategoryAsymmetric;
     if ([c isEqualToString:@"file"])   return DHCategoryFile;
     if ([c isEqualToString:@"sys"] || [c isEqualToString:@"system"])     return DHCategorySystem;
+    if ([c isEqualToString:@"net"] || [c isEqualToString:@"network"])    return DHCategoryNetwork;
     if ([c isEqualToString:@"other"])  return DHCategoryOther;
     return -1;
 }
@@ -354,9 +355,9 @@ static NSInteger category_from_string(NSString *c) {
 // get_stats —— 取证总览: 事件计数 / 捕获开关 / 进程 / 健康 / 落盘量 / 噪声
 static NSDictionary *tool_get_stats(NSDictionary *args) {
     DHLogStore *s = [DHLogStore shared];
-    NSArray *names = @[@"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"other"];
+    NSArray *names = @[@"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"net", @"other"];
     NSMutableDictionary *byCat = [NSMutableDictionary dictionary];
-    for (int c = 0; c < 7; c++) byCat[names[c]] = @([s countForCategory:(DHCategory)c]);
+    for (int c = 0; c < (int)names.count; c++) byCat[names[c]] = @([s countForCategory:(DHCategory)c]);
     NSMutableDictionary *capture = [NSMutableDictionary dictionary];
     for (int i = 0; i < DH_CAP_SUB_COUNT; i++)
         capture[@(dh_capture_sub_name((dh_cap_sub)i))] = @(dh_capture_sub_enabled((dh_cap_sub)i));
@@ -743,7 +744,7 @@ static NSArray *tool_definitions(void) {
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
-                    @"category": @{@"type": @"string", @"enum": @[@"all", @"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"other"], @"description": @"Filter by category (default all)"},
+                    @"category": @{@"type": @"string", @"enum": @[@"all", @"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"net", @"other"], @"description": @"Filter by category (default all). 'net' = captured network traffic."},
                     @"query": @{@"type": @"string", @"description": @"Keyword filter (algorithm/path/preview)"},
                     @"min_size": @{@"type": @"number", @"description": @"Min input bytes"},
                     @"max_size": @{@"type": @"number", @"description": @"Max input bytes (0 = no cap)"},

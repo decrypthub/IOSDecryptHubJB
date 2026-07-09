@@ -11,6 +11,7 @@ const char *dh_log_category_name(NSInteger c) {
         case DHCategoryAsymmetric: return "asym";
         case DHCategoryFile:       return "file";
         case DHCategorySystem:     return "sys";
+        case DHCategoryNetwork:    return "net";
         default: return "other";
     }
 }
