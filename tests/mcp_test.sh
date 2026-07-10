@@ -19,8 +19,6 @@ echo "[build] mac dylib + exercise_runner"
 make mac >/tmp/dh_build.log 2>&1 || { echo "mac dylib 构建失败, 见 /tmp/dh_build.log"; exit 1; }
 make tests/exercise_runner >>/tmp/dh_build.log 2>&1 || { echo "runner 构建失败"; exit 1; }
 
-# 全新 token(删旧的, 让 dylib 重新生成), 干净起宿主
-rm -f "$HOME/Documents/.dh_token.conf"
 DYLD_INSERT_LIBRARIES=./decrypt_helper.mac.dylib ./tests/exercise_runner >/tmp/dh_test_host.log 2>&1 &
 HOST=$!
 trap 'kill $HOST 2>/dev/null' EXIT
@@ -28,17 +26,14 @@ echo "[host] PID $HOST, 等事件生成 + 网络完成 (5s)"
 sleep 5
 
 PORT=$(grep -oE 'http://[0-9.]+:[0-9]+' /tmp/dh_test_host.log | head -1 | grep -oE '[0-9]+$'); PORT=${PORT:-8088}
-TOK=$(cat "$HOME/Documents/.dh_token.conf" 2>/dev/null)
-U="http://127.0.0.1:$PORT"; MCP="$U/api/mcp?token=$TOK"
+U="http://127.0.0.1:$PORT"; MCP="$U/api/mcp"
 mc(){ curl -s -X POST "$MCP" -H "Content-Type: application/json" -d "$1"; }
-echo "[server] port=$PORT token=$TOK"
+echo "[server] port=$PORT (无鉴权)"
 
-echo ""; echo "== 认证 =="
-eq "$(curl -s -o /dev/null -w '%{http_code}' "$U/api/stats")"           "401" "无令牌 → 401"
-eq "$(curl -s -o /dev/null -w '%{http_code}' "$U/api/stats?token=000000")" "401" "错令牌 → 401"
-eq "$(curl -s -o /dev/null -w '%{http_code}' "$U/api/stats?token=$TOK")"  "200" "正确令牌 → 200"
-eq "$(curl -s -o /dev/null -w '%{http_code}' "$U/")"                     "200" "HTML 外壳免鉴权 → 200"
-eq "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$U/api/mcp" -d '{}')" "401" "MCP 无令牌 → 401"
+echo ""; echo "== 无鉴权直连 (局域网自用, 已移除 token) =="
+eq "$(curl -s -o /dev/null -w '%{http_code}' "$U/api/stats")"              "200" "/api/stats 直连 → 200"
+eq "$(curl -s -o /dev/null -w '%{http_code}' "$U/")"                       "200" "HTML 外壳 → 200"
+eq "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$U/api/mcp" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')" "200" "MCP 直连 → 200"
 
 echo ""; echo "== MCP 协议 + 反汇编 (analysis) =="
 ge "$(mc '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools|length')" 30 "tools/list ≥30 工具"

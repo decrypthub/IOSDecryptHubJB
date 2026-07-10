@@ -362,18 +362,6 @@
     <pre id='diagBody'>加载中…</pre>
   </div>
 </div>
-<div class='modal-mask' id='tokenGate'>
-  <div class='modal' style='width:min(360px,90vw);height:auto;'>
-    <h3>访问令牌</h3>
-    <div style='padding:18px 16px;'>
-      <p style='color:#8b949e;font-size:13px;margin:0 0 12px;'>请输入设备悬浮窗显示的 6 位数字令牌</p>
-      <input id='tokenInput' inputmode='numeric' maxlength='6' placeholder='------'
-             style='width:100%;box-sizing:border-box;font-size:22px;letter-spacing:8px;text-align:center;padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:8px;color:#c9d1d9;font-family:monospace;'>
-      <div id='tokenErr' style='color:#f85149;font-size:12px;min-height:16px;margin-top:6px;'></div>
-      <button id='tokenSubmit' style='width:100%;margin-top:8px;padding:10px;background:#238636;border:none;border-radius:8px;color:#fff;font-size:14px;cursor:pointer;'>进入</button>
-    </div>
-  </div>
-</div>
 <div class='modal-mask' id='mcpMask'>
   <div class='modal'>
     <h3>MCP 配置<span class='spacer'></span>
@@ -626,27 +614,8 @@
 
   function $(id) { return document.getElementById(id); }
 
-  // ===== 访问令牌 (6 位数字, 从 URL ?token= 或 localStorage 取; 所有 API 带 X-DH-Token 头) =====
-  let DH_TOKEN = new URLSearchParams(location.search).get('token') || localStorage.getItem('dh_token') || '';
-  if (DH_TOKEN) localStorage.setItem('dh_token', DH_TOKEN);
-  function dlUrl(u){ return u + (u.includes('?')?'&':'?') + 'token=' + encodeURIComponent(DH_TOKEN); }  // 下载走浏览器导航, 令牌只能进 URL
-  const _origFetch = window.fetch.bind(window);
-  window.fetch = function(input, init){
-    init = Object.assign({}, init);
-    const u = (typeof input === 'string') ? input : (input && input.url) || '';
-    if (u.startsWith('/') || u.startsWith(location.origin))
-      init.headers = Object.assign({}, init.headers, { 'X-DH-Token': DH_TOKEN });
-    return _origFetch(input, init).then(r => { if (r.status === 401) showTokenGate(); return r; });
-  };
-  function showTokenGate(){ const g=$('tokenGate'); if(g && !g.classList.contains('show')){ g.classList.add('show'); const i=$('tokenInput'); if(i){ i.value=''; i.focus(); } } }
-  function submitToken(){
-    const v = ($('tokenInput').value||'').trim();
-    if (!/^\d{6}$/.test(v)) { $('tokenErr').textContent='请输入 6 位数字'; return; }
-    DH_TOKEN = v; localStorage.setItem('dh_token', v);
-    $('tokenGate').classList.remove('show'); $('tokenErr').textContent='';
-    try { history.replaceState(null,'', location.pathname+'?token='+v); } catch(e){}
-    refreshStats(); refreshList();
-  }
+  // 局域网直连, 无鉴权。dlUrl 直通(下载链接不再附令牌)。
+  function dlUrl(u){ return u; }
 
   function toast(msg, ms) { const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'), ms||1400); }
   function escapeHTML(s) { return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -772,8 +741,7 @@
   async function openDiag(){ $('diagMask').classList.add('show'); buildDiagBoards(); loadDiag(); }
   // MCP 接入配置: 端点复用当前页面地址(自动填对可达 IP:端口), 供 AI 客户端粘贴。
   function openMcp(){
-    // 端点带令牌: MCP 客户端只认 URL, 令牌作为 query 参数随请求发出。
-    const url = location.protocol + '//' + location.host + '/api/mcp?token=' + encodeURIComponent(DH_TOKEN);
+    const url = location.protocol + '//' + location.host + '/api/mcp';
     const cfg = { mcpServers: { 'ios-decrypt-helper': { type: 'http', url: url } } };
     $('mcpBody').textContent = JSON.stringify(cfg, null, 2);
     $('mcpHint').innerHTML = '把下面配置加入 MCP 客户端(如 Claude Code / Desktop)。端点 <code>'+url
@@ -1340,8 +1308,6 @@
   $('setNav').addEventListener('click', (e) => { const p=e.target.dataset && e.target.dataset.setpage; if(p) setSettingsPage(p); });
   $('diagBtn').addEventListener('click', openDiag);
   $('healthbar').addEventListener('click', openDiag);
-  $('tokenSubmit').addEventListener('click', submitToken);
-  $('tokenInput').addEventListener('keydown', e => { if(e.key==='Enter') submitToken(); });
   $('mcpBtn').addEventListener('click', openMcp);
   $('mcpCopy').addEventListener('click', () => copyText($('mcpBody').textContent||''));
   $('mcpClose').addEventListener('click', () => $('mcpMask').classList.remove('show'));
