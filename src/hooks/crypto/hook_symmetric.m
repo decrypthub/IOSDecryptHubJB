@@ -196,8 +196,11 @@ static CCCryptorStatus hooked_CCCryptorUpdate(CCCryptorRef cryptorRef,
     dispatch_semaphore_wait(gCryptorLock, DISPATCH_TIME_FOREVER);
     DHCryptorState *st = [gCryptorStates objectForKey:(__bridge id)cryptorRef];
     if (st) {
-        if (dataIn && dataInLength)         [st.accIn appendBytes:dataIn length:dataInLength];
-        if (dataOut && dataOutMoved && *dataOutMoved) [st.accOut appendBytes:dataOut length:*dataOutMoved];
+        // 流式明文累积上限: 大流(整文件流式加解密)会把全部明文驻留内存, 撑爆宿主 OOM 被系统 kill。
+        // 到顶即停止追加(记录的明文被截断, 但换来宿主不崩)。
+        const NSUInteger CAP = 4 * 1024 * 1024;
+        if (dataIn && dataInLength && st.accIn.length < CAP)         [st.accIn appendBytes:dataIn length:dataInLength];
+        if (dataOut && dataOutMoved && *dataOutMoved && st.accOut.length < CAP) [st.accOut appendBytes:dataOut length:*dataOutMoved];
     }
     dispatch_semaphore_signal(gCryptorLock);
     return s;

@@ -15,13 +15,18 @@ ge(){ if [ "${1:-x}" -ge "$2" ] 2>/dev/null; then ok "$3"; else ng "$3  (期望>
 
 command -v jq >/dev/null || { echo "需要 jq"; exit 2; }
 
+# 上次残留的注入宿主会占端口 + 改 token 文件, 导致本次主 host 起不来 —— 开跑前先清场。
+pkill -9 -f exercise_runner 2>/dev/null; pkill -9 -f dh_er_ 2>/dev/null; sleep 1
+
 echo "[build] mac dylib + exercise_runner"
 make mac >/tmp/dh_build.log 2>&1 || { echo "mac dylib 构建失败, 见 /tmp/dh_build.log"; exit 1; }
 make tests/exercise_runner >>/tmp/dh_build.log 2>&1 || { echo "runner 构建失败"; exit 1; }
 
 DYLD_INSERT_LIBRARIES=./decrypt_helper.mac.dylib ./tests/exercise_runner >/tmp/dh_test_host.log 2>&1 &
 HOST=$!
-trap 'kill $HOST 2>/dev/null' EXIT
+# trap 清所有本脚本起的宿主(主 + HOST2/HOST3), 中途 set -u/断言失败也不漏进程。
+trap 'kill $HOST $HOST2 $HOST3 2>/dev/null' EXIT
+HOST2=""; HOST3=""
 echo "[host] PID $HOST, 等事件生成 + 网络完成 (5s)"
 sleep 5
 

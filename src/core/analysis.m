@@ -492,6 +492,31 @@ static void attribute_call_site(FuncStartsCache *fc, intptr_t slide, AnalysisXre
 
 #define XREF_MAX_SCAN_INSNS  (12 * 1000 * 1000)   // 指令安全上限(~48MB 代码), 超过标记 truncated
 
+// 把 [lo, hi) 按 16KB 页块 vm_read_overwrite 快照到堆缓冲(不可读页保持 0), 上限 cap 字节。
+// 关键安全措施: xref 扫描不能直接解引用 __text 裸指针 —— 扫描要数秒, 期间目标镜像被并发
+// dlclose/unmap 就会 SIGSEGV 崩宿主(TOCTOU)。快照后只碰副本, 源被 unmap 也无妨; 不可读页
+// 填 0(capstone 反汇编 0 是无害的 udf/andeq, 不产生 BL/取址)。返回缓冲(调用者 free),
+// *out_len 实际长度, *out_capped 是否因 cap 截断。calloc 失败返回 NULL。
+static uint8_t *snapshot_text(uint64_t lo, uint64_t hi, size_t cap, size_t *out_len, int *out_capped) {
+    if (out_len) *out_len = 0;
+    if (out_capped) *out_capped = 0;
+    if (hi <= lo) return NULL;
+    uint64_t full = hi - lo;
+    size_t len = (full > (uint64_t)cap) ? cap : (size_t)full;
+    if (out_capped) *out_capped = (len < full);
+    uint8_t *buf = calloc(1, len);
+    if (!buf) return NULL;
+    const size_t PG = 16 * 1024;   // iOS 页 16KB; 某页不可读只丢这一页, 其余照读
+    for (size_t off = 0; off < len; off += PG) {
+        size_t want = (len - off < PG) ? (len - off) : PG;
+        vm_size_t got = 0;
+        vm_read_overwrite(mach_task_self(), (vm_address_t)(lo + off), (vm_size_t)want,
+                          (vm_address_t)(buf + off), &got);   // 失败: 该页保持 calloc 的 0
+    }
+    if (out_len) *out_len = len;
+    return buf;
+}
+
 int analysis_find_xrefs(const char *image_query,
                         const char *sym_name, uint64_t target_addr,
                         AnalysisXref *out, int max_results,
@@ -549,8 +574,10 @@ int analysis_find_xrefs(const char *image_query,
     }
 
     // __text 在本进程已映射(FairPlay 段运行时已解密), 直接按运行时地址反汇编, 不额外拷贝。
-    const uint8_t *code = (const uint8_t *)(uintptr_t)text_lo;
-    size_t remaining = (size_t)(text_hi - text_lo);
+    size_t snap_len = 0; int snap_capped = 0;
+    uint8_t *snap = snapshot_text(text_lo, text_hi, (size_t)XREF_MAX_SCAN_INSNS * 4, &snap_len, &snap_capped);
+    const uint8_t *code = snap;                 // NULL(OOM) 时 remaining=0, 主循环不执行
+    size_t remaining = snap ? snap_len : 0;
     uint64_t cur = text_lo;
     uint64_t scanned = 0;
     int found = 0, truncated = 0;
@@ -618,6 +645,8 @@ int analysis_find_xrefs(const char *image_query,
     cs_free(sinsn, 1);
     cs_close(&h);
     cs_close(&hs);
+    if (snap_capped) truncated = 1;
+    free(snap);
     if (out_scanned) *out_scanned = scanned;
     if (out_truncated) *out_truncated = truncated;
     return found;
@@ -752,8 +781,10 @@ int analysis_find_string_refs(const char *image_query,
     cs_insn *insn = cs_malloc(h);
     if (!insn) { cs_close(&h); return -1; }
 
-    const uint8_t *code = (const uint8_t *)(uintptr_t)text_lo;
-    size_t remaining = (size_t)(text_hi - text_lo);
+    size_t snap_len = 0; int snap_capped = 0;
+    uint8_t *snap = snapshot_text(text_lo, text_hi, (size_t)XREF_MAX_SCAN_INSNS * 4, &snap_len, &snap_capped);
+    const uint8_t *code = snap;                 // NULL(OOM) 时 remaining=0, 主循环不执行
+    size_t remaining = snap ? snap_len : 0;
     uint64_t cur = text_lo;
     uint64_t scanned = 0;
     int found = 0, truncated = 0;
@@ -837,6 +868,8 @@ int analysis_find_string_refs(const char *image_query,
 
     cs_free(insn, 1);
     cs_close(&h);
+    if (snap_capped) truncated = 1;
+    free(snap);
     if (out_scanned) *out_scanned = scanned;
     if (out_truncated) *out_truncated = truncated;
     return found;
@@ -965,8 +998,10 @@ int analysis_find_selector_refs(const char *image_query,
         cs_close(&h); cs_close(&hs); return -1;
     }
 
-    const uint8_t *code = (const uint8_t *)(uintptr_t)text_lo;
-    size_t remaining = (size_t)(text_hi - text_lo);
+    size_t snap_len = 0; int snap_capped = 0;
+    uint8_t *snap = snapshot_text(text_lo, text_hi, (size_t)XREF_MAX_SCAN_INSNS * 4, &snap_len, &snap_capped);
+    const uint8_t *code = snap;                 // NULL(OOM) 时 remaining=0, 主循环不执行
+    size_t remaining = snap ? snap_len : 0;
     uint64_t cur = text_lo;
     uint64_t scanned = 0;
     int found = 0, truncated = 0;
@@ -1097,6 +1132,8 @@ int analysis_find_selector_refs(const char *image_query,
 
     cs_free(insn, 1); cs_free(sinsn, 1);
     cs_close(&h); cs_close(&hs);
+    if (snap_capped) truncated = 1;
+    free(snap);
     if (out_scanned) *out_scanned = scanned;
     if (out_truncated) *out_truncated = truncated;
     return found;
@@ -1142,8 +1179,10 @@ int analysis_find_function_refs(const char *image_query,
     cs_insn *insn = cs_malloc(h);
     if (!insn) { cs_close(&h); return -1; }
 
-    const uint8_t *code = (const uint8_t *)(uintptr_t)text_lo;
-    size_t remaining = (size_t)(text_hi - text_lo);
+    size_t snap_len = 0; int snap_capped = 0;
+    uint8_t *snap = snapshot_text(text_lo, text_hi, (size_t)XREF_MAX_SCAN_INSNS * 4, &snap_len, &snap_capped);
+    const uint8_t *code = snap;                 // NULL(OOM) 时 remaining=0, 主循环不执行
+    size_t remaining = snap ? snap_len : 0;
     uint64_t cur = text_lo;
     uint64_t scanned = 0;
     int found = 0, truncated = 0;
@@ -1190,6 +1229,8 @@ int analysis_find_function_refs(const char *image_query,
 
     cs_free(insn, 1);
     cs_close(&h);
+    if (snap_capped) truncated = 1;
+    free(snap);
     if (out_scanned) *out_scanned = scanned;
     if (out_truncated) *out_truncated = truncated;
     return found;
