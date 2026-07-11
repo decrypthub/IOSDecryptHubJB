@@ -4,6 +4,9 @@
 // 传输层 (HTTP/SSE/会话头) 在 http_server.m 的 handle_mcp 里。
 
 #import <Foundation/Foundation.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
+#include <dlfcn.h>
 #include "mcp_server.h"
 #include "analysis.h"
 #include "dh_symtab.h"
@@ -246,6 +249,113 @@ static NSDictionary *tool_symbolicate(NSDictionary *args) {
         @"display": [NSString stringWithFormat:@"%s+0x%llx", sym, off],
         @"image": @(img),
     });
+}
+
+// isa -> Class: 只认注册过的类, 绝不解引用不可信指针(避免注入进程崩溃)。
+// 试 原值 + 常见 non-pointer isa 掩码(arm64 / arm64e-PAC), 命中类表才算数。
+static Class dh_class_from_isa(uint64_t isa) {
+    if (isa == 0) return NULL;
+    unsigned int n = 0;
+    Class *list = objc_copyClassList(&n);
+    if (!list) return NULL;
+    uint64_t cands[3] = { isa, isa & 0x0000000ffffffff8ULL, isa & 0x00007ffffffffff8ULL };
+    Class found = NULL;
+    for (int c = 0; c < 3 && !found; c++) {
+        Class cand = (__bridge Class)(void *)(uintptr_t)cands[c];
+        for (unsigned int i = 0; i < n; i++) {
+            if (list[i] == cand) { found = cand; break; }
+        }
+    }
+    free(list);
+    return found;
+}
+
+// objc_resolve_imp —— selector(+class 名 或 object 地址) -> 运行时真实 IMP。
+// 破 ObjC 动态派发死结: setRawT: 静态反汇编只到 objc_msgSend 的 `br x16` 就断,
+// 注入进程可直接问 runtime 拿真实 IMP,再喂 disassemble_function 反汇编真正执行的代码。
+static NSDictionary *tool_objc_resolve_imp(NSDictionary *args) {
+    NSString *sel = [args[@"selector"] isKindOfClass:NSString.class] ? args[@"selector"] : nil;
+    if (sel.length == 0) return tool_err(@"missing 'selector'");
+    NSString *className = [args[@"class"]  isKindOfClass:NSString.class] ? args[@"class"]  : nil;
+    NSString *objStr    = [args[@"object"] isKindOfClass:NSString.class] ? args[@"object"] : nil;
+    NSString *mtype     = [args[@"method_type"] isKindOfClass:NSString.class] ? args[@"method_type"] : @"instance";
+    if (!className && !objStr) return tool_err(@"provide 'class' (name) or 'object' (address)");
+
+    SEL selector = NSSelectorFromString(sel);
+
+    // 1) 定位类
+    Class cls = NULL;
+    NSString *classSource = nil;
+    if (objStr) {
+        uint64_t objAddr = strtoull(objStr.UTF8String, NULL, 0);
+        uint8_t isaBuf[8] = {0};
+        int got = analysis_read_memory(objAddr, 8, isaBuf, sizeof(isaBuf));
+        if (got != 8) return tool_err([NSString stringWithFormat:@"object address not readable: 0x%llx", objAddr]);
+        uint64_t isa = 0; memcpy(&isa, isaBuf, sizeof(isa));
+        cls = dh_class_from_isa(isa);
+        if (!cls) return tool_err([NSString stringWithFormat:
+            @"0x%llx isa=0x%llx 未解析到已注册类(坏对象/tagged pointer)", objAddr, isa]);
+        classSource = [NSString stringWithFormat:@"object 0x%llx", objAddr];
+    } else {
+        cls = objc_getClass(className.UTF8String);
+        if (!cls) return tool_err([NSString stringWithFormat:@"class not found: %@", className]);
+        classSource = className;
+    }
+
+    // 2) instance/class/auto —— 类方法查元类
+    BOOL wantClass = [mtype isEqualToString:@"class"];
+    BOOL wantAuto  = [mtype isEqualToString:@"auto"];
+    Class lookupCls = wantClass ? object_getClass((id)cls) : cls;
+    NSString *resolvedType = wantClass ? @"class" : @"instance";
+    Method m = class_getInstanceMethod(lookupCls, selector);
+    if (!m && wantAuto) {
+        m = class_getInstanceMethod(cls, selector);
+        if (m) { resolvedType = @"instance"; lookupCls = cls; }
+        else {
+            lookupCls = object_getClass((id)cls);
+            m = class_getInstanceMethod(lookupCls, selector);
+            if (m) resolvedType = @"class";
+        }
+    }
+    if (!m) return tool_ok(@{
+        @"selector": sel, @"class": @(class_getName(cls)),
+        @"class_source": classSource, @"method_type": resolvedType, @"found": @NO,
+    });
+
+    IMP imp = method_getImplementation(m);
+    const char *typeEnc = method_getTypeEncoding(m);
+
+    // 3) 声明类(方法可能继承自父类)
+    Class declaring = lookupCls;
+    Class sup = class_getSuperclass(declaring);
+    while (sup && class_getInstanceMethod(sup, selector) == m) {
+        declaring = sup; sup = class_getSuperclass(declaring);
+    }
+
+    // 4) dladdr 符号 + image
+    Dl_info info; memset(&info, 0, sizeof(info));
+    NSString *symbol = nil, *image = nil; uint64_t off = 0;
+    if (dladdr((const void *)imp, &info) && info.dli_fname) {
+        image = @(info.dli_fname);
+        if (info.dli_sname) { symbol = @(info.dli_sname); off = (uint64_t)imp - (uint64_t)info.dli_saddr; }
+    }
+
+    NSMutableDictionary *out = [@{
+        @"selector": sel,
+        @"class": @(class_getName(cls)),
+        @"class_source": classSource,
+        @"method_type": resolvedType,
+        @"resolving_class": @(class_getName(declaring)),
+        @"imp": [NSString stringWithFormat:@"0x%llx", (uint64_t)imp],
+        @"type_encoding": typeEnc ? @(typeEnc) : @"",
+        @"found": @YES,
+    } mutableCopy];
+    if (image)  out[@"image"] = image;
+    if (symbol) {
+        out[@"symbol"] = symbol;
+        out[@"symbol_display"] = [NSString stringWithFormat:@"%@+0x%llx", symbol, off];
+    }
+    return tool_ok(out);
 }
 
 // 经典 hexdump 格式 (地址 / 16 字节 hex / ASCII)
@@ -1131,6 +1241,20 @@ static NSArray *tool_definitions(void) {
             },
         },
         @{
+            @"name": @"objc_resolve_imp",
+            @"description": @"Resolve an ObjC selector to its runtime IMP address — breaks the dynamic-dispatch wall that static disassembly can't cross (a message send is just `br x16` statically). Give a class name OR a live object address plus the selector; returns the real IMP, its declaring class, image, and dladdr symbol. Feed `imp` straight into disassemble_function to read the code that actually runs.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"selector": @{@"type": @"string", @"description": @"Selector, e.g. \"setRawT:\" or \"syncUpdateTWithUxd:tmpModel:\""},
+                    @"class": @{@"type": @"string", @"description": @"Class name, e.g. \"WBValidatorModel\". Provide this OR `object`."},
+                    @"object": @{@"type": @"string", @"description": @"Live instance address (hex). isa is read safely and matched against the class table — provide this OR `class`."},
+                    @"method_type": @{@"type": @"string", @"description": @"\"instance\" (default), \"class\" (+ method, resolved on the metaclass), or \"auto\" (try instance then class)."},
+                },
+                @"required": @[@"selector"],
+            },
+        },
+        @{
             @"name": @"read_memory",
             @"description": @"Read process memory at `address` and return a hex + ASCII hexdump. Safe against unmapped addresses. For inspecting data/keys/structs (not code).",
             @"inputSchema": @{
@@ -1466,6 +1590,7 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"disassemble_function"])  return tool_disassemble_function(args);
     if ([name isEqualToString:@"resolve_symbol"])        return tool_resolve_symbol(args);
     if ([name isEqualToString:@"symbolicate"])           return tool_symbolicate(args);
+    if ([name isEqualToString:@"objc_resolve_imp"])      return tool_objc_resolve_imp(args);
     if ([name isEqualToString:@"read_memory"])           return tool_read_memory(args);
     if ([name isEqualToString:@"search_memory"])         return tool_search_memory(args);
     if ([name isEqualToString:@"list_images"])           return tool_list_images(args);

@@ -89,6 +89,27 @@ eq "$(jq -r 'any(.result.structuredContent.results[]; .kind=="call_objc_stub")' 
 # 缺参防御
 eq "$(mc '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"find_xrefs","arguments":{}}}' | jq -r '.result.isError')" "true" "无 symbol/address → isError"
 
+echo ""; echo "== objc_resolve_imp (selector -> 运行时真实 IMP) =="
+# 类名路径: 实例方法 -> IMP + dladdr 符号
+mc '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"objc_resolve_imp","arguments":{"class":"NSObject","selector":"description"}}}' > /tmp/dh_imp.json
+eq "$(jq -r '.result.structuredContent.found' /tmp/dh_imp.json)" "true" "resolve NSObject -description found"
+eq "$(jq -r '.result.structuredContent.imp|test("^0x")' /tmp/dh_imp.json)" "true" "返回 imp 地址"
+eq "$(jq -r '.result.structuredContent.symbol|test("description")' /tmp/dh_imp.json)" "true" "dladdr 符号含 description"
+# 交叉验证: imp 喂 symbolicate 应还原同名符号
+RIMP=$(jq -r '.result.structuredContent.imp' /tmp/dh_imp.json)
+eq "$(mc "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"tools/call\",\"params\":{\"name\":\"symbolicate\",\"arguments\":{\"address\":\"$RIMP\"}}}" | jq -r '.result.structuredContent.symbol|test("description")')" "true" "imp→symbolicate 交叉一致"
+# 类方法路径: 元类解析
+eq "$(mc '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"objc_resolve_imp","arguments":{"class":"NSString","selector":"string","method_type":"class"}}}' | jq -r '.result.structuredContent.method_type')" "class" "类方法 method_type=class"
+# 继承: 子类查方法, 声明类回溯到父类
+eq "$(mc '{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"objc_resolve_imp","arguments":{"class":"NSMutableString","selector":"length"}}}' | jq -r '.result.structuredContent.resolving_class')" "NSString" "继承方法归属父类 NSString"
+# 不存在 selector -> found:false
+eq "$(mc '{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"objc_resolve_imp","arguments":{"class":"NSObject","selector":"dhNoSuchSelXYZ:"}}}' | jq -r '.result.structuredContent.found')" "false" "未知 selector → found:false"
+# object 路径安全: 坏指针不崩宿主, 干净报错
+eq "$(mc '{"jsonrpc":"2.0","id":35,"method":"tools/call","params":{"name":"objc_resolve_imp","arguments":{"object":"0x1","selector":"length"}}}' | jq -r '.result.isError')" "true" "坏 object 地址 → isError(不崩)"
+# 缺参防御
+eq "$(mc '{"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"objc_resolve_imp","arguments":{"class":"NSObject"}}}' | jq -r '.result.isError')" "true" "无 selector → isError"
+eq "$(mc '{"jsonrpc":"2.0","id":37,"method":"tools/call","params":{"name":"objc_resolve_imp","arguments":{"selector":"length"}}}' | jq -r '.result.isError')" "true" "无 class/object → isError"
+
 echo ""; echo "== find_xrefs tier-1.5: strip 目标归属到 sub_xxx =="
 # strip 掉本地符号后 dladdr 失效, 应经 LC_FUNCTION_STARTS 归属到 sub_<runtime>+off。
 cp tests/exercise_runner /tmp/dh_er_stripped && strip /tmp/dh_er_stripped 2>/dev/null
