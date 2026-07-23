@@ -3,247 +3,262 @@
 <head>
 <meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
+<link rel='preconnect' href='https://fonts.googleapis.com'><link rel='preconnect' href='https://fonts.gstatic.com' crossorigin><link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' rel='stylesheet'>
 <title>IOSDecryptHub</title>
 <style>
+  /* ===== IOSDecryptHub 面板 · 黑白设计系统 =====
+     background #ffffff / surface #f5f5f5 / ink #000000 / muted #8c8c8c
+     border #dbdbdb (1px) / accent #0d0d0d / accent-2 #101828 / radius 8px */
   * { box-sizing: border-box; }
-  html,body { margin:0; padding:0; height:100%; background:#0d1117; color:#c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 13px; }
+  html,body { margin:0; padding:0; height:100%; background:#ffffff; color:#000000; font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 13px; }
   body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
   header, .procbar, .healthbar, .tabbar, .filters { flex-shrink:0; }
-  header { display:flex; align-items:center; gap:12px; padding:10px 14px; background:#161b22; border-bottom:1px solid #30363d; }
-  header h1 { margin:0; font-size:16px; font-weight:700; color:#7ee787; letter-spacing:0.02em; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-  header .stats { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:#8b949e; }
-  header .stats b { color:#c9d1d9; font-weight:600; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 14px; background:#ffffff; border-bottom:1px solid #dbdbdb; }
+  header h1 { margin:0; font-size:16px; font-weight:700; color:#0d0d0d; letter-spacing:0.02em; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+  header .stats { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:#8c8c8c; }
+  header .stats b { color:#000000; font-weight:600; }
   header .spacer { flex:1; }
-  header button, header a.btn, .filters button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:5px 10px; border-radius:6px; font-size:12px; cursor:pointer; text-decoration:none; }
-  header button:hover, header a.btn:hover, .filters button:hover { background:#30363d; }
-  header button.danger, .filters button.danger { background:#3d1417; border-color:#5a1d1d; color:#ffa198; }
-  header button.warn, .filters button.warn { background:#3d2c0a; border-color:#5d4310; color:#e3b341; }
-  .procbar { display:flex; align-items:center; gap:10px; padding:6px 14px; background:#0d1117; border-bottom:1px solid #21262d; font-size:11px; color:#6e7681; }
-  .appicon { width:30px; height:30px; border-radius:7px; flex-shrink:0; border:1px solid #30363d; background:#161b22; object-fit:cover; }
+  header button, header a.btn, .filters button { background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:5px 10px; border-radius:8px; font-size:12px; cursor:pointer; text-decoration:none; transition: background .15s, border-color .15s, color .15s; }
+  header button:hover, header a.btn:hover, .filters button:hover { background:#f5f5f5; border-color:#8c8c8c; }
+  header button.danger, .filters button.danger { background:#ffffff; border-color:#0d0d0d; color:#0d0d0d; font-weight:600; }
+  header button.danger:hover, .filters button.danger:hover { background:#0d0d0d; border-color:#0d0d0d; color:#ffffff; }
+  header button.warn, .filters button.warn { background:#f5f5f5; border-color:#dbdbdb; color:#0d0d0d; }
+  header button.warn:hover, .filters button.warn:hover { background:#ffffff; border-color:#8c8c8c; }
+  .procbar { display:flex; align-items:center; gap:10px; padding:6px 14px; background:#f5f5f5; border-bottom:1px solid #dbdbdb; font-size:11px; color:#8c8c8c; }
+  .appicon { width:30px; height:30px; border-radius:8px; flex-shrink:0; border:1px solid #dbdbdb; background:#ffffff; object-fit:cover; }
   .procinfo { display:flex; gap:14px; flex-wrap:wrap; align-items:center; }
-  .procinfo b { color:#8b949e; font-weight:600; }
-  .procinfo .none { color:#484f58; }
-  .healthbar { display:none; padding:7px 14px; background:#3d1417; border-bottom:1px solid #5a1d1d; color:#ffa198; font-size:12px; font-weight:600; cursor:pointer; user-select:none; }
-  .healthbar:hover { background:#4a181c; }
-  .healthbar .hint { font-weight:400; color:#ff8f84; margin-left:8px; }
-  .diag-hint { padding:10px 16px; border-bottom:1px solid #21262d; background:#161b22; color:#8b949e; font-size:12px; line-height:1.55; }
-  .diag-hint a { color:#58a6ff; text-decoration:none; }
+  .procinfo b { color:#8c8c8c; font-weight:600; }
+  .procinfo .none { color:#dbdbdb; }
+  .healthbar { display:none; padding:7px 14px; background:#0d0d0d; border-bottom:1px solid #0d0d0d; color:#ffffff; font-size:12px; font-weight:600; cursor:pointer; user-select:none; }
+  .healthbar:hover { background:#000000; }
+  .healthbar .hint { font-weight:400; color:#dbdbdb; margin-left:8px; }
+  .diag-hint { padding:10px 16px; border-bottom:1px solid #dbdbdb; background:#f5f5f5; color:#8c8c8c; font-size:12px; line-height:1.55; }
+  .diag-hint a { color:#101828; text-decoration:none; }
   .diag-hint a:hover { text-decoration:underline; }
-  .modal h3 button.issue { background:#1f3d1f; border-color:#2ea043; color:#56d364; }
-  .modal h3 button.issue:hover { background:#264a26; }
-  .offlinebar { display:none; padding:7px 14px; background:#3d2c0a; border-bottom:1px solid #5d4310; color:#e3b341; font-size:12px; font-weight:600; flex-shrink:0; }
-  .tabbar { display:flex; gap:2px; padding:0 10px; background:#161b22; border-bottom:1px solid #30363d; overflow-x:auto; }
-  .tab { background:none; border:none; color:#8b949e; padding:10px 16px; font-size:13px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
-  .tab:hover { color:#c9d1d9; }
-  .tab.active { color:#c9d1d9; border-bottom-color:#f78166; font-weight:600; }
-  .tab .n { color:#6e7681; font-size:11px; margin-left:5px; }
-  .filters { display:flex; gap:8px; padding:8px 14px; background:#0d1117; border-bottom:1px solid #21262d; align-items:center; flex-wrap:wrap; }
+  .modal h3 button.issue { background:#0d0d0d; border-color:#0d0d0d; color:#ffffff; }
+  .modal h3 button.issue:hover { background:#000000; }
+  .offlinebar { display:none; padding:7px 14px; background:#f5f5f5; border-bottom:1px solid #dbdbdb; color:#0d0d0d; font-size:12px; font-weight:600; flex-shrink:0; }
+  .tabbar { display:flex; gap:2px; padding:0 10px; background:#ffffff; border-bottom:1px solid #dbdbdb; overflow-x:auto; }
+  .tab { background:none; border:none; color:#8c8c8c; padding:10px 16px; font-size:13px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; transition: color .15s; }
+  .tab:hover { color:#000000; }
+  .tab.active { color:#000000; border-bottom-color:#0d0d0d; font-weight:600; }
+  .tab .n { color:#8c8c8c; font-size:11px; margin-left:5px; }
+  .filters { display:flex; gap:8px; padding:8px 14px; background:#f5f5f5; border-bottom:1px solid #dbdbdb; align-items:center; flex-wrap:wrap; }
   .toolbar-filters { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .toolbar-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-left:auto; }
   .toolbar-noise { margin-left:4px; }
-  .filters.noise-mode { background:#141820; border-bottom-color:#30363d; }
-  .noisebar { display:none; align-items:center; gap:10px; padding:7px 14px; background:#1a2332; border-bottom:1px solid #388bfd; color:#8b949e; font-size:12px; flex-shrink:0; }
+  .filters.noise-mode { background:#f5f5f5; border-bottom-color:#8c8c8c; }
+  .noisebar { display:none; align-items:center; gap:10px; padding:7px 14px; background:#f5f5f5; border-bottom:1px solid #dbdbdb; color:#8c8c8c; font-size:12px; flex-shrink:0; }
   .noisebar.show { display:flex; }
-  .noisebar b { color:#c9d1d9; }
-  .noisebar button { background:#21262d; color:#58a6ff; border:1px solid #30363d; padding:3px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
-  .noisebar button:hover { background:#30363d; }
-  .new-banner { display:none; align-items:center; justify-content:space-between; gap:10px; padding:8px 14px; background:#1b2a1b; border-bottom:1px solid #2ea043; color:#56d364; font-size:12px; position:sticky; top:0; z-index:2; }
+  .noisebar b { color:#000000; }
+  .noisebar button { background:#ffffff; color:#101828; border:1px solid #dbdbdb; padding:3px 10px; border-radius:8px; font-size:12px; cursor:pointer; }
+  .noisebar button:hover { background:#f5f5f5; border-color:#8c8c8c; }
+  .new-banner { display:none; align-items:center; justify-content:space-between; gap:10px; padding:8px 14px; background:#f5f5f5; border-bottom:1px solid #0d0d0d; color:#0d0d0d; font-size:12px; position:sticky; top:0; z-index:2; }
   .new-banner.show { display:flex; }
-  .new-banner button { background:#21262d; color:#56d364; border:1px solid #2ea043; padding:3px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
+  .new-banner button { background:#0d0d0d; color:#ffffff; border:1px solid #0d0d0d; padding:3px 10px; border-radius:8px; font-size:12px; cursor:pointer; }
+  .new-banner button:hover { background:#000000; }
   .status-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:4px; vertical-align:middle; }
-  .status-dot.ok { background:#3fb950; }
-  .status-dot.paused { background:#e3b341; }
-  .status-dot.err { background:#f85149; }
-  .detail-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
-  .detail-actions button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:5px; font-size:11px; cursor:pointer; }
-  .detail-actions button:hover { background:#30363d; }
-  details.callstack { margin-top:14px; }
-  details.callstack summary { cursor:pointer; color:#8b949e; font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:0.05em; user-select:none; }
+  .status-dot.ok { background:#0d0d0d; }
+  .status-dot.paused { background:#8c8c8c; }
+  .status-dot.err { background:#ffffff; border:2px solid #0d0d0d; }
+  .detail-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  details.callstack summary { cursor:pointer; color:#8c8c8c; font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:0.05em; user-select:none; }
   details.callstack pre { margin-top:8px; }
-  .filters input[type=search], .filters select { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:5px 8px; border-radius:6px; font-size:12px; }
+  .filters input[type=search], .filters select { background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:5px 8px; border-radius:8px; font-size:12px; }
+  .filters input[type=search]:focus, .filters select:focus { outline:none; border-color:#0d0d0d; }
   .filters input[type=search] { width: 240px; }
-  .filters label { color:#8b949e; font-size:12px; }
+  .filters label { color:#8c8c8c; font-size:12px; }
   .size-filter { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .size-filter input[type=number] { width:68px; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:5px 6px; border-radius:6px; font-size:12px; }
+  .size-filter input[type=number] { width:68px; background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:5px 6px; border-radius:8px; font-size:12px; }
+  .size-filter input[type=number]:focus { outline:none; border-color:#0d0d0d; }
   .size-filter input[type=number]::-webkit-inner-spin-button { opacity:0.5; }
-  .size-filter .size-sep { color:#484f58; user-select:none; }
-  .size-filter .size-unit { color:#6e7681; font-size:11px; min-width:12px; }
-  .size-filter .size-hint { color:#6e7681; font-size:11px; min-width:72px; }
-  .size-filter button.size-reset { background:transparent; border:1px solid #30363d; color:#8b949e; padding:4px 8px; border-radius:6px; font-size:11px; cursor:pointer; }
-  .size-filter button.size-reset:hover { background:#21262d; color:#c9d1d9; }
-  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; }
-  .pill.digest { background:#0d3a1f; color:#56d364; }
-  .pill.hmac   { background:#0c2e4a; color:#58a6ff; }
-  .pill.sym    { background:#3c2410; color:#f0a35c; }
-  .pill.asym   { background:#3a1140; color:#d2a8ff; }
-  .pill.file   { background:#2e2a0c; color:#d4c95a; }
-  .pill.sys    { background:#241a3a; color:#b89aff; }
-  .pill.other  { background:#21262d; color:#8b949e; }
+  .size-filter .size-sep { color:#dbdbdb; user-select:none; }
+  .size-filter .size-unit { color:#8c8c8c; font-size:11px; min-width:12px; }
+  .size-filter .size-hint { color:#8c8c8c; font-size:11px; min-width:72px; }
+  .size-filter button.size-reset { background:transparent; border:1px solid #dbdbdb; color:#8c8c8c; padding:4px 8px; border-radius:8px; font-size:11px; cursor:pointer; }
+  .size-filter button.size-reset:hover { background:#ffffff; color:#000000; border-color:#8c8c8c; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:6px; font-size:11px; font-weight:600; }
+  .pill.digest { background:#f5f5f5; color:#0d0d0d; border:1px solid #dbdbdb; }
+  .pill.hmac   { background:#f5f5f5; color:#0d0d0d; border:1px solid #dbdbdb; }
+  .pill.sym    { background:#f5f5f5; color:#0d0d0d; border:1px solid #dbdbdb; }
+  .pill.asym   { background:#f5f5f5; color:#0d0d0d; border:1px solid #dbdbdb; }
+  .pill.file   { background:#f5f5f5; color:#0d0d0d; border:1px solid #dbdbdb; }
+  .pill.sys    { background:#f5f5f5; color:#0d0d0d; border:1px solid #dbdbdb; }
+  .pill.other  { background:#ffffff; color:#8c8c8c; border:1px solid #dbdbdb; }
   .workspace { flex:1; display:flex; min-height:0; }
   .list-pane { width:42%; min-width:220px; flex-shrink:0; display:flex; flex-direction:column; min-height:0; }
   #list { flex:1; overflow-y:auto; min-height:0; }
-  .splitter { width:7px; flex-shrink:0; background:#21262d; cursor:col-resize; border-left:1px solid #30363d; border-right:1px solid #30363d; transition: background 0.15s; }
-  .splitter:hover, .splitter.dragging { background:#388bfd; }
+  .splitter { width:7px; flex-shrink:0; background:#f5f5f5; cursor:col-resize; border-left:1px solid #dbdbdb; border-right:1px solid #dbdbdb; transition: background 0.15s; }
+  .splitter:hover, .splitter.dragging { background:#0d0d0d; }
   .detail-pane { flex:1; min-width:240px; overflow-y:auto; padding:0 18px 28px; }
-  .row { border-bottom:1px solid #21262d; cursor:pointer; padding:7px 14px; }
-  .row:hover { background:#161b22; }
-  .row.selected { background:#1b2231; box-shadow: inset 3px 0 0 #58a6ff; }
+  .row { border-bottom:1px solid #f5f5f5; cursor:pointer; padding:7px 14px; transition: background .12s; }
+  .row:hover { background:#f5f5f5; }
+  .row.selected { background:#f5f5f5; box-shadow: inset 3px 0 0 #0d0d0d; }
   .row .top { display:flex; gap:9px; align-items:center; font-size:12px; }
-  .row .seq { color:#8b949e; min-width:42px; font-variant-numeric: tabular-nums; }
-  .row .algo { font-weight:600; color:#c9d1d9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .row .op { color:#8b949e; font-size:11px; flex-shrink:0; }
-  .row .ts { color:#6e7681; font-size:11px; margin-left:auto; flex-shrink:0; font-variant-numeric: tabular-nums; }
-  .row .lens { color:#7d8590; font-size:11px; margin-top:2px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .row .preview { color:#6e7681; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; margin-top:2px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-  .detail-head { position:sticky; top:0; background:#0d1117; padding:14px 0 10px; border-bottom:1px solid #21262d; z-index:1; }
-  .detail-head h2 { margin:0; font-size:15px; color:#c9d1d9; word-break:break-all; }
-  .detail-head .sub { color:#8b949e; font-size:12px; margin-top:4px; word-break:break-all; }
+  .row .seq { color:#8c8c8c; min-width:42px; font-variant-numeric: tabular-nums; }
+  .row .algo { font-weight:600; color:#000000; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .op { color:#8c8c8c; font-size:11px; flex-shrink:0; }
+  .row .ts { color:#8c8c8c; font-size:11px; margin-left:auto; flex-shrink:0; font-variant-numeric: tabular-nums; }
+  .row .lens { color:#8c8c8c; font-size:11px; margin-top:2px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .preview { color:#8c8c8c; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; margin-top:2px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .detail-head { position:sticky; top:0; background:#ffffff; padding:14px 0 10px; border-bottom:1px solid #dbdbdb; z-index:1; }
+  .detail-head h2 { margin:0; font-size:15px; color:#000000; word-break:break-all; }
+  .detail-head .sub { color:#8c8c8c; font-size:12px; margin-top:4px; word-break:break-all; }
   .io-section { margin-top:14px; }
-  .io-section.kv-card  { background:#11151b; border:1px solid #21262d; border-radius:8px; padding:10px 14px; }
-  .io-section.in-card  { background:#0c1c12; border:1px solid #1f4a2b; border-radius:8px; padding:12px 14px 14px; }
-  .io-section.out-card { background:#0b1826; border:1px solid #1a3d61; border-radius:8px; padding:12px 14px 14px; }
+  .io-section.kv-card  { background:#f5f5f5; border:1px solid #dbdbdb; border-radius:8px; padding:10px 14px; }
+  .io-section.in-card  { background:#ffffff; border:1px solid #dbdbdb; border-radius:8px; padding:12px 14px 14px; }
+  .io-section.out-card { background:#ffffff; border:1px solid #dbdbdb; border-radius:8px; padding:12px 14px 14px; }
   .io-label { font-size:13px; font-weight:700; letter-spacing:0.04em; padding:5px 12px; border-radius:6px; display:inline-block; margin-bottom:10px; }
-  .io-label.in  { background:#10301c; color:#56d364; }
-  .io-label.out { background:#11243d; color:#58a6ff; }
-  .io-label.kv  { background:#21262d; color:#c9d1d9; }
-  .io-meta { color:#6e7681; font-size:11px; margin-bottom:6px; }
-  .detail-pane h3 { font-size:11px; color:#8b949e; margin:12px 0 5px; font-weight:500; text-transform:uppercase; letter-spacing:0.05em; }
-  .detail-pane pre { background:#161b22; border:1px solid #21262d; border-radius:6px; padding:8px 10px; margin:0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.5; max-height:300px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
+  .io-label.in  { background:#0d0d0d; color:#ffffff; }
+  .io-label.out { background:#ffffff; color:#0d0d0d; border:1px solid #0d0d0d; }
+  .io-label.kv  { background:#f5f5f5; color:#000000; border:1px solid #dbdbdb; }
+  .io-meta { color:#8c8c8c; font-size:11px; margin-bottom:6px; }
+  .detail-pane h3 { font-size:11px; color:#8c8c8c; margin:12px 0 5px; font-weight:500; text-transform:uppercase; letter-spacing:0.05em; }
+  .detail-pane pre { background:#f5f5f5; border:1px solid #dbdbdb; border-radius:6px; padding:8px 10px; margin:0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.5; max-height:300px; overflow:auto; white-space:pre-wrap; word-break:break-all; color:#000000; }
   .detail-pane pre.hex { white-space: pre; word-break: normal; }
   .row-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
-  .detail-pane button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:3px 9px; border-radius:5px; font-size:11px; cursor:pointer; }
-  .detail-pane button:hover { background:#30363d; }
-  .detail-empty { color:#6e7681; text-align:center; padding:60px 20px; line-height:1.7; }
-  .empty { text-align:center; padding:40px; color:#6e7681; }
-  .loading { display:flex; align-items:center; justify-content:center; gap:9px; padding:40px 20px; color:#8b949e; font-size:12px; }
-  .spinner { display:inline-block; width:13px; height:13px; border:2px solid #30363d; border-top-color:#58a6ff; border-radius:50%; vertical-align:middle; animation: dh-spin 0.7s linear infinite; }
+  .detail-pane button { background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:3px 9px; border-radius:6px; font-size:11px; cursor:pointer; transition: background .15s, border-color .15s; }
+  .detail-pane button:hover { background:#f5f5f5; border-color:#8c8c8c; }
+  .detail-empty { color:#8c8c8c; text-align:center; padding:60px 20px; line-height:1.7; }
+  .empty { text-align:center; padding:40px; color:#8c8c8c; }
+  .loading { display:flex; align-items:center; justify-content:center; gap:9px; padding:40px 20px; color:#8c8c8c; font-size:12px; }
+  .spinner { display:inline-block; width:13px; height:13px; border:2px solid #dbdbdb; border-top-color:#0d0d0d; border-radius:50%; vertical-align:middle; animation: dh-spin 0.7s linear infinite; }
   @keyframes dh-spin { to { transform: rotate(360deg); } }
-  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#21262d; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); opacity:0; transition: opacity 0.2s; pointer-events:none; z-index:50; }
+  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#0d0d0d; border:1px solid #0d0d0d; color:#ffffff; padding:8px 14px; border-radius:8px; font-size:12px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); opacity:0; transition: opacity 0.2s; pointer-events:none; z-index:50; }
   .toast.show { opacity:1; }
   .dumppane { flex:1; overflow-y:auto; padding:16px 18px; }
   .dumpwrap { max-width:920px; }
-  .dumpwrap h2 { font-size:15px; margin:2px 0 10px; color:#c9d1d9; }
-  .dumpwrap .note { color:#8b949e; font-size:12px; line-height:1.7; margin-bottom:14px; }
-  .dumpwrap .note b { color:#c9d1d9; }
-  .dumpwrap .warn-note { color:#e3b341; }
+  .dumpwrap h2 { font-size:15px; margin:2px 0 10px; color:#000000; }
+  .dumpwrap .note { color:#8c8c8c; font-size:12px; line-height:1.7; margin-bottom:14px; }
+  .dumpwrap .note b { color:#000000; }
+  .dumpwrap .warn-note { color:#0d0d0d; font-weight:600; }
   .dump-actions { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
-  .dump-actions button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:7px 14px; border-radius:6px; font-size:13px; cursor:pointer; }
-  .dump-actions button:hover { background:#30363d; }
-  .dump-actions button.primary { background:#1f6feb; border-color:#1f6feb; color:#fff; }
-  .dump-actions button.primary:hover { background:#388bfd; }
+  .dump-actions button { background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:7px 14px; border-radius:8px; font-size:13px; cursor:pointer; transition: background .15s, border-color .15s; }
+  .dump-actions button:hover { background:#f5f5f5; border-color:#8c8c8c; }
+  .dump-actions button.primary { background:#0d0d0d; border-color:#0d0d0d; color:#ffffff; }
+  .dump-actions button.primary:hover { background:#000000; }
   .dump-actions button:disabled { opacity:0.5; cursor:not-allowed; }
   .dump-progress { margin:10px 0 14px; }
-  .dump-stage { font-size:12px; color:#8b949e; margin-bottom:6px; }
-  .dump-bar { height:8px; background:#21262d; border-radius:5px; overflow:hidden; }
-  .dump-bar > div { height:100%; width:0; background:#3fb950; transition:width .3s; }
+  .dump-stage { font-size:12px; color:#8c8c8c; margin-bottom:6px; }
+  .dump-bar { height:8px; background:#f5f5f5; border:1px solid #dbdbdb; border-radius:5px; overflow:hidden; }
+  .dump-bar > div { height:100%; width:0; background:#0d0d0d; transition:width .3s; }
   .dump-done { margin:6px 0 14px; font-size:13px; }
-  .dl-link { display:inline-block; margin-right:14px; color:#58a6ff; text-decoration:none; }
+  .dl-link { display:inline-block; margin-right:14px; color:#101828; text-decoration:none; }
   .dl-link:hover { text-decoration:underline; }
   .dump-table { width:100%; border-collapse:collapse; font-size:12px; margin-top:6px; }
-  .dump-table th, .dump-table td { text-align:left; padding:6px 8px; border-bottom:1px solid #21262d; }
-  .dump-table th { color:#8b949e; font-weight:600; }
+  .dump-table th, .dump-table td { text-align:left; padding:6px 8px; border-bottom:1px solid #dbdbdb; }
+  .dump-table th { color:#8c8c8c; font-weight:600; }
   @media (max-width: 760px) {
     header { flex-wrap:wrap; } header .stats { width:100%; order:3; }
     .filters input[type=search] { flex:1; width:auto; }
     .workspace { flex-direction:column; }
-    .list-pane { width:auto !important; height:42%; border-bottom:1px solid #30363d; }
+    .list-pane { width:auto !important; height:42%; border-bottom:1px solid #dbdbdb; }
     .splitter { display:none; }
   }
-  .ver { color:#6e7681; font-size:11px; font-weight:400; margin-left:6px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-  .cap-chip { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:#c9d1d9; background:#0d1117; border:1px solid #30363d; padding:3px 8px; border-radius:6px; cursor:pointer; user-select:none; }
+  .ver { color:#8c8c8c; font-size:11px; font-weight:400; margin-left:6px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+  .cap-chip { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:#000000; background:#ffffff; border:1px solid #dbdbdb; padding:3px 8px; border-radius:8px; cursor:pointer; user-select:none; }
   .cap-chip input { margin:0; cursor:pointer; }
-  .modal-mask { display:none; position:fixed; inset:0; background:rgba(1,4,9,0.7); z-index:100; align-items:center; justify-content:center; }
+  .modal-mask { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:100; align-items:center; justify-content:center; }
   .modal-mask.show { display:flex; }
-  .modal { width:min(900px,92vw); height:min(80vh,720px); background:#0d1117; border:1px solid #30363d; border-radius:10px; display:flex; flex-direction:column; box-shadow:0 8px 40px rgba(0,0,0,0.55); }
-  .modal h3 { margin:0; padding:12px 16px; border-bottom:1px solid #21262d; font-size:14px; color:#c9d1d9; display:flex; align-items:center; gap:8px; }
+  .modal { width:min(900px,92vw); height:min(80vh,720px); background:#ffffff; border:1px solid #dbdbdb; border-radius:10px; display:flex; flex-direction:column; box-shadow:0 8px 40px rgba(0,0,0,0.18); }
+  .modal h3 { margin:0; padding:12px 16px; border-bottom:1px solid #dbdbdb; font-size:14px; color:#000000; display:flex; align-items:center; gap:8px; }
   .modal h3 .spacer { flex:1; }
-  .modal h3 button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:6px; font-size:12px; cursor:pointer; }
-  .modal h3 button:hover { background:#30363d; }
-  .modal pre { flex:1; overflow:auto; margin:0; padding:14px 16px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; color:#c9d1d9; }
+  .modal h3 button { background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:4px 10px; border-radius:8px; font-size:12px; cursor:pointer; }
+  .modal h3 button:hover { background:#f5f5f5; border-color:#8c8c8c; }
+  .modal pre { flex:1; overflow:auto; margin:0; padding:14px 16px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; color:#000000; }
   .sym-workspace { flex:1; display:flex; min-height:0; }
   .files-workspace { flex:1; display:flex; min-height:0; }
   .files-list-pane { display:flex; flex-direction:column; overflow-y:hidden; }
-  .files-head { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid #21262d; flex-shrink:0; flex-wrap:wrap; }
-  .files-head button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer; flex-shrink:0; }
-  .files-head button:hover { background:#30363d; }
-  .files-breadcrumb { flex:1; min-width:0; font-size:12px; color:#8b949e; word-break:break-all; }
-  .files-breadcrumb a { color:#58a6ff; text-decoration:none; }
+  .files-head { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid #dbdbdb; flex-shrink:0; flex-wrap:wrap; }
+  .files-head button { background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:4px 10px; border-radius:8px; font-size:11px; cursor:pointer; flex-shrink:0; }
+  .files-head button:hover { background:#f5f5f5; border-color:#8c8c8c; }
+  .files-breadcrumb { flex:1; min-width:0; font-size:12px; color:#8c8c8c; word-break:break-all; }
+  .files-breadcrumb a { color:#101828; text-decoration:none; }
   .files-breadcrumb a:hover { text-decoration:underline; }
   .files-list { overflow-y:auto; flex:1; }
   .files-row .top { display:flex; gap:8px; align-items:center; font-size:12px; }
-  .files-row .files-icon { color:#8b949e; font-size:11px; flex-shrink:0; width:28px; }
-  .files-row .files-icon.dir { color:#d4c95a; }
-  .files-row .name { font-weight:500; color:#c9d1d9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  .files-row .files-icon { color:#8c8c8c; font-size:11px; flex-shrink:0; width:28px; }
+  .files-row .files-icon.dir { color:#0d0d0d; font-weight:700; }
+  .files-row .name { font-weight:500; color:#000000; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
   .files-row .files-actions { display:flex; gap:6px; flex-shrink:0; }
-  .files-row .files-actions button { background:#21262d; color:#8b949e; border:1px solid #30363d; padding:2px 8px; border-radius:5px; font-size:11px; cursor:pointer; }
-  .files-row .files-actions button:hover { background:#30363d; color:#c9d1d9; }
-  .files-row .n { color:#6e7681; font-size:11px; margin-top:2px; padding-left:36px; }
-  .files-preview-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:14px 0 10px; position:sticky; top:0; background:#0d1117; z-index:1; border-bottom:1px solid #21262d; margin-bottom:10px; }
-  .files-preview-head .path { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:12px; color:#c9d1d9; word-break:break-all; flex:1; }
-  #filesPreviewBody { margin:0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; color:#c9d1d9; }
+  .files-row .files-actions button { background:#ffffff; color:#8c8c8c; border:1px solid #dbdbdb; padding:2px 8px; border-radius:6px; font-size:11px; cursor:pointer; }
+  .files-row .files-actions button:hover { background:#f5f5f5; color:#000000; border-color:#8c8c8c; }
+  .files-row .n { color:#8c8c8c; font-size:11px; margin-top:2px; padding-left:36px; }
+  .files-preview-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:14px 0 10px; position:sticky; top:0; background:#ffffff; z-index:1; border-bottom:1px solid #dbdbdb; margin-bottom:10px; }
+  .files-preview-head .path { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:12px; color:#000000; word-break:break-all; flex:1; }
+  #filesPreviewBody { margin:0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; color:#000000; }
   .sym-img-pane { display:flex; flex-direction:column; overflow-y:hidden; }
-  .sym-img-head { padding:10px 14px; color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; border-bottom:1px solid #21262d; flex-shrink:0; }
-  .sym-img-head button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer; text-transform:none; letter-spacing:normal; }
-  .sym-img-head button:hover { background:#30363d; }
+  .sym-img-head { padding:10px 14px; color:#8c8c8c; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; border-bottom:1px solid #dbdbdb; flex-shrink:0; }
+  .sym-img-head button { background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:4px 10px; border-radius:8px; font-size:11px; cursor:pointer; text-transform:none; letter-spacing:normal; }
+  .sym-img-head button:hover { background:#f5f5f5; border-color:#8c8c8c; }
   .sym-img-list { overflow-y:auto; flex:1; }
   .sym-img-row .top { display:flex; gap:8px; align-items:center; font-size:12px; }
-  .sym-img-row .name { font-weight:600; color:#c9d1d9; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .sym-img-row .kind { color:#8b949e; font-size:11px; flex-shrink:0; }
-  .sym-img-row .n { color:#6e7681; font-size:11px; margin-top:2px; }
-  .sym-detail-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; position:sticky; top:0; background:#0d1117; padding:14px 0 10px; z-index:1; }
-  .sym-detail-controls input[type=search] { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:5px 8px; border-radius:6px; font-size:12px; width:260px; }
-  .dump-table td.symname { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color:#c9d1d9; word-break:break-all; }
+  .sym-img-row .name { font-weight:600; color:#000000; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sym-img-row .kind { color:#8c8c8c; font-size:11px; flex-shrink:0; }
+  .sym-img-row .n { color:#8c8c8c; font-size:11px; margin-top:2px; }
+  .sym-detail-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; position:sticky; top:0; background:#ffffff; padding:14px 0 10px; z-index:1; }
+  .sym-detail-controls input[type=search] { background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:5px 8px; border-radius:8px; font-size:12px; width:260px; }
+  .sym-detail-controls input[type=search]:focus { outline:none; border-color:#0d0d0d; }
+  .dump-table td.symname { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color:#000000; word-break:break-all; }
   .diag-boards { display:flex; gap:4px; flex-wrap:wrap; }
-  .diag-boards button { background:#0d1117; color:#8b949e; border:1px solid #30363d; padding:3px 9px; border-radius:6px; font-size:12px; cursor:pointer; }
-  .diag-boards button.active { background:#1b2231; color:#c9d1d9; border-color:#388bfd; }
+  .diag-boards button { background:#ffffff; color:#8c8c8c; border:1px solid #dbdbdb; padding:3px 9px; border-radius:8px; font-size:12px; cursor:pointer; }
+  .diag-boards button.active { background:#0d0d0d; color:#ffffff; border-color:#0d0d0d; }
   .set-shell { width:min(720px,94vw); height:min(86vh,680px); display:flex; flex-direction:column; position:relative; padding:0; }
-  .set-close-x { position:absolute; top:10px; right:12px; z-index:2; width:28px; height:28px; border:none; background:transparent; color:#8b949e; font-size:20px; line-height:1; cursor:pointer; border-radius:6px; }
-  .set-close-x:hover { background:#21262d; color:#c9d1d9; }
+  .set-close-x { position:absolute; top:10px; right:12px; z-index:2; width:28px; height:28px; border:none; background:transparent; color:#8c8c8c; font-size:20px; line-height:1; cursor:pointer; border-radius:8px; }
+  .set-close-x:hover { background:#f5f5f5; color:#000000; }
   .set-layout { display:flex; flex:1; min-height:0; }
-  .set-nav { width:168px; flex-shrink:0; border-right:1px solid #21262d; padding:40px 8px 12px; display:flex; flex-direction:column; gap:2px; }
-  .set-nav button { display:block; width:100%; text-align:left; padding:8px 12px; border:none; background:transparent; color:#8b949e; border-radius:8px; font-size:13px; cursor:pointer; }
-  .set-nav button:hover { background:#161b22; color:#c9d1d9; }
-  .set-nav button.active { background:#21262d; color:#c9d1d9; font-weight:600; }
+  .set-nav { width:168px; flex-shrink:0; border-right:1px solid #dbdbdb; padding:40px 8px 12px; display:flex; flex-direction:column; gap:2px; }
+  .set-nav button { display:block; width:100%; text-align:left; padding:8px 12px; border:none; background:transparent; color:#8c8c8c; border-radius:8px; font-size:13px; cursor:pointer; }
+  .set-nav button:hover { background:#f5f5f5; color:#000000; }
+  .set-nav button.active { background:#0d0d0d; color:#ffffff; font-weight:600; }
   .set-main { flex:1; min-width:0; overflow-y:auto; padding:40px 28px 24px; }
   .set-page { display:none; }
   .set-page.active { display:block; }
-  .set-page h4 { margin:0 0 6px; font-size:18px; font-weight:600; color:#c9d1d9; }
-  .set-lead { margin:0 0 18px; font-size:12px; color:#8b949e; line-height:1.6; }
-  .set-section-title { color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.06em; margin:20px 0 8px; padding-top:4px; border-top:1px solid #21262d; }
+  .set-page h4 { margin:0 0 6px; font-size:18px; font-weight:600; color:#000000; }
+  .set-lead { margin:0 0 18px; font-size:12px; color:#8c8c8c; line-height:1.6; }
+  .set-section-title { color:#8c8c8c; font-size:11px; text-transform:uppercase; letter-spacing:0.06em; margin:20px 0 8px; padding-top:4px; border-top:1px solid #dbdbdb; }
   .set-section-title:first-child { margin-top:0; border-top:none; padding-top:0; }
-  .set-toggle-row { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:12px 0; border-bottom:1px solid #21262d; }
+  .set-toggle-row { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:12px 0; border-bottom:1px solid #dbdbdb; }
   .set-toggle-row:last-child { border-bottom:none; }
   .set-toggle-row .lab { flex:1; min-width:0; }
-  .set-toggle-row .lab b { display:block; font-size:13px; font-weight:600; color:#c9d1d9; }
-  .set-toggle-row .lab .fn { display:block; font-size:11px; color:#6e7681; margin-top:4px; line-height:1.55; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; word-break:break-all; }
+  .set-toggle-row .lab b { display:block; font-size:13px; font-weight:600; color:#000000; }
+  .set-toggle-row .lab .fn { display:block; font-size:11px; color:#8c8c8c; margin-top:4px; line-height:1.55; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; word-break:break-all; }
   .set-switch { position:relative; display:inline-block; width:44px; height:24px; flex-shrink:0; margin-top:2px; }
   .set-switch input { opacity:0; width:0; height:0; position:absolute; }
-  .set-switch .slider { position:absolute; inset:0; background:#30363d; border-radius:12px; cursor:pointer; transition:background .2s; }
-  .set-switch .slider:before { content:''; position:absolute; width:18px; height:18px; left:3px; top:3px; background:#c9d1d9; border-radius:50%; transition:transform .2s; }
-  .set-switch input:checked + .slider { background:#1f6feb; }
+  .set-switch .slider { position:absolute; inset:0; background:#dbdbdb; border-radius:12px; cursor:pointer; transition:background .2s; }
+  .set-switch .slider:before { content:''; position:absolute; width:18px; height:18px; left:3px; top:3px; background:#ffffff; border-radius:50%; transition:transform .2s; box-shadow:0 1px 2px rgba(0,0,0,0.25); }
+  .set-switch input:checked + .slider { background:#0d0d0d; }
   .set-switch input:checked + .slider:before { transform:translateX(20px); }
-  .set-row { display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid #21262d; }
+  .set-row { display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid #dbdbdb; }
   .set-row:last-child { border-bottom:none; }
   .set-row .lab { flex:1; }
-  .set-row .lab b { display:block; color:#c9d1d9; font-size:13px; font-weight:600; }
-  .set-row .lab span { display:block; color:#8b949e; font-size:11px; margin-top:2px; line-height:1.5; }
-  .set-row select { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:6px 9px; border-radius:6px; font-size:12px; min-width:120px; }
-  .set-row .val { color:#8b949e; font-size:12px; font-variant-numeric:tabular-nums; }
+  .set-row .lab b { display:block; color:#000000; font-size:13px; font-weight:600; }
+  .set-row .lab span { display:block; color:#8c8c8c; font-size:11px; margin-top:2px; line-height:1.5; }
+  .set-row select { background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:6px 9px; border-radius:8px; font-size:12px; min-width:120px; }
+  .set-row .val { color:#8c8c8c; font-size:12px; font-variant-numeric:tabular-nums; }
   .set-actions { display:flex; gap:10px; flex-wrap:wrap; padding-top:14px; }
-  .set-actions a.btn, .set-actions button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:7px 14px; border-radius:6px; font-size:13px; cursor:pointer; text-decoration:none; }
-  .set-actions a.btn:hover, .set-actions button:hover { background:#30363d; }
-  .set-actions button.danger { background:#3d1417; border-color:#5a1d1d; color:#ffa198; }
-  .loadmore { display:block; width:100%; text-align:center; padding:10px; background:#0d1117; color:#8b949e; border:none; border-top:1px solid #21262d; font-size:12px; cursor:pointer; }
-  .loadmore:hover { background:#161b22; color:#c9d1d9; }
-  .loadmore:disabled { color:#484f58; cursor:default; background:#0d1117; }
+  .set-actions a.btn, .set-actions button { background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:7px 14px; border-radius:8px; font-size:13px; cursor:pointer; text-decoration:none; transition: background .15s, border-color .15s; }
+  .set-actions a.btn:hover, .set-actions button:hover { background:#f5f5f5; border-color:#8c8c8c; }
+  .set-actions button.danger { background:#ffffff; border-color:#0d0d0d; color:#0d0d0d; font-weight:600; }
+  .set-actions button.danger:hover { background:#0d0d0d; color:#ffffff; }
+  .loadmore { display:block; width:100%; text-align:center; padding:10px; background:#ffffff; color:#8c8c8c; border:none; border-top:1px solid #dbdbdb; font-size:12px; cursor:pointer; }
+  .loadmore:hover { background:#f5f5f5; color:#000000; }
+  .loadmore:disabled { color:#dbdbdb; cursor:default; background:#ffffff; }
 </style>
 </head>
 <body>
 <header>
-  <h1>IOSDecryptHub<span class='ver' id='ver'></span></h1>
+  <h1><svg class="hdr-raven" viewBox="0 0 281 251" width="14" height="12" fill="currentColor" aria-hidden="true" style="vertical-align:middle;margin-right:6px;"><g fill-rule="evenodd"><path d="M8,36L4,46L19,45L33,48L41,48L50,50L50,52L53,51L55,53L54,56L58,57L57,65L59,66L58,72L54,78L56,77L60,78L56,90L54,93L49,97L53,97L57,95L60,92L60,95L58,98L55,107L55,112L54,114L56,110L60,109L58,115L58,129L61,138L62,127L64,121L66,119L68,121L68,132L70,141L77,158L82,165L80,156L81,137L84,147L90,158L92,160L100,177L101,181L101,188L103,182L103,169L101,163L102,159L106,164L110,172L109,166L111,165L124,178L127,184L127,189L110,205L106,207L96,206L90,207L86,211L86,215L89,212L95,213L125,212L128,211L154,211L165,212L169,214L168,210L165,207L146,204L156,196L163,189L164,194L167,186L169,188L171,180L175,180L184,183L191,187L205,202L223,227L232,236L238,240L247,244L257,246L266,246L268,245L268,242L264,237L267,236L276,237L276,233L263,220L236,189L239,189L247,193L249,193L256,197L265,200L273,201L258,185L228,157L231,156L234,158L239,159L239,156L237,151L224,134L207,115L196,95L188,84L176,73L160,64L158,62L155,61L150,56L145,46L147,46L139,37L142,36L146,38L129,21L127,20L130,19L128,17L122,14L120,12L106,6L95,4L79,5L69,8L61,15L50,17L44,17L27,22L16,28Z"/>
+    <path d="M151,180L153,184L153,189L138,204L135,206L123,207L118,205L125,198L131,194L140,186L143,179L147,176Z"/>
+    <path d="M97,114L104,135L98,129L96,125L95,116Z"/>
+    <path d="M125,68L140,68L147,71L130,72L126,73L122,75L119,78L115,86L115,99L117,108L122,118L128,127L133,133L148,147L146,148L135,140L123,128L114,115L114,113L111,108L108,98L108,88L110,81L113,76L117,72Z"/>
+    <path d="M88,53L100,60L104,66L103,70L99,64L101,77L99,80L97,76L97,72L95,68L95,79L90,94L89,101L87,98L87,83L82,93L81,98L82,113L81,116L76,107L75,102L76,86L70,96L69,92L71,88L71,84L68,85L68,83L73,79L74,73L76,69L78,72L78,78L80,71L79,67L80,64L84,70L84,77L84,64L83,59L86,62L89,68L89,71L89,67L87,62L89,59L92,62L87,55Z"/>
+    <path d="M28,38L34,38L42,36L59,36L66,37L69,41Z"/>
+    <path d="M10,40L16,33L24,27L40,22L47,23L43,26L47,26L50,28L49,30L57,30L65,32L71,35L73,37L70,38L65,36L57,35L43,35L21,38L13,41Z"/>
+    <path d="M89,20L92,23L92,28L89,31L84,32L80,29L79,27L87,28L89,25L85,24L85,22L87,20Z"/></g></svg>IOSDecryptHub<span class='ver' id='ver'></span></h1>
   <div class='stats' id='stats'>加载中…</div>
   <div class='spacer'></div>
-  <label style='color:#8b949e;font-size:12px;'><input type='checkbox' id='autoRefresh' checked> 自动刷新</label>
+  <label style='color:#8c8c8c;font-size:12px;'><input type='checkbox' id='autoRefresh' checked> 自动刷新</label>
   <a class='btn' id='dlAll' href='/download' target='_blank' title='下载完整落盘日志 — 每条都已实时写入设备沙箱, App 闪退/被检测杀掉后重启仍可取全量(含崩溃前), 用于离线排查闭环'>下载全部日志</a>
   <button id='diagBtn' title='查看内部诊断/审查日志, 便于排查与复现'>审查日志</button>
   <button id='mcpBtn' title='MCP 客户端接入配置 — 供 AI 经 HTTP 调用反汇编/符号/镜像分析'>MCP</button>
@@ -296,7 +311,7 @@
   <button id='tabClearBtn' class='danger'>清空本类</button>
   </div>
   <button id='viewNoiseBtn' class='toolbar-noise'>查看噪声<span class='n' id='n-noise-btn'></span></button>
-  <span id='count' style='color:#6e7681; font-size:11px;'></span>
+  <span id='count' style='color:#8c8c8c; font-size:11px;'></span>
 </div>
 <div class='workspace'>
   <div class='list-pane'>
@@ -320,7 +335,7 @@
     </div>
     <div id='dumpDone' class='dump-done' style='display:none;'></div>
     <table class='dump-table'><thead><tr><th>镜像</th><th>类型</th><th>大小</th><th>操作</th></tr></thead>
-      <tbody id='dumpImgBody'><tr><td colspan='4' style='color:#6e7681;'>点击「刷新镜像」加载…</td></tr></tbody></table>
+      <tbody id='dumpImgBody'><tr><td colspan='4' style='color:#8c8c8c;'>点击「刷新镜像」加载…</td></tr></tbody></table>
   </div>
 </div>
 <div id='filesPane' class='files-workspace' style='display:none;'>
@@ -349,7 +364,7 @@
   <div class='detail-pane'>
     <div class='sym-detail-controls'>
       <input id='symQ' type='search' placeholder='过滤符号 (子串, 如 SSL / CC / open)…'>
-      <span id='symCount' style='color:#6e7681; font-size:11px;'></span>
+      <span id='symCount' style='color:#8c8c8c; font-size:11px;'></span>
     </div>
     <div id='symDetailBody'><div class='detail-empty'>← 选择左侧 image 查看导入符号<br><br><span style='font-size:11px;'>fishhook 只能改<b>导入符号表</b> —— 即本 image 调用其它 dylib 导出的符号。凡在此出现的, 都是 fishhook 候选; 被<b>静态链接</b>进主二进制的符号不在导入表里, fishhook 无法拦截, 需改用 inline hook。<br><br>若目标通过 <b>dlsym("CCCrypt")</b> 拿函数指针再调用, 不走 import slot; 本插件另 hook <b>dlsym</b> 本身, 在解析时把已知符号重定向到 wrapper 并记录日志 —— 但<b>注入前已缓存的指针</b>无法追溯。</span></div></div>
   </div>
@@ -428,8 +443,8 @@
           </div>
           <div id='noisePatternsCrypto' style='display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;'></div>
           <div style='display:flex; gap:8px; margin-bottom:20px;'>
-            <input id='noisePatternInputCrypto' type='text' placeholder='加解密特征串, 如 MGCopyAnswer' style='flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:8px 10px; border-radius:6px; font-size:12px;'>
-            <button id='noisePatternAddCrypto' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
+            <input id='noisePatternInputCrypto' type='text' placeholder='加解密特征串, 如 MGCopyAnswer' style='flex:1; background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:8px 10px; border-radius:6px; font-size:12px;'>
+            <button id='noisePatternAddCrypto' style='background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
           </div>
           <div class='set-section-title'>系统噪声</div>
           <div class='set-toggle-row'>
@@ -438,8 +453,8 @@
           </div>
           <div id='noisePatternsSys' style='display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;'></div>
           <div style='display:flex; gap:8px;'>
-            <input id='noisePatternInputSys' type='text' placeholder='系统特征串, 如 /System/Library' style='flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:8px 10px; border-radius:6px; font-size:12px;'>
-            <button id='noisePatternAddSys' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
+            <input id='noisePatternInputSys' type='text' placeholder='系统特征串, 如 /System/Library' style='flex:1; background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:8px 10px; border-radius:6px; font-size:12px;'>
+            <button id='noisePatternAddSys' style='background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
           </div>
         </div>
         <div id='setPageSpoof' class='set-page'>
@@ -451,24 +466,24 @@
             <div class='lab'><b>启用越狱隐藏</b><span>命中清单的路径经 open/stat/access 返回不存在;DYLD 注入痕迹经 getenv 隐藏</span></div>
             <label class='set-switch'><input type='checkbox' id='spoofJbOn'><span class='slider'></span></label>
           </div>
-          <div class='set-section-title' style='font-size:12px;color:#8b949e;'>隐藏路径</div>
+          <div class='set-section-title' style='font-size:12px;color:#8c8c8c;'>隐藏路径</div>
           <div id='spoofJbPaths' style='display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;'></div>
           <div style='display:flex; gap:8px; margin-bottom:14px;'>
-            <input id='spoofJbPathInput' type='text' placeholder='如 /Applications/Cydia.app 或 /var/jb' style='flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:8px 10px; border-radius:6px; font-size:12px;'>
-            <button id='spoofJbPathAdd' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
+            <input id='spoofJbPathInput' type='text' placeholder='如 /Applications/Cydia.app 或 /var/jb' style='flex:1; background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:8px 10px; border-radius:6px; font-size:12px;'>
+            <button id='spoofJbPathAdd' style='background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
           </div>
-          <div class='set-section-title' style='font-size:12px;color:#8b949e;'>隐藏 URL Scheme</div>
+          <div class='set-section-title' style='font-size:12px;color:#8c8c8c;'>隐藏 URL Scheme</div>
           <div id='spoofJbSchemes' style='display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;'></div>
           <div style='display:flex; gap:8px; margin-bottom:14px;'>
-            <input id='spoofJbSchemeInput' type='text' placeholder='如 cydia、sileo、filza' style='flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:8px 10px; border-radius:6px; font-size:12px;'>
-            <button id='spoofJbSchemeAdd' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
+            <input id='spoofJbSchemeInput' type='text' placeholder='如 cydia、sileo、filza' style='flex:1; background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:8px 10px; border-radius:6px; font-size:12px;'>
+            <button id='spoofJbSchemeAdd' style='background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
           </div>
-          <div class='set-section-title' style='font-size:12px;color:#8b949e;'>隐藏动态库(注入痕迹)</div>
+          <div class='set-section-title' style='font-size:12px;color:#8c8c8c;'>隐藏动态库(注入痕迹)</div>
           <p class='set-lead' style='margin:2px 0 8px;'>命中 image 名(子串)时,_dyld_get_image_name / dladdr 返回良性系统库名,挫败"遍历已加载库查黑名单"的注入检测。默认含自身 dylib 与常见注入框架。</p>
           <div id='spoofJbImages' style='display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;'></div>
           <div style='display:flex; gap:8px; margin-bottom:20px;'>
-            <input id='spoofJbImageInput' type='text' placeholder='如 decrypt_helper、MobileSubstrate' style='flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:8px 10px; border-radius:6px; font-size:12px;'>
-            <button id='spoofJbImageAdd' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
+            <input id='spoofJbImageInput' type='text' placeholder='如 decrypt_helper、MobileSubstrate' style='flex:1; background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:8px 10px; border-radius:6px; font-size:12px;'>
+            <button id='spoofJbImageAdd' style='background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:8px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>添加</button>
           </div>
 
           <div class='set-section-title'>反调试</div>
@@ -483,8 +498,8 @@
             <label class='set-switch'><input type='checkbox' id='spoofDeviceOn'><span class='slider'></span></label>
           </div>
           <div style='margin:10px 0 4px;'>
-            <button id='spoofDeviceRandom' style='background:#1f6feb; color:#fff; border:1px solid #388bfd; padding:8px 16px; border-radius:6px; font-size:12px; cursor:pointer;'>一键随机设备</button>
-            <span style='color:#6e7681; font-size:11px; margin-left:8px;'>随机选一台真实机型 + 生成随机 IDFV/IDFA,并自动开启改机</span>
+            <button id='spoofDeviceRandom' style='background:#0d0d0d; color:#fff; border:1px solid #0d0d0d; padding:8px 16px; border-radius:6px; font-size:12px; cursor:pointer;'>一键随机设备</button>
+            <span style='color:#8c8c8c; font-size:11px; margin-left:8px;'>随机选一台真实机型 + 生成随机 IDFV/IDFA,并自动开启改机</span>
           </div>
           <div id='spoofDeviceFields' style='display:flex; flex-direction:column; gap:8px; margin-top:10px;'></div>
         </div>
@@ -492,15 +507,15 @@
           <h4>配置 JSON</h4>
           <p class='set-lead'>直接编辑全部配置(捕获开关 / 噪声规则 / 伪装绕过规则)。保存时<b>按板块合并</b> —— JSON 里有哪段就应用哪段,删掉某段则该段保持不变。所以只想导入某块时,只留那一段即可(如只留 <code>{"noise":{…}}</code>)。</p>
           <div class='set-actions' style='gap:8px; flex-wrap:wrap;'>
-            <button id='rawReload' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:7px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>重新载入</button>
-            <button id='rawCopy' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:7px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>复制</button>
-            <button id='rawDownload' style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:7px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>下载</button>
-            <label style='background:#21262d; color:#c9d1d9; border:1px solid #30363d; padding:7px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>从文件载入<input id='rawFile' type='file' accept='.json,application/json' style='display:none'></label>
+            <button id='rawReload' style='background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:7px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>重新载入</button>
+            <button id='rawCopy' style='background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:7px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>复制</button>
+            <button id='rawDownload' style='background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:7px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>下载</button>
+            <label style='background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:7px 14px; border-radius:6px; font-size:12px; cursor:pointer;'>从文件载入<input id='rawFile' type='file' accept='.json,application/json' style='display:none'></label>
           </div>
-          <textarea id='rawCfgText' spellcheck='false' style='width:100%; box-sizing:border-box; height:340px; margin-top:10px; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:12px; border-radius:6px; font-size:12px; line-height:1.5; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; resize:vertical; white-space:pre; overflow-wrap:normal;'></textarea>
+          <textarea id='rawCfgText' spellcheck='false' style='width:100%; box-sizing:border-box; height:340px; margin-top:10px; background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:12px; border-radius:6px; font-size:12px; line-height:1.5; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; resize:vertical; white-space:pre; overflow-wrap:normal;'></textarea>
           <div class='set-actions' style='padding-top:8px;'>
-            <button id='rawSave' style='background:#238636; color:#fff; border:1px solid #2ea043; padding:8px 18px; border-radius:6px; font-size:12px; cursor:pointer;'>保存并应用</button>
-            <span id='rawHint' style='color:#6e7681; font-size:11px; margin-left:10px;'></span>
+            <button id='rawSave' style='background:#0d0d0d; color:#fff; border:1px solid #0d0d0d; padding:8px 18px; border-radius:6px; font-size:12px; cursor:pointer;'>保存并应用</button>
+            <span id='rawHint' style='color:#8c8c8c; font-size:11px; margin-left:10px;'></span>
           </div>
         </div>
         <div id='setPageData' class='set-page'>
@@ -885,7 +900,7 @@
     const n = listEntries.length;
     $('count').textContent = n+' / '+(stats.total||0)+(cached?' · 断连前缓存':'');
     if (!n) { $('list').innerHTML = '<div class="empty">该分类还没有记录…<br>在 App 里触发对应操作看看?</div>'; return; }
-    let html = cached ? '<div class="empty" style="padding:9px 14px;color:#e3b341;text-align:left;border-bottom:1px solid #21262d;">服务不可达 — 以下为浏览器缓存的断连前数据</div>' : '';
+    let html = cached ? '<div class="empty" style="padding:9px 14px;color:#8c8c8c;text-align:left;border-bottom:1px solid #dbdbdb;">服务不可达 — 以下为浏览器缓存的断连前数据</div>' : '';
     html += listEntries.map(rowHTML).join('');
     if (!cached && listHasMore) html += '<button class="loadmore" id="loadMoreBtn">加载更早 ↓</button>';
     $('list').innerHTML = html;
@@ -980,14 +995,14 @@
   let dumpPolling = null;
   function fmtSize(n){ n=+n||0; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(1)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
   async function loadDumpImages(){
-    $('dumpImgBody').innerHTML = '<tr><td colspan="4" style="color:#8b949e;"><span class="spinner" style="margin-right:8px;"></span>加载镜像…</td></tr>';
+    $('dumpImgBody').innerHTML = '<tr><td colspan="4" style="color:#8c8c8c;"><span class="spinner" style="margin-right:8px;"></span>加载镜像…</td></tr>';
     try {
       const d = await fetchJSON('/api/dump/images');
       const rows = (d.images||[]).map(im =>
         '<tr><td>'+escapeHTML(im.name)+'</td><td>'+(im.kind==='main'?'主程序':'Framework')+'</td>'+
         '<td>'+fmtSize(im.size)+'</td>'+
         '<td><a class="dl-link" href="'+dlUrl('/api/dump/image?name='+encodeURIComponent(im.name))+'">⬇ 下载</a></td></tr>');
-      $('dumpImgBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" style="color:#6e7681;">未发现本 App 镜像</td></tr>';
+      $('dumpImgBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" style="color:#8c8c8c;">未发现本 App 镜像</td></tr>';
     } catch(e){ $('dumpImgBody').innerHTML = '<tr><td colspan="4">'+escapeHTML(e.message)+'</td></tr>'; }
   }
   async function startDump(mode){
@@ -1034,7 +1049,7 @@
     let acc = '';
     for (const p of parts) {
       acc = acc ? acc + '/' + p : p;
-      html += ' <span style="color:#484f58">/</span> <a href="#" data-files-nav="'+escapeHTML(acc)+'">'+escapeHTML(p)+'</a>';
+      html += ' <span style="color:#dbdbdb">/</span> <a href="#" data-files-nav="'+escapeHTML(acc)+'">'+escapeHTML(p)+'</a>';
     }
     $('filesBreadcrumb').innerHTML = html;
   }
@@ -1087,7 +1102,7 @@
     $('filesPreviewBody').textContent = '加载中…';
     try {
       const d = await fetchJSON('/api/files/preview?path='+encodeURIComponent(path));
-      const fmt = d.format === 'hex' ? ' <span style="color:#8b949e;font-size:11px;">(Hex)</span>' : '';
+      const fmt = d.format === 'hex' ? ' <span style="color:#8c8c8c;font-size:11px;">(Hex)</span>' : '';
       $('filesPreviewHead').innerHTML =
         '<span class="path">'+escapeHTML(path)+fmt+' · '+fmtSize(d.size||0)+'</span>'
         +'<a class="dl-link" href="'+dlUrl('/api/files/download?path='+encodeURIComponent(path))+'" download>下载</a>';
@@ -1138,9 +1153,9 @@
     try {
       const d = await fetchJSON('/api/symbols?img='+encodeURIComponent(selectedSymIdx)+'&q='+encodeURIComponent(q)+'&limit=500');
       const rows = (d.symbols||[]).map((nm,i) =>
-        '<tr><td style="color:#6e7681;width:48px;">'+(i+1)+'</td><td class="symname">'+escapeHTML(nm)+'</td></tr>');
+        '<tr><td style="color:#8c8c8c;width:48px;">'+(i+1)+'</td><td class="symname">'+escapeHTML(nm)+'</td></tr>');
       $('symDetailBody').innerHTML = '<table class="dump-table"><thead><tr><th style="width:48px;">#</th><th>导入符号 (均为 fishhook 候选)</th></tr></thead><tbody>'
-        + (rows.join('') || '<tr><td colspan="2" style="color:#6e7681;">无匹配符号</td></tr>') + '</tbody></table>';
+        + (rows.join('') || '<tr><td colspan="2" style="color:#8c8c8c;">无匹配符号</td></tr>') + '</tbody></table>';
       $('symCount').textContent = d.shown+' / '+d.total+' 个导入符号'+(d.total>d.shown?' (已截断, 用过滤缩小)':'');
     } catch(e){ $('symDetailBody').innerHTML = '<div class="detail-empty">'+escapeHTML(e.message)+'</div>'; }
   }
@@ -1174,8 +1189,8 @@
     const el = board==='sys' ? $('noisePatternsSys') : $('noisePatternsCrypto');
     el.innerHTML = (list && list.length) ? list.map(p =>
       '<span class="cap-chip" data-pattern="'+escapeHTML(p)+'">'+escapeHTML(p)
-      + ' <span style="color:#8b949e;cursor:pointer;" data-remove-pattern="'+escapeHTML(p)+'" data-board="'+board+'">✕</span></span>'
-    ).join('') : '<span style="color:#6e7681;font-size:12px;">(空 — 添加与 input/detail 完全相等的字符串)</span>';
+      + ' <span style="color:#8c8c8c;cursor:pointer;" data-remove-pattern="'+escapeHTML(p)+'" data-board="'+board+'">✕</span></span>'
+    ).join('') : '<span style="color:#8c8c8c;font-size:12px;">(空 — 添加与 input/detail 完全相等的字符串)</span>';
   }
   async function loadNoisePatterns(){
     try {
@@ -1188,7 +1203,7 @@
       renderNoisePatterns('crypto', dc.patterns||[]);
       renderNoisePatterns('sys', ds.patterns||[]);
     } catch(e){
-      $('noisePatternsCrypto').innerHTML = '<span style="color:#ffa198;font-size:12px;">获取失败: '+escapeHTML(e.message)+'</span>';
+      $('noisePatternsCrypto').innerHTML = '<span style="color:#0d0d0d;font-weight:700;font-size:12px;">获取失败: '+escapeHTML(e.message)+'</span>';
       $('noisePatternsSys').innerHTML = '';
     }
   }
@@ -1205,15 +1220,15 @@
   function renderSpoofChips(elId, list, kind){
     $(elId).innerHTML = (list && list.length) ? list.map(p =>
       '<span class="cap-chip" data-val="'+escapeHTML(p)+'">'+escapeHTML(p)
-      + ' <span style="color:#8b949e;cursor:pointer;" data-spoof-remove="'+escapeHTML(p)+'" data-kind="'+kind+'">✕</span></span>'
-    ).join('') : '<span style="color:#6e7681;font-size:12px;">(空)</span>';
+      + ' <span style="color:#8c8c8c;cursor:pointer;" data-spoof-remove="'+escapeHTML(p)+'" data-kind="'+kind+'">✕</span></span>'
+    ).join('') : '<span style="color:#8c8c8c;font-size:12px;">(空)</span>';
   }
   function renderSpoofDeviceFields(dev){
     $('spoofDeviceFields').innerHTML = SPOOF_DEVICE_FIELDS.map(f =>
       '<div style="display:flex; align-items:center; gap:10px;">'
-      + '<span style="width:150px; color:#8b949e; font-size:12px;">'+escapeHTML(f.label)+'</span>'
+      + '<span style="width:150px; color:#8c8c8c; font-size:12px;">'+escapeHTML(f.label)+'</span>'
       + '<input type="text" data-devkey="'+f.key+'" value="'+escapeHTML(dev[f.key]||'')+'" placeholder="'+escapeHTML(f.ph)
-      + '" style="flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:7px 9px; border-radius:6px; font-size:12px;"></div>'
+      + '" style="flex:1; background:#ffffff; color:#000000; border:1px solid #dbdbdb; padding:7px 9px; border-radius:6px; font-size:12px;"></div>'
     ).join('');
   }
   function applySpoofSnapshot(s){
@@ -1228,7 +1243,7 @@
   }
   async function loadSpoof(){
     try { applySpoofSnapshot(await fetchJSON('/api/spoof')); }
-    catch(e){ $('spoofJbPaths').innerHTML = '<span style="color:#ffa198;font-size:12px;">获取失败: '+escapeHTML(e.message)+'</span>'; }
+    catch(e){ $('spoofJbPaths').innerHTML = '<span style="color:#0d0d0d;font-weight:700;font-size:12px;">获取失败: '+escapeHTML(e.message)+'</span>'; }
   }
   async function postSpoof(params){
     try { applySpoofSnapshot(await fetchJSON('/api/spoof?'+params, {method:'POST'})); toast('已保存'); }

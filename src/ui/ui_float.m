@@ -16,11 +16,18 @@
 #import "http_server.h"
 #import "dh_health.h"
 
-#define DH_ACCENT [UIColor colorWithRed:0.36 green:0.92 blue:0.70 alpha:1.0]
+// 黑白设计系统: #0d0d0d accent / #000 ink / #8c8c8c muted / #dbdbdb line / #f5f5f5 surface / #101828 link
+#define DH_ACCENT   [UIColor colorWithRed:0.051 green:0.051 blue:0.051 alpha:1.0]  // #0d0d0d
+#define DH_INK      [UIColor blackColor]                                           // #000000
+#define DH_MUTED    [UIColor colorWithRed:0.549 green:0.549 blue:0.549 alpha:1.0]  // #8c8c8c
+#define DH_LINE     [UIColor colorWithRed:0.859 green:0.859 blue:0.859 alpha:1.0]  // #dbdbdb
+#define DH_SURFACE  [UIColor colorWithRed:0.961 green:0.961 blue:0.961 alpha:1.0]  // #f5f5f5
+#define DH_LINK     [UIColor colorWithRed:0.063 green:0.094 blue:0.157 alpha:1.0]  // #101828
 
 @interface DHFloatingController : NSObject
 @property (nonatomic, strong) UIWindow    *window;
 @property (nonatomic, strong) UIView      *bar;
+@property (nonatomic, strong) UIView      *cardView;   // 黑白卡片底 (白底黑边)
 @property (nonatomic, strong) UILabel     *titleLabel;
 @property (nonatomic, strong) UIButton    *minBtn;
 @property (nonatomic, strong) UIImageView *collapsedIcon;   // 缩小态的圆形小图标
@@ -73,23 +80,23 @@ static DHFloatingController *gFloat = nil;
     w.frame = frame;
     w.windowLevel = UIWindowLevelAlert + 1000;
     w.backgroundColor = [UIColor clearColor];
-    w.layer.cornerRadius = 18;
+    w.layer.cornerRadius = 8;
     w.layer.masksToBounds = YES;
     w.rootViewController = [UIViewController new];
     w.rootViewController.view.backgroundColor = [UIColor clearColor];
     self.window = w;
     UIView *root = w.rootViewController.view;
 
-    // 毛玻璃背景 (UIVisualEffectView) — 现代玻璃质感
-    UIVisualEffectView *glass = [[UIVisualEffectView alloc]
-        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
-    glass.frame = CGRectMake(0, 0, W, H);
-    glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    glass.layer.cornerRadius = 18;
-    glass.layer.masksToBounds = YES;
-    glass.layer.borderWidth = 0.5;
-    glass.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.20].CGColor;
-    [root addSubview:glass];
+    // 黑白卡片: 纯白底 + 1pt 黑描边 (不再用深色毛玻璃)
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W, H)];
+    card.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    card.backgroundColor = [UIColor whiteColor];
+    card.layer.cornerRadius = 8;
+    card.layer.masksToBounds = YES;
+    card.layer.borderWidth = 1.0;
+    card.layer.borderColor = [UIColor blackColor].CGColor;
+    [root addSubview:card];
+    self.cardView = card;
 
     // 缩小态的圆形小图标 (SF Symbol 钥匙, 渲染可靠, 不依赖 emoji), 展开态隐藏
     UIImageView *icon = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, W, H)];
@@ -104,7 +111,7 @@ static DHFloatingController *gFloat = nil;
     self.collapsedIcon = icon;
     [root addSubview:icon];
 
-    // 标题栏 (透明, 让毛玻璃透出)
+    // 标题栏 (透明, 铺在白色卡面上)
     UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W, 40)];
     bar.backgroundColor = [UIColor clearColor];
     bar.userInteractionEnabled = YES;
@@ -120,7 +127,7 @@ static DHFloatingController *gFloat = nil;
     self.minBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     self.minBtn.frame = CGRectMake(W - 44, 4, 40, 32);   // 44pt 触控区
     [self.minBtn setTitle:@"–" forState:UIControlStateNormal];
-    [self.minBtn setTitleColor:[UIColor colorWithWhite:0.72 alpha:1.0] forState:UIControlStateNormal];
+    [self.minBtn setTitleColor:DH_MUTED forState:UIControlStateNormal];
     self.minBtn.titleLabel.font = [UIFont systemFontOfSize:24 weight:UIFontWeightMedium];
     [self.minBtn addTarget:self action:@selector(toggleCollapsed) forControlEvents:UIControlEventTouchUpInside];
     [bar addSubview:self.minBtn];
@@ -138,14 +145,14 @@ static DHFloatingController *gFloat = nil;
     // 统计文本
     self.statsLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 48, W - 28, 52)];
     self.statsLabel.numberOfLines = 0;
-    self.statsLabel.textColor = [UIColor colorWithWhite:0.92 alpha:1.0];
+    self.statsLabel.textColor = DH_INK;
     self.statsLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
     [root addSubview:self.statsLabel];
 
     // URL 一行: http://ip:port  (点击复制)
     self.urlLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 104, W - 28, 36)];
     self.urlLabel.numberOfLines = 2;
-    self.urlLabel.textColor = [UIColor colorWithRed:0.45 green:0.85 blue:1.0 alpha:1.0];
+    self.urlLabel.textColor = DH_LINK;
     self.urlLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
     self.urlLabel.adjustsFontSizeToFitWidth = YES;
     self.urlLabel.minimumScaleFactor = 0.7;
@@ -156,13 +163,13 @@ static DHFloatingController *gFloat = nil;
     [self.urlLabel addGestureRecognizer:tap];
     [root addSubview:self.urlLabel];
 
-    // 操作按钮区 (44pt 触控高度, 玻璃按钮)
+    // 操作按钮区 (44pt 触控高度, 黑白按钮: 主操作黑底 / 次操作灰底 / 危险操作黑描边)
     CGFloat by = 148, bw = 70, bh = 40, bx = 12, gap = 9;
-    self.openBtn  = [self makeButton:@"日志" color:[UIColor colorWithRed:0.36 green:0.65 blue:1.00 alpha:1.0]
+    self.openBtn  = [self makeButton:@"日志" style:0
                                frame:CGRectMake(bx, by, bw, bh) action:@selector(onOpenLog)];
-    self.pauseBtn = [self makeButton:@"暂停" color:[UIColor colorWithRed:0.95 green:0.75 blue:0.30 alpha:1.0]
+    self.pauseBtn = [self makeButton:@"暂停" style:1
                                frame:CGRectMake(bx + (bw+gap), by, bw, bh) action:@selector(onTogglePause)];
-    self.clearBtn = [self makeButton:@"清空" color:[UIColor colorWithRed:0.95 green:0.45 blue:0.45 alpha:1.0]
+    self.clearBtn = [self makeButton:@"清空" style:2
                                frame:CGRectMake(bx + 2*(bw+gap), by, bw, bh) action:@selector(onClear)];
     [root addSubview:self.openBtn];
     [root addSubview:self.pauseBtn];
@@ -181,19 +188,45 @@ static DHFloatingController *gFloat = nil;
     [self refreshStats];
 }
 
-- (UIButton *)makeButton:(NSString *)t color:(UIColor *)c frame:(CGRect)f action:(SEL)sel {
+- (UIButton *)makeButton:(NSString *)t style:(int)style frame:(CGRect)f action:(SEL)sel {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     b.frame = f;
     [b setTitle:t forState:UIControlStateNormal];
-    [b setTitleColor:[UIColor colorWithWhite:0.96 alpha:1.0] forState:UIControlStateNormal];
     b.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
-    // 玻璃按钮: 半透明语义色底 + 同色描边 + 白字
-    b.backgroundColor = [c colorWithAlphaComponent:0.22];
-    b.layer.cornerRadius = 11;
+    b.layer.cornerRadius = 8;
     b.layer.borderWidth = 1.0;
-    b.layer.borderColor = [c colorWithAlphaComponent:0.55].CGColor;
+    if (style == 0) {
+        // 主操作: 黑底白字
+        b.backgroundColor = [UIColor blackColor];
+        [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        b.layer.borderColor = [UIColor blackColor].CGColor;
+    } else if (style == 1) {
+        // 次操作: #f5f5f5 灰底黑字
+        b.backgroundColor = DH_SURFACE;
+        [b setTitleColor:DH_INK forState:UIControlStateNormal];
+        b.layer.borderColor = DH_LINE.CGColor;
+    } else {
+        // 危险操作: 白底黑描边黑字
+        b.backgroundColor = [UIColor whiteColor];
+        [b setTitleColor:DH_INK forState:UIControlStateNormal];
+        b.layer.borderColor = [UIColor blackColor].CGColor;
+    }
     [b addTarget:self action:sel forControlEvents:UIControlEventTouchUpInside];
     return b;
+}
+
+// URL 行样式: 正常 = #101828 深色; 异常 = 黑底白字反白 (fail-loud, 不再用红/蓝)
+- (void)applyUrlStyle:(BOOL)error {
+    if (error) {
+        self.urlLabel.backgroundColor = [UIColor blackColor];
+        self.urlLabel.textColor = [UIColor whiteColor];
+        self.urlLabel.layer.cornerRadius = 6;
+        self.urlLabel.layer.masksToBounds = YES;
+    } else {
+        self.urlLabel.backgroundColor = [UIColor clearColor];
+        self.urlLabel.textColor = DH_LINK;
+        self.urlLabel.layer.cornerRadius = 0;
+    }
 }
 
 - (void)refreshStats {
@@ -217,25 +250,23 @@ static DHFloatingController *gFloat = nil;
     // 而不是恒显"启动中…"假装一切正常.
     const char *hc = dh_health_summary();
     NSString *health = (hc && hc[0]) ? [NSString stringWithUTF8String:hc] : @"";
-    UIColor *blue = [UIColor colorWithRed:0.45 green:0.85 blue:1.0 alpha:1.0];
-    UIColor *red  = [UIColor colorWithRed:0.98 green:0.45 blue:0.42 alpha:1.0];
 
     uint16_t port = dh_http_port();
     if (dh_health_http_failed()) {
-        self.urlLabel.textColor = red;
+        [self applyUrlStyle:YES];
         self.urlLabel.text = [NSString stringWithFormat:@"服务失败\n%@", health.length ? health : @"端口被占用"];
     } else if (port > 0) {
         NSString *url = dh_http_url();
         if (dh_health_local_only()) url = [url stringByAppendingString:@" (仅本地)"];
         if (health.length) {
-            self.urlLabel.textColor = red;
+            [self applyUrlStyle:YES];
             self.urlLabel.text = [NSString stringWithFormat:@"%@\n⚠ %@", url, health];
         } else {
-            self.urlLabel.textColor = blue;
+            [self applyUrlStyle:NO];
             self.urlLabel.text = [NSString stringWithFormat:@"%@\n(点这里复制)", url];
         }
     } else {
-        self.urlLabel.textColor = blue;
+        [self applyUrlStyle:NO];
         self.urlLabel.text = @"(本地服务启动中…)";
     }
 }
@@ -249,7 +280,7 @@ static DHFloatingController *gFloat = nil;
     self.urlLabel.textColor = DH_ACCENT;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        self.urlLabel.textColor = [UIColor colorWithRed:0.45 green:0.85 blue:1.0 alpha:1.0];
+        self.urlLabel.textColor = DH_LINK;
         if ([self.urlLabel.text isEqualToString:@"已复制到剪贴板"]) self.urlLabel.text = original;
     });
 }
@@ -281,13 +312,14 @@ static DHFloatingController *gFloat = nil;
         target = self.expandedFrame;
         target.origin.x = self.window.frame.origin.x;
         target.origin.y = self.window.frame.origin.y;
-        radius = 18;
+        radius = 8;
     }
     BOOL col = self.collapsed;
     [UIView animateWithDuration:0.30 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0
                         options:UIViewAnimationOptionCurveEaseInOut animations:^{
         self.window.frame = target;
         self.window.layer.cornerRadius = radius;
+        self.cardView.layer.cornerRadius = radius;
         self.collapsedIcon.frame = CGRectMake(0, 0, target.size.width, target.size.height);
         self.collapsedIcon.alpha = col ? 1 : 0;
         self.titleLabel.alpha = col ? 0 : 1;

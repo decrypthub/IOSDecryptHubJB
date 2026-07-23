@@ -7,6 +7,11 @@
 #import "log_store.h"
 #import "dh_noise.h"
 
+// 黑白设计系统: #0d0d0d accent / #000 ink / #8c8c8c muted / #dbdbdb line
+#define DH_INK   [UIColor blackColor]
+#define DH_MUTED [UIColor colorWithRed:0.549 green:0.549 blue:0.549 alpha:1.0]
+#define DH_LINE  [UIColor colorWithRed:0.859 green:0.859 blue:0.859 alpha:1.0]
+
 // ===================== 详情页 =====================
 @interface DHLogDetailVC : UIViewController
 @property (nonatomic, strong) DHLogEntry *entry;
@@ -21,7 +26,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor colorWithWhite:0.07 alpha:1.0];
+    self.view.backgroundColor = [UIColor whiteColor];
     self.title = [NSString stringWithFormat:@"#%llu %@", (unsigned long long)_entry.seq, _entry.algorithm];
 
     UIBarButtonItem *copyBtn = [[UIBarButtonItem alloc] initWithTitle:@"拷贝全部"
@@ -33,7 +38,7 @@
     UITextView *tv = [[UITextView alloc] initWithFrame:self.view.bounds];
     tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     tv.backgroundColor = [UIColor clearColor];
-    tv.textColor = [UIColor colorWithWhite:0.92 alpha:1.0];
+    tv.textColor = DH_INK;
     tv.font = [UIFont fontWithName:@"Menlo" size:11];
     tv.editable = NO;
     tv.alwaysBounceVertical = YES;
@@ -108,7 +113,7 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"IOSDecryptHub - 日志";
-    self.view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1.0];
+    self.view.backgroundColor = [UIColor whiteColor];
     self.filterCategory = -1;
     self.filterNoiseBoard = -1;
     self.searchKw = @"";
@@ -125,6 +130,12 @@
 
     self.segment = [[UISegmentedControl alloc] initWithItems:@[@"全部", @"加密", @"系统", @"加密噪声", @"系统噪声"]];
     self.segment.selectedSegmentIndex = 0;
+    // 黑白分段: 选中态黑底白字
+    if (@available(iOS 13.0, *)) {
+        self.segment.selectedSegmentTintColor = [UIColor blackColor];
+    }
+    [self.segment setTitleTextAttributes:@{NSForegroundColorAttributeName: DH_MUTED} forState:UIControlStateNormal];
+    [self.segment setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor whiteColor]} forState:UIControlStateSelected];
     [self.segment addTarget:self action:@selector(onSegment:) forControlEvents:UIControlEventValueChanged];
     self.segment.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.segment];
@@ -132,14 +143,14 @@
     self.searchBar = [[UISearchBar alloc] init];
     self.searchBar.placeholder = @"搜索: 算法/明文/Hex...";
     self.searchBar.delegate = self;
-    self.searchBar.barStyle = UIBarStyleBlack;
+    self.searchBar.barStyle = UIBarStyleDefault;
     self.searchBar.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.searchBar];
 
     self.table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     self.table.translatesAutoresizingMaskIntoConstraints = NO;
     self.table.backgroundColor = [UIColor clearColor];
-    self.table.separatorColor = [UIColor colorWithWhite:0.20 alpha:1.0];
+    self.table.separatorColor = DH_LINE;
     self.table.dataSource = self;
     self.table.delegate = self;
     [self.view addSubview:self.table];
@@ -233,24 +244,16 @@
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:kCell];
     if (!c) {
         c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:kCell];
-        c.backgroundColor = [UIColor clearColor];
+        c.backgroundColor = [UIColor whiteColor];
         c.textLabel.font = [UIFont boldSystemFontOfSize:13];
-        c.textLabel.textColor = [UIColor whiteColor];
+        c.textLabel.textColor = DH_INK;
         c.detailTextLabel.font = [UIFont fontWithName:@"Menlo" size:10];
-        c.detailTextLabel.textColor = [UIColor colorWithWhite:0.65 alpha:1.0];
+        c.detailTextLabel.textColor = DH_MUTED;
         c.detailTextLabel.numberOfLines = 2;
     }
     DHLogEntry *e = self.data[ip.row];
-    UIColor *catColor = [UIColor colorWithRed:0.7 green:0.7 blue:0.7 alpha:1.0];
-    switch (e.category) {
-        case DHCategoryDigest:     catColor = [UIColor colorWithRed:0.4 green:0.85 blue:0.6 alpha:1.0]; break;
-        case DHCategoryHMAC:       catColor = [UIColor colorWithRed:0.4 green:0.75 blue:0.95 alpha:1.0]; break;
-        case DHCategorySymmetric:  catColor = [UIColor colorWithRed:0.95 green:0.65 blue:0.35 alpha:1.0]; break;
-        case DHCategoryAsymmetric: catColor = [UIColor colorWithRed:0.95 green:0.55 blue:0.85 alpha:1.0]; break;
-        case DHCategoryFile:       catColor = [UIColor colorWithRed:0.85 green:0.78 blue:0.35 alpha:1.0]; break;
-        case DHCategorySystem:     catColor = [UIColor colorWithRed:0.72 green:0.60 blue:0.98 alpha:1.0]; break;
-        default: break;
-    }
+    // 黑白风格: 分类不再用彩色区分 (靠分段筛选与算法名辨识)
+    UIColor *catColor = DH_INK;
     NSMutableAttributedString *title = [[NSMutableAttributedString alloc] initWithString:
         [NSString stringWithFormat:@"#%llu  %@  %@", (unsigned long long)e.seq, e.algorithm, e.operation]];
     [title addAttribute:NSForegroundColorAttributeName value:catColor
@@ -321,13 +324,14 @@
         DHLogListVC *list = [DHLogListVC new];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:list];
         nav.modalPresentationStyle = UIModalPresentationFullScreen;
-        nav.navigationBar.barStyle = UIBarStyleBlack;
-        nav.navigationBar.tintColor = [UIColor whiteColor];
+        nav.navigationBar.barStyle = UIBarStyleDefault;
+        nav.navigationBar.tintColor = DH_INK;
         if (@available(iOS 13.0, *)) {
             UINavigationBarAppearance *ap = [UINavigationBarAppearance new];
             [ap configureWithOpaqueBackground];
-            ap.backgroundColor = [UIColor colorWithWhite:0.10 alpha:1.0];
-            ap.titleTextAttributes = @{NSForegroundColorAttributeName: UIColor.whiteColor};
+            ap.backgroundColor = [UIColor whiteColor];
+            ap.shadowColor = DH_LINE;
+            ap.titleTextAttributes = @{NSForegroundColorAttributeName: DH_INK};
             nav.navigationBar.standardAppearance = ap;
             nav.navigationBar.scrollEdgeAppearance = ap;
         }
