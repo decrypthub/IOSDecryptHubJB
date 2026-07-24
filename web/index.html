@@ -125,10 +125,12 @@
   .io-section.kv-card  { background:#171b22; border:1px solid #414a59; border-radius:8px; padding:10px 14px; }
   .io-section.in-card  { background:#0b0d12; border:1px solid #414a59; border-radius:8px; padding:12px 14px 14px; }
   .io-section.out-card { background:#0b0d12; border:1px solid #414a59; border-radius:8px; padding:12px 14px 14px; }
+  .io-section.raw-card { background:#0b1a18; border:1px solid #1a5a4a; border-radius:8px; padding:12px 14px 14px; }
   .io-label { font-size:13px; font-weight:700; letter-spacing:0.04em; padding:5px 12px; border-radius:6px; display:inline-block; margin-bottom:10px; }
   .io-label.in  { background:#8ab4ff; color:#0b0d12; }
   .io-label.out { background:#0b0d12; color:#f7f8fb; border:1px solid #f7f8fb; }
   .io-label.kv  { background:#171b22; color:#f7f8fb; border:1px solid #414a59; }
+  .io-label.raw { background:#0d2926; color:#7fd6df; border:1px solid #1a5a4a; }
   .io-meta { color:#b0b8c4; font-size:11px; margin-bottom:6px; }
   .detail-pane h3 { font-size:11px; color:#b0b8c4; margin:12px 0 5px; font-weight:500; text-transform:uppercase; letter-spacing:0.05em; }
   .detail-pane pre { background:#171b22; border:1px solid #414a59; border-radius:6px; padding:8px 10px; margin:0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.5; max-height:300px; overflow:auto; white-space:pre-wrap; word-break:break-all; color:#f7f8fb; }
@@ -273,27 +275,46 @@
   html,body { background:var(--bg); color:var(--ink); font-size:13px; letter-spacing:0; }
   body { min-width:320px; }
   button,input,select,textarea { letter-spacing:0; }
-  header { min-height:60px; padding:9px 16px; gap:14px; background:var(--chrome); border-bottom-color:var(--line); }
+  header { min-height:60px; padding:9px 16px; gap:14px; background:var(--surface); border-bottom-color:var(--line); }
   .brand-lockup { display:flex; align-items:center; gap:11px; flex-shrink:0; }
   header h1 { display:flex; align-items:center; color:var(--ink); font-family:Inter,-apple-system,sans-serif; font-size:16px; letter-spacing:0; }
   .hdr-raven { box-sizing:content-box; width:17px; height:17px; padding:6px; margin-right:9px !important; color:#06070a; background:var(--ink); border-radius:4px; }
-  .workspace-name { padding-left:11px; color:var(--muted); border-left:1px solid var(--line); font-size:11px; font-weight:500; text-transform:uppercase; }
+  .workspace-name { display:none; }
   .ver { color:var(--blue); }
-  header .stats { gap:7px; padding:5px 9px; color:var(--muted); background:var(--surface); border:1px solid var(--line-soft); border-radius:4px; }
+  header .stats { gap:7px; padding:0; color:var(--green); background:transparent; border:0; border-radius:0; white-space:nowrap; }
   header .stats b { color:var(--ink); }
-  .header-actions { display:flex; align-items:center; gap:7px; margin-left:auto; }
-  .header-actions > label { display:inline-flex; align-items:center; gap:5px; color:var(--muted) !important; white-space:nowrap; }
+  .header-process { position:relative; min-width:0; margin-left:auto; }
+  .process-trigger { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:10px; min-width:180px; max-width:300px; min-height:38px; padding:4px 10px !important; text-align:left; }
+  .process-trigger .proc-primary { overflow:hidden; color:var(--ink); font-size:11px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
+  .process-trigger .proc-secondary { grid-column:1; overflow:hidden; color:var(--muted); font:10px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
+  .process-trigger .menu-chevron { grid-column:2; grid-row:1 / 3; align-self:center; color:var(--muted); }
+  .header-actions { display:flex; align-items:center; gap:7px; margin-left:0; }
+  .auto-refresh-control { display:inline-flex; align-items:center; gap:7px; min-height:32px; padding:0 7px; color:var(--muted); white-space:nowrap; cursor:pointer; }
+  .auto-refresh-control input { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+  .toggle-track { position:relative; width:30px; height:17px; flex:0 0 auto; background:#414958; border-radius:9px; transition:background .15s; }
+  .toggle-track::after { content:''; position:absolute; top:2px; left:2px; width:13px; height:13px; background:var(--ink); border-radius:50%; transition:transform .15s; }
+  .auto-refresh-control input:checked + .toggle-track { background:var(--blue); }
+  .auto-refresh-control input:checked + .toggle-track::after { transform:translateX(13px); }
+  .auto-refresh-control input:focus-visible + .toggle-track { outline:2px solid rgba(120,169,255,.55); outline-offset:2px; }
   header button,header a.btn,.filters button { min-height:32px; padding:0 10px; color:var(--ink-2); background:var(--surface); border-color:var(--line); border-radius:4px; }
   header button:hover,header a.btn:hover,.filters button:hover { color:var(--ink); background:var(--surface-2); border-color:#646e7d; }
-  #settingsBtn { color:#06070a; background:var(--ink); border-color:var(--ink); font-weight:650; }
-  #settingsBtn:hover { background:var(--blue); border-color:var(--blue); }
+  .compact-action { display:inline-flex; align-items:center; justify-content:center; gap:6px; white-space:nowrap; }
+  .icon-button { display:inline-grid !important; width:34px; min-width:34px; padding:0 !important; place-items:center; font-size:18px !important; line-height:1; }
+  .menu-wrap { position:relative; }
+  .popover { display:none; position:absolute; top:calc(100% + 7px); right:0; z-index:80; min-width:210px; padding:6px; color:var(--ink-2); background:#11151c; border:1px solid #4a5260; border-radius:5px; box-shadow:0 18px 50px rgba(0,0,0,.58); }
+  .popover.show { display:block; }
+  .popover::before { content:''; position:absolute; top:-5px; right:14px; width:8px; height:8px; background:#11151c; border-top:1px solid #4a5260; border-left:1px solid #4a5260; transform:rotate(45deg); }
+  .menu-popover a,.menu-popover button { box-sizing:border-box; display:flex; width:100%; min-height:35px; align-items:center; gap:9px; padding:0 10px; color:var(--ink-2); background:transparent; border:0; border-radius:3px; text-align:left; text-decoration:none; white-space:nowrap; cursor:pointer; }
+  .menu-popover a:hover,.menu-popover button:hover { color:var(--ink); background:var(--surface-3); }
+  .menu-popover .menu-danger { color:var(--danger); }
+  .menu-popover .menu-separator { height:1px; margin:5px 4px; background:var(--line); }
+  .process-popover { width:290px; padding:12px 14px; }
+  .process-popover .proc-title { margin-bottom:10px; color:var(--ink); font-size:12px; font-weight:650; }
+  .procinfo { display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px 14px; margin:0; font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
+  .procinfo dt { color:var(--muted); }
+  .procinfo dd { min-width:0; margin:0; overflow-wrap:anywhere; color:var(--ink-2); text-align:right; }
   header button.danger,.filters button.danger { color:var(--danger); background:#1d1015; border-color:#6d2f3d; }
   header button.warn,.filters button.warn { color:var(--amber); background:#1d180e; border-color:#67522a; }
-  .procbar { min-height:48px; padding:7px 16px; background:var(--surface); border-bottom-color:var(--line); color:var(--muted); }
-  .appicon { width:32px; height:32px; background:var(--chrome); border-color:var(--line); border-radius:6px; }
-  .procinfo { gap:18px; }
-  .procinfo b { color:var(--ink-2); }
-  .procinfo .none { color:#626a77; }
   .healthbar { padding:9px 16px; color:#17090c; background:var(--danger); border-bottom-color:var(--danger); }
   .healthbar:hover { background:#ff91a1; }
   .healthbar .hint { color:#5b202a; }
@@ -305,15 +326,29 @@
   .tab .n { display:inline-grid; min-width:19px; height:19px; margin-left:7px; place-items:center; color:var(--muted); background:var(--surface-3); border-radius:3px; font-size:10px; }
   .tab .n:empty { display:none; }
   .tab.active .n { color:#07101f; background:var(--blue); }
-  .filters { min-height:52px; padding:8px 14px; gap:9px; background:var(--surface); border-bottom-color:var(--line); }
+  .filters { min-height:52px; padding:8px 14px; gap:8px; flex-direction:column; align-items:stretch; background:var(--surface); border-bottom-color:var(--line); }
   .filters.noise-mode { background:#17140d; border-bottom-color:var(--amber); }
-  .toolbar-filters,.toolbar-actions { gap:7px; }
+  .toolbar-main { display:flex; width:100%; align-items:center; gap:8px; }
+  .toolbar-actions { display:flex; align-items:center; gap:7px; margin-left:auto; }
+  .advanced-filters { display:flex; align-items:center; gap:12px; min-height:39px; padding-top:8px; border-top:1px solid var(--line-soft); }
+  .advanced-filters[hidden] { display:none; }
+  .filter-field { display:inline-flex; align-items:center; gap:7px; }
+  .filter-toggle { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+  .filter-badge { display:inline-grid; min-width:17px; height:17px; padding:0 4px; place-items:center; color:#07101f; background:var(--blue); border-radius:3px; font-size:10px; }
+  .filter-badge:empty { display:none; }
+  .filter-toggle[aria-expanded='true'] .menu-chevron { transform:rotate(180deg); }
+  .active-filters { display:flex; min-width:0; align-items:center; gap:6px; overflow:hidden; }
+  .active-filter { display:inline-flex !important; min-height:27px !important; max-width:190px; align-items:center; gap:6px; padding:0 8px !important; overflow:hidden; color:var(--blue) !important; background:#14213a !important; border-color:#294a78 !important; text-overflow:ellipsis; white-space:nowrap; }
+  .active-filter .filter-x { color:var(--muted); font-size:14px; }
   .filters label { color:var(--muted); }
   .filters input[type=search],.filters select,.size-filter input[type=number] { min-height:32px; color:var(--ink); background:var(--bg); border-color:var(--line); border-radius:4px; }
   .filters input[type=search] { width:280px; }
   .filters input:focus,.filters select:focus,.size-filter input[type=number]:focus { outline:2px solid rgba(120,169,255,.25); outline-offset:0; border-color:var(--blue); }
   .size-filter .size-sep,.size-filter .size-unit,.size-filter .size-hint { color:var(--muted); }
   .size-filter button.size-reset { min-height:28px; border-radius:4px; }
+  .toolbar-noise { margin-left:auto; }
+  .pause-btn.is-paused { color:#171007; background:var(--amber); border-color:var(--amber); font-weight:650; }
+  .pause-btn.is-paused:hover { color:#171007; background:#ffd57d; border-color:#ffd57d; }
   #count { color:var(--muted) !important; font-variant-numeric:tabular-nums; }
   .noisebar { padding:9px 14px; color:var(--amber); background:#17140d; border-bottom-color:#67522a; }
   .noisebar b { color:var(--ink); }
@@ -365,10 +400,12 @@
   .io-section.kv-card,.io-section.in-card,.io-section.out-card { padding:14px 15px; background:var(--surface); border-color:var(--line); border-radius:5px; }
   .io-section.in-card { border-top:2px solid var(--blue); }
   .io-section.out-card { border-top:2px solid var(--coral); }
+  .io-section.raw-card { border-top:2px solid var(--cyan); }
   .io-label { padding:4px 8px; border-radius:3px; letter-spacing:0; }
   .io-label.in { color:#07101f; background:var(--blue); }
   .io-label.out { color:#180c09; background:var(--coral); border-color:var(--coral); }
   .io-label.kv { color:var(--ink); background:var(--surface-3); border-color:var(--line); }
+  .io-label.raw { color:#071f1c; background:var(--cyan); border-color:var(--cyan); }
   .io-meta,.detail-pane h3 { color:var(--muted); letter-spacing:0; }
   .detail-pane pre { padding:11px 12px; color:#f1f3f7; background:#08090c; border-color:var(--line); border-radius:4px; line-height:1.65; }
   .detail-pane button { min-height:28px; color:var(--ink-2); background:var(--surface); border-color:var(--line); border-radius:4px; }
@@ -425,34 +462,31 @@
   .loadmore:hover { color:var(--ink); background:var(--surface); }
   @media (max-width:980px) {
     header { flex-wrap:wrap; }
-    header .stats { order:3; width:100%; }
     .header-actions { margin-left:auto; }
-    .workspace-name { display:none; }
-    .procinfo { gap:10px; }
-    .toolbar-actions { margin-left:0; }
+    .header-process { order:3; width:100%; margin-left:0; }
+    .process-trigger { width:100%; max-width:none; }
   }
   @media (max-width:760px) {
     body { overflow:auto; min-height:100vh; height:auto; }
     header,.procbar,.healthbar,.tabbar,.filters { position:relative; }
-    .brand-lockup { width:100%; }
-    .header-actions { width:100%; margin:0; overflow-x:auto; padding-bottom:2px; scrollbar-width:none; }
+    .brand-lockup { width:auto; }
+    .header-actions { width:auto; margin-left:auto; overflow-x:auto; padding-bottom:2px; scrollbar-width:none; }
     .header-actions::-webkit-scrollbar { display:none; }
     .header-actions > * { flex:0 0 auto; white-space:nowrap; }
     .header-actions { gap:5px; }
     .header-actions > label,header button,header a.btn { font-size:11px; }
     header button,header a.btn { padding:0 8px; }
     header .stats { display:none; }
-    .procbar:has(.procinfo:empty) { display:none; }
-    .procinfo { overflow-x:auto; flex-wrap:nowrap; white-space:nowrap; }
     .tabbar { overflow-x:auto; }
     .tab { padding:0 13px; }
-    .filters { display:block; min-height:0; }
-    .toolbar-filters { width:100%; }
-    .toolbar-actions { display:inline-flex; width:auto; margin-top:8px; }
-    .toolbar-filters { align-items:center; }
+    .filters { min-height:0; }
+    .toolbar-main { flex-wrap:wrap; }
     .filters input[type=search] { flex:1; min-width:180px; width:auto; }
+    .active-filters { order:4; width:100%; }
+    .toolbar-actions { margin-left:0; }
+    .advanced-filters { flex-wrap:wrap; }
     .size-filter { width:100%; }
-    .toolbar-noise { margin-top:8px; }
+    .toolbar-noise { margin-left:0; }
     .workspace { flex-direction:column; height:calc(100vh - 260px); min-height:560px; }
     .list-pane { width:100% !important; height:44%; min-height:240px; }
     .detail-pane { min-height:320px; }
@@ -475,18 +509,41 @@
     <path d="M10,40L16,33L24,27L40,22L47,23L43,26L47,26L50,28L49,30L57,30L65,32L71,35L73,37L70,38L65,36L57,35L43,35L21,38L13,41Z"/>
     <path d="M89,20L92,23L92,28L89,31L84,32L80,29L79,27L87,28L89,25L85,24L85,22L87,20Z"/></g></svg>IOSDecryptHub<span class='ver' id='ver'></span></h1><span class='workspace-name'>Runtime Console</span></div>
   <div class='stats' id='stats'>加载中…</div>
+  <div class='header-process'>
+    <button type='button' class='process-trigger' id='processBtn' aria-expanded='false' aria-controls='processPopover' title='查看当前进程信息'>
+      <span class='proc-primary' id='procPrimary'>加载进程…</span>
+      <span class='proc-secondary' id='procSecondary'></span>
+      <span class='menu-chevron' aria-hidden='true'>⌄</span>
+    </button>
+    <div class='popover process-popover' id='processPopover'>
+      <div class='proc-title'>当前进程</div>
+      <dl class='procinfo' id='procinfo'></dl>
+    </div>
+  </div>
   <div class='header-actions'>
-  <label style='color:#b0b8c4;font-size:12px;'><input type='checkbox' id='autoRefresh' checked> 自动刷新</label>
-  <a class='btn' id='dlAll' href='/download' target='_blank' title='下载完整落盘日志 — 每条都已实时写入设备沙箱, App 闪退/被检测杀掉后重启仍可取全量(含崩溃前), 用于离线排查闭环'>下载全部日志</a>
-  <button id='diagBtn' title='查看内部诊断/审查日志, 便于排查与复现'>审查日志</button>
-  <button id='mcpBtn' title='MCP 客户端接入配置 — 供 AI 经 HTTP 调用反汇编/符号/镜像分析'>MCP</button>
-  <button id='settingsBtn' title='捕获 / 日志 / 噪声 / 数据管理'>⚙ 设置</button>
+    <label class='auto-refresh-control' title='自动刷新日志列表'>
+      <input type='checkbox' id='autoRefresh' checked>
+      <span class='toggle-track' aria-hidden='true'></span>
+      <span class='auto-refresh-label'>自动刷新</span>
+    </label>
+    <div class='menu-wrap'>
+      <button type='button' class='compact-action' id='downloadMenuBtn' aria-expanded='false' aria-controls='downloadMenu'><span aria-hidden='true'>↓</span>下载<span class='menu-chevron' aria-hidden='true'>⌄</span></button>
+      <div class='popover menu-popover' id='downloadMenu'>
+        <a id='dlAll' href='/download' target='_blank' title='下载完整落盘日志 — 每条都已实时写入设备沙箱, App 闪退/被检测杀掉后重启仍可取全量(含崩溃前), 用于离线排查闭环'>下载全部日志</a>
+        <button type='button' id='tabDownloadBtn'>下载当前板块</button>
+      </div>
+    </div>
+    <div class='menu-wrap'>
+      <button type='button' class='icon-button' id='globalMoreBtn' aria-label='更多工具' aria-expanded='false' aria-controls='globalMoreMenu' title='更多工具'>⋯</button>
+      <div class='popover menu-popover' id='globalMoreMenu'>
+        <button type='button' id='diagBtn' title='查看内部诊断/审查日志, 便于排查与复现'>审查日志</button>
+        <button type='button' id='mcpBtn' title='MCP 客户端接入配置 — 供 AI 经 HTTP 调用反汇编/符号/镜像分析'>MCP 配置</button>
+        <div class='menu-separator'></div>
+        <button type='button' id='settingsBtn' title='捕获 / 日志 / 噪声 / 数据管理'>设置</button>
+      </div>
+    </div>
   </div>
 </header>
-<div class='procbar'>
-  <img class='appicon' id='appicon' src='/api/appicon' alt='' onerror='this.style.display="none"'>
-  <div class='procinfo' id='procinfo'></div>
-</div>
 <div class='healthbar' id='healthbar'></div>
 <div class='offlinebar' id='offlinebar'></div>
 <nav class='tabbar' id='tabbar'>
@@ -504,33 +561,42 @@
   <button type='button' id='noisebarBack'>返回</button>
 </div>
 <div class='filters' id='toolbar'>
-  <div class='toolbar-filters'>
-  <span id='catWrap'><label>分类</label>
-  <select id='catSel'>
-    <option value='-2'>全部</option>
-    <option value='0'>摘要</option>
-    <option value='1'>HMAC</option>
-    <option value='2'>对称</option>
-    <option value='3'>非对称</option>
-  </select></span>
-  <input id='q' type='search' placeholder='搜索本类: 算法/路径/明文/Hex…'>
-  <span id='sizeWrap' class='size-filter'>
-    <label>输入大小</label>
-    <input id='sizeMin' type='number' min='0' step='1' placeholder='0' title='最小字节'>
-    <span class='size-sep'>—</span>
-    <input id='sizeMax' type='number' min='0' step='1' placeholder='不限' title='最大字节 (留空不限)'>
-    <span class='size-unit'>B</span>
-    <span id='sizeHint' class='size-hint'>不限</span>
-    <button type='button' id='sizeReset' class='size-reset' title='清除大小过滤'>清除</button>
-  </span>
+  <div class='toolbar-main'>
+    <input id='q' type='search' placeholder='搜索本类: 算法/路径/明文/Hex…'>
+    <button type='button' class='filter-toggle' id='filterToggleBtn' aria-expanded='false' aria-controls='advancedFilters'>筛选<span class='filter-badge' id='filterBadge'></span><span class='menu-chevron' aria-hidden='true'>⌄</span></button>
+    <div class='active-filters' id='activeFilters'></div>
+    <div class='toolbar-actions'>
+      <span id='count' style='color:#b0b8c4; font-size:11px;'></span>
+      <button type='button' id='tabPauseBtn' class='pause-btn'>暂停</button>
+      <div class='menu-wrap'>
+        <button type='button' class='icon-button' id='toolbarMoreBtn' aria-label='当前板块更多操作' aria-expanded='false' aria-controls='toolbarMenu' title='当前板块更多操作'>⋯</button>
+        <div class='popover menu-popover' id='toolbarMenu'>
+          <button type='button' id='tabClearBtn' class='menu-danger'>清空本类</button>
+        </div>
+      </div>
+    </div>
   </div>
-  <div class='toolbar-actions'>
-  <button id='tabPauseBtn' class='warn'>暂停</button>
-  <button id='tabDownloadBtn'>下载本类</button>
-  <button id='tabClearBtn' class='danger'>清空本类</button>
+  <div class='advanced-filters' id='advancedFilters' hidden>
+    <span id='catWrap' class='filter-field'><label for='catSel'>分类</label>
+      <select id='catSel'>
+        <option value='-2'>全部</option>
+        <option value='0'>摘要</option>
+        <option value='1'>HMAC</option>
+        <option value='2'>对称</option>
+        <option value='3'>非对称</option>
+      </select>
+    </span>
+    <span id='sizeWrap' class='size-filter'>
+      <label for='sizeMin'>输入大小</label>
+      <input id='sizeMin' type='number' min='0' step='1' placeholder='0' title='最小字节'>
+      <span class='size-sep'>—</span>
+      <input id='sizeMax' type='number' min='0' step='1' placeholder='不限' title='最大字节 (留空不限)'>
+      <span class='size-unit'>B</span>
+      <span id='sizeHint' class='size-hint'>不限</span>
+      <button type='button' id='sizeReset' class='size-reset' title='清除大小过滤'>清除</button>
+    </span>
+    <button type='button' id='viewNoiseBtn' class='toolbar-noise'>查看噪声<span class='n' id='n-noise-btn'></span></button>
   </div>
-  <button id='viewNoiseBtn' class='toolbar-noise'>查看噪声<span class='n' id='n-noise-btn'></span></button>
-  <span id='count' style='color:#b0b8c4; font-size:11px;'></span>
 </div>
 <div class='workspace'>
   <div class='list-pane'>
@@ -799,6 +865,7 @@
     else if (minSize) t = '≥ '+fmtSize(minSize);
     else if (maxSize) t = '≤ '+fmtSize(maxSize);
     $('sizeHint').textContent = t;
+    updateFilterSummary();
   }
   function saveSizeState() {
     if (activeTab !== 'crypto' || noiseView) return;
@@ -831,6 +898,7 @@
   const LOADING = '<div class="loading"><span class="spinner"></span>加载中…</div>';
   let selectedSeq = null, detailCache = {}, stats = {}, activeTab = 'crypto';
   let noiseView = false;  // 工具栏「查看噪声」打开的噪声列表视图(不占独立 tab)
+  let filtersOpen = localStorage.getItem('dh_filters_open') === '1';
   let listLive = false;   // 本会话当前 tab 是否已渲染过实时数据(用于断连时决定是否回退缓存)
   let pendingNew = 0;     // 查看旧条目时累积的新增条数(用于顶部横幅)
 
@@ -847,6 +915,50 @@
   function loadCache(cat) { try { return JSON.parse(localStorage.getItem(cacheKey(cat))||'null'); } catch(e){ return null; } }
 
   function $(id) { return document.getElementById(id); }
+
+  const POPOVERS = [
+    ['processPopover','processBtn'],
+    ['downloadMenu','downloadMenuBtn'],
+    ['globalMoreMenu','globalMoreBtn'],
+    ['toolbarMenu','toolbarMoreBtn'],
+  ];
+  function closePopovers(except) {
+    POPOVERS.forEach(([menuId, btnId]) => {
+      if (menuId === except) return;
+      $(menuId).classList.remove('show');
+      $(btnId).setAttribute('aria-expanded', 'false');
+    });
+  }
+  function togglePopover(menuId, btnId) {
+    const menu = $(menuId); const opening = !menu.classList.contains('show');
+    closePopovers(menuId);
+    menu.classList.toggle('show', opening);
+    $(btnId).setAttribute('aria-expanded', opening ? 'true' : 'false');
+  }
+  function setFiltersOpen(open) {
+    filtersOpen = !!open;
+    localStorage.setItem('dh_filters_open', filtersOpen ? '1' : '0');
+    $('filterToggleBtn').setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
+    $('advancedFilters').hidden = noiseView || !filtersOpen;
+  }
+  function updateFilterSummary() {
+    if (!$('activeFilters')) return;
+    const chips = [];
+    if (!noiseView && activeTab === 'crypto') {
+      if ($('catSel').value !== '-2') {
+        const label = $('catSel').options[$('catSel').selectedIndex].textContent;
+        chips.push('<button type="button" class="active-filter" data-clear-filter="category">分类: '+escapeHTML(label)+'<span class="filter-x" aria-hidden="true">×</span></button>');
+      }
+      const { minSize, maxSize } = getSizeFilter();
+      if (minSize || maxSize) chips.push('<button type="button" class="active-filter" data-clear-filter="size">输入: '+escapeHTML($('sizeHint').textContent)+'<span class="filter-x" aria-hidden="true">×</span></button>');
+    }
+    $('activeFilters').innerHTML = chips.join('');
+    $('activeFilters').style.display = chips.length ? '' : 'none';
+    $('filterBadge').textContent = chips.length ? String(chips.length) : '';
+    $('filterToggleBtn').style.display = noiseView ? 'none' : '';
+    $('filterToggleBtn').setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
+    $('advancedFilters').hidden = noiseView || !filtersOpen;
+  }
 
   // 局域网直连, 无鉴权。dlUrl 直通(下载链接不再附令牌)。
   function dlUrl(u){ return u; }
@@ -879,6 +991,7 @@
         btn.innerHTML = '查看噪声<span class="n" id="n-noise-btn">'+cnt+'</span>';
       }
     }
+    updateFilterSummary();
   }
   function capToggleRow(sub, title, funcs) {
     return '<div class="set-toggle-row"><div class="lab"><b>'+escapeHTML(title)+'</b><span class="fn">'+escapeHTML(funcs)+'</span></div>'
@@ -911,7 +1024,7 @@
       : activeTab==='net' ? !!pbc[6]
       : activeTab==='keychain' ? !!pbc[7]
       : (!!pbc[4] && !!pbc[5]);   // 系统组: 文件+模块都暂停才算暂停
-    const pb=$('tabPauseBtn'); if(pb){ pb.textContent = paused?'继续':'暂停'; pb.classList.toggle('danger', paused); }
+    const pb=$('tabPauseBtn'); if(pb){ pb.textContent = paused?'继续采集':'暂停'; pb.classList.toggle('is-paused', paused); pb.setAttribute('aria-pressed', paused?'true':'false'); }
     updateNoiseToolbar();
   }
   const DIAG_BOARDS = [[-1,'全部'],[0,'通用'],[1,'加解密'],[2,'文件'],[3,'系统'],[4,'砸壳']];
@@ -990,7 +1103,7 @@
       const bc = stats.byCategory || [];
       const sp = stats.paused ? '已暂停' : '运行中';
       const dotCls = (stats.health && stats.health.summary) ? 'err' : (stats.paused ? 'paused' : 'ok');
-      $('stats').innerHTML = '<span><span class="status-dot '+dotCls+'"></span>'+sp+'</span><span>总: <b>'+stats.total+'</b></span>';
+      $('stats').innerHTML = '<span><span class="status-dot '+dotCls+'"></span>'+sp+'</span>';
       const cryptoN = (bc[0]||0)+(bc[1]||0)+(bc[2]||0)+(bc[3]||0);
       $('n-crypto').textContent = cryptoN ? cryptoN : '';
       $('n-sys').textContent = ((bc[4]||0)+(bc[5]||0)) ? ((bc[4]||0)+(bc[5]||0)) : '';
@@ -998,14 +1111,19 @@
       $('n-net').textContent = (bc[iNet]||0) ? (bc[iNet]||0) : '';
       $('n-keychain').textContent = (bc[iKc]||0) ? (bc[iKc]||0) : '';
       $('ver').textContent = stats.version ? ('v'+stats.version) : '';
-      const p = stats.process || {}; const pb = [];
-      if (p.appName) pb.push('<span><b>'+escapeHTML(p.appName)+'</b></span>');
-      if (p.bundleId) pb.push('<span>'+escapeHTML(p.bundleId)+'</span>');
-      if (p.pid) pb.push('<span>PID <b>'+p.pid+'</b></span>');
-      if (p.systemVersion) pb.push('<span>iOS <b>'+escapeHTML(p.systemVersion)+'</b></span>');
-      if (p.deviceModel) pb.push('<span>'+escapeHTML(p.deviceModel)+'</span>');
-      if (p.physicalMemoryMB) pb.push('<span>RAM <b>'+p.physicalMemoryMB+' MB</b></span>');
-      $('procinfo').innerHTML = pb.length ? pb.join('') : '<span class="none">进程信息不可用</span>';
+      const p = stats.process || {}; const pd = [];
+      $('procPrimary').textContent = p.appName || p.processName || p.bundleId || '进程信息不可用';
+      $('procSecondary').textContent = p.bundleId || '';
+      if (p.appName) pd.push(['App',p.appName]);
+      else if (p.processName) pd.push(['进程',p.processName]);
+      if (p.bundleId) pd.push(['Bundle ID',p.bundleId]);
+      if (p.pid) pd.push(['PID',p.pid]);
+      if (p.systemVersion) pd.push(['iOS',p.systemVersion]);
+      if (p.deviceModel) pd.push(['架构 / 设备',p.deviceModel]);
+      if (p.physicalMemoryMB) pd.push(['内存',p.physicalMemoryMB+' MB']);
+      $('procinfo').innerHTML = pd.length
+        ? pd.map(([k,v]) => '<dt>'+escapeHTML(k)+'</dt><dd>'+escapeHTML(v)+'</dd>').join('')
+        : '<dt>状态</dt><dd>进程信息不可用</dd>';
       const hb=$('healthbar'); const h=stats.health||{};
       if (h.summary) {
         hb.style.display='block';
@@ -1117,7 +1235,7 @@
   }
   function renderList(cached) {
     const n = listEntries.length;
-    $('count').textContent = n+' / '+(stats.total||0)+(cached?' · 断连前缓存':'');
+    $('count').textContent = n+' / '+(stats.total||0)+' 条'+(cached?' · 断连前缓存':'');
     if (!n) { $('list').innerHTML = '<div class="empty">该分类还没有记录…<br>在 App 里触发对应操作看看?</div>'; return; }
     let html = cached ? '<div class="empty" style="padding:9px 14px;color:#b0b8c4;text-align:left;border-bottom:1px solid #414a59;">服务不可达 — 以下为浏览器缓存的断连前数据</div>' : '';
     html += listEntries.map(rowHTML).join('');
@@ -1135,22 +1253,76 @@
     if (dump) b += '<h3>HexDump</h3><pre class="hex">'+escapeHTML(dump)+'</pre>';
     return b;
   }
+  function _s2hex(s) { let h=''; for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);if(c<128){h+=c.toString(16).padStart(2,'0');}else if(c<2048){h+=((c>>6)|0xc0).toString(16).padStart(2,'0')+((c&0x3f)|0x80).toString(16).padStart(2,'0');}else{h+=((c>>12)|0xe0).toString(16).padStart(2,'0')+(((c>>6)&0x3f)|0x80).toString(16).padStart(2,'0')+((c&0x3f)|0x80).toString(16).padStart(2,'0');}} return h; }
+  function _s2dump(s) { const hex=_s2hex(s); let r=''; for(let i=0;i<hex.length;i+=32){const off=(i/2).toString(16).padStart(6,'0')+': ';const chunk=hex.substring(i,i+32);let h='',a='';for(let j=0;j<chunk.length;j+=2){if(j>0&&j%8===0)h+=' ';h+=chunk[j]+chunk[j+1]+' ';const b=parseInt(chunk.substring(j,j+2),16);a+=(b>=32&&b<127)?String.fromCharCode(b):'.';}r+=off+h.padEnd(40,' ')+' |'+a+'|\n';} return r.trimEnd(); }
+  function buildRawHttp(d) {
+    if (!d.detail || d.categoryName !== 'net') return null;
+    const lines = d.detail.split('\n');
+    if (!lines.length) return null;
+    const m = lines[0].match(/^(\S+)\s+(\S+)/);
+    if (!m) return null;
+    const method = m[1], urlStr = m[2];
+    let path = '/', host = '';
+    try { const u = new URL(urlStr); path = u.pathname + (u.search||''); host = u.host; } catch(e) { path = urlStr; }
+    const reqH = [], respH = [];
+    let statusLine = '';
+    for (let i = 1; i < lines.length; i++) {
+      const l = lines[i];
+      if (l.startsWith('> ')) reqH.push(l.substring(2));
+      else if (l.startsWith('< ')) respH.push(l.substring(2));
+      else if (l.startsWith('-- Status:')) statusLine = l.replace(/^--\s*/, '').replace(/\s*--$/, '');
+    }
+    let req = method + ' ' + path + ' HTTP/1.1\r\nHost: ' + host + '\r\n';
+    let hasCL = false;
+    for (const h of reqH) { if (/^content-length:/i.test(h)) hasCL = true; req += h + '\r\n'; }
+    if (!hasCL && d.input) req += 'Content-Length: ' + d.input + '\r\n';
+    req += '\r\n';
+    if (d.inputUtf8) req += d.inputUtf8;
+    const body = d.inputUtf8 || '';
+    let resp = '';
+    if (statusLine) {
+      const sm = statusLine.match(/Status:\s*(\d+)/);
+      resp = 'HTTP/1.1 ' + (sm ? sm[1] : '???') + '\r\n';
+      for (const h of respH) resp += h + '\r\n';
+      resp += '\r\n';
+      if (d.outputUtf8) resp += d.outputUtf8;
+    }
+    return {
+      request: req, requestHex: _s2hex(req), requestDump: _s2dump(req),
+      body: body, bodyHex: _s2hex(body), bodyDump: _s2dump(body),
+      response: resp || null, responseHex: resp ? _s2hex(resp) : null, responseDump: resp ? _s2dump(resp) : null
+    };
+  }
   function renderDetailPane(d) {
     if (!d) return EMPTY;
     const dcls = CAT_CLS[d.category]||'other';
+    const rawHttp = buildRawHttp(d);
     let actions = '<div class="detail-actions">' +
       '<button data-copyall="'+d.seq+'">复制整条</button>' +
       (d.inputUtf8 ? '<button data-copy="utf8-INPUT">复制明文</button>' : '') +
       (d.inputHex ? '<button data-copy="hex-INPUT">复制 Hex</button>' : '') +
+      (rawHttp ? '<button data-copyraw="'+d.seq+'">复制报文</button>' : '') +
       '</div>';
     let h = '<div class="detail-head"><h2><span class="cat-dot '+dcls+'"></span>#'+d.seq+'  '+escapeHTML(d.algorithm)+'</h2>' +
       '<div class="sub">'+escapeHTML(d.operation)+' · '+escapeHTML(d.timestamp)+(d.publicKeyInfo?' · '+escapeHTML(d.publicKeyInfo):'')+'</div>' +
       actions + '</div>';
     if (d.detail) h += '<div class="io-section kv-card"><div class="io-label kv">详情</div><pre>'+escapeHTML(d.detail)+'</pre></div>';
+    if (rawHttp) {
+      h += '<div class="io-section raw-card"><div class="io-label raw">原始请求 / RAW REQUEST</div>' +
+        '<div class="io-meta">'+rawHttp.request.length+' bytes</div>' +
+        '<h3>Text</h3><pre style="white-space:pre;word-break:normal;">'+escapeHTML(rawHttp.request)+'</pre>' +
+        '<h3>Hex</h3><pre class="hex">'+escapeHTML(rawHttp.requestHex)+'</pre></div>';
+      if (rawHttp.response) {
+        h += '<div class="io-section raw-card"><div class="io-label raw">原始响应 / RAW RESPONSE</div>' +
+          '<div class="io-meta">'+rawHttp.response.length+' bytes</div>' +
+          '<h3>Text</h3><pre style="white-space:pre;word-break:normal;">'+escapeHTML(rawHttp.response)+'</pre>' +
+          '<h3>Hex</h3><pre class="hex">'+escapeHTML(rawHttp.responseHex)+'</pre></div>';
+      }
+    }
     if (d.key) h += ioKV('KEY', d.key, d.keyHex);
     if (d.iv)  h += ioKV('IV', d.iv, d.ivHex);
-    if (d.input)  h += '<div class="io-section in-card"><div class="io-label in">输入 / INPUT</div>'+ioBody(d.input, d.inputHex, d.inputUtf8, d.inputDump, 'INPUT')+'</div>';
-    if (d.output) h += '<div class="io-section out-card"><div class="io-label out">输出 / OUTPUT</div>'+ioBody(d.output, d.outputHex, d.outputUtf8, d.outputDump, 'OUTPUT')+'</div>';
+    if (d.input && !rawHttp)  h += '<div class="io-section in-card"><div class="io-label in">输入 / INPUT</div>'+ioBody(d.input, d.inputHex, d.inputUtf8, d.inputDump, 'INPUT')+'</div>';
+    if (d.output && !rawHttp) h += '<div class="io-section out-card"><div class="io-label out">输出 / OUTPUT</div>'+ioBody(d.output, d.outputHex, d.outputUtf8, d.outputDump, 'OUTPUT')+'</div>';
     if (d.callStack) h += '<details class="callstack" id="callstack-'+d.seq+'"><summary>调用栈 ('+(d.callStack.split('\n').length)+' 帧)</summary><pre>'+escapeHTML(d.callStack)+'</pre></details>';
     return h;
   }
@@ -1201,6 +1373,7 @@
     $('symPane').style.display  = (name==='symbols') ? 'flex' : 'none';
     document.querySelector('.workspace').style.display = isLog ? 'flex' : 'none';
     $('toolbar').style.display = isLog ? 'flex' : 'none';
+    $('tabDownloadBtn').style.display = isLog ? '' : 'none';
     if (name==='dump') { loadDumpImages(); pollDump(); return; }
     if (name==='files') { loadFilesBrowser(); return; }
     if (name==='symbols') { loadSymbols(); return; }
@@ -1481,6 +1654,13 @@
       const field = label==='KEY'?'key':label==='IV'?'iv':label==='INPUT'?'input':'output';
       copyText((kind==='hex' ? d[field+'Hex'] : d[field+'Utf8'])||''); return;
     }
+    const copyRaw = ev.target.dataset && ev.target.dataset.copyraw;
+    if (copyRaw) {
+      ev.stopPropagation(); const d = detailCache[copyRaw]; if (!d) return;
+      const raw = buildRawHttp(d);
+      if (raw) { let t = raw.request; if (raw.response) t += '\r\n\r\n' + raw.response; copyText(t); }
+      return;
+    }
     const copyAll = ev.target.dataset && ev.target.dataset.copyall;
     if (copyAll) {
       ev.stopPropagation(); const d = detailCache[copyAll]; if (!d) return;
@@ -1506,7 +1686,21 @@
     const row = ev.target.closest('.row');
     if (row) selectRow(parseInt(row.dataset.seq, 10));
   });
-  $('catSel').addEventListener('change', () => refreshList({loading:true}));
+  $('processBtn').addEventListener('click', () => togglePopover('processPopover','processBtn'));
+  $('downloadMenuBtn').addEventListener('click', () => togglePopover('downloadMenu','downloadMenuBtn'));
+  $('globalMoreBtn').addEventListener('click', () => togglePopover('globalMoreMenu','globalMoreBtn'));
+  $('toolbarMoreBtn').addEventListener('click', () => togglePopover('toolbarMenu','toolbarMoreBtn'));
+  $('filterToggleBtn').addEventListener('click', () => setFiltersOpen(!filtersOpen));
+  $('activeFilters').addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-clear-filter]');
+    const kind = chip && chip.dataset.clearFilter;
+    if (kind === 'category') { $('catSel').value='-2'; updateFilterSummary(); refreshList({loading:true}); }
+    if (kind === 'size') resetSizeFilter();
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.menu-wrap') && !e.target.closest('.header-process')) closePopovers();
+  });
+  $('catSel').addEventListener('change', () => { updateFilterSummary(); refreshList({loading:true}); });
   let sizeTimer;
   function onSizeFilterChange() {
     updateSizeHint();
@@ -1528,8 +1722,9 @@
     await fetch('/api/pause?cat='+c+'&paused='+(paused?'0':'1'),{method:'POST'});
     await refreshStats(); refreshList();
   });
-  $('tabDownloadBtn').addEventListener('click', () => { window.open(dlUrl('/api/logs/download?cat='+tabCat()), '_blank'); });
+  $('tabDownloadBtn').addEventListener('click', () => { closePopovers(); window.open(dlUrl('/api/logs/download?cat='+tabCat()), '_blank'); });
   $('tabClearBtn').addEventListener('click', async () => {
+    closePopovers();
     if (noiseView) {
       if(!confirm('确定清空本板块噪声日志?')) return;
       await fetch('/api/noise/clear?board='+encodeURIComponent(noiseBoard()),{method:'POST'});
@@ -1541,9 +1736,9 @@
   });
   $('setCapBody').addEventListener('change', async (ev) => { const cb=ev.target; if(!cb.dataset||!cb.dataset.sub) return; await fetch('/api/capture?sub='+encodeURIComponent(cb.dataset.sub)+'&on='+(cb.checked?'1':'0'),{method:'POST'}); refreshStats(); });
   $('setNav').addEventListener('click', (e) => { const p=e.target.dataset && e.target.dataset.setpage; if(p) setSettingsPage(p); });
-  $('diagBtn').addEventListener('click', openDiag);
+  $('diagBtn').addEventListener('click', () => { closePopovers(); openDiag(); });
   $('healthbar').addEventListener('click', openDiag);
-  $('mcpBtn').addEventListener('click', openMcp);
+  $('mcpBtn').addEventListener('click', () => { closePopovers(); openMcp(); });
   $('mcpCopy').addEventListener('click', () => copyText($('mcpBody').textContent||''));
   $('mcpClose').addEventListener('click', () => $('mcpMask').classList.remove('show'));
   $('mcpMask').addEventListener('click', (e) => { if(e.target===$('mcpMask')) $('mcpMask').classList.remove('show'); });
@@ -1554,7 +1749,7 @@
   $('diagDownload').addEventListener('click', () => window.open(dlUrl('/api/diag/download?board='+diagBoard), '_blank'));
   $('diagBoards').addEventListener('click', (e) => { const b=e.target.dataset && e.target.dataset.board; if(b===undefined||b==='') return; diagBoard=parseInt(b,10); buildDiagBoards(); loadDiag(); });
   $('diagMask').addEventListener('click', (e) => { if(e.target===$('diagMask')) $('diagMask').classList.remove('show'); });
-  $('settingsBtn').addEventListener('click', openSettings);
+  $('settingsBtn').addEventListener('click', () => { closePopovers(); openSettings(); });
   $('setClose').addEventListener('click', () => $('setMask').classList.remove('show'));
   $('setMask').addEventListener('click', (e) => { if(e.target===$('setMask')) $('setMask').classList.remove('show'); });
   $('setDisplayCap').addEventListener('change', () => { localStorage.setItem('dh_displayCap', $('setDisplayCap').value); if(LOG_TABS.includes(activeTab) || noiseView) refreshList({loading:true}); toast('展示条数已更新'); });
@@ -1685,6 +1880,7 @@
   initSplitter($('symSplitter'), document.querySelector('#symPane .sym-img-pane'), $('symPane'));
   initSplitter($('filesSplitter'), document.querySelector('#filesPane .files-list-pane'), $('filesPane'));
   document.addEventListener('keydown', (e) => {
+    if (e.key==='Escape' && document.querySelector('.popover.show')) { closePopovers(); return; }
     const tag = (e.target && e.target.tagName) || '';
     if (tag==='INPUT' || tag==='TEXTAREA' || tag==='SELECT' || e.target.isContentEditable) {
       if (e.key==='Escape' && tag==='INPUT' && e.target.id==='q') { e.target.blur(); }
@@ -1705,7 +1901,7 @@
     }
   });
   setInterval(() => { if(!$('autoRefresh').checked) return; refreshStats(); if(LOG_TABS.includes(activeTab) || noiseView) refreshList(); }, 1500);
-  buildCapturePage(); loadSizeState(); refreshStats(); refreshList({loading:true});
+  buildCapturePage(); loadSizeState(); setFiltersOpen(filtersOpen); refreshStats(); refreshList({loading:true});
 </script>
 </body>
 </html>

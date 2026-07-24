@@ -26,3 +26,9 @@ docs/screenshots/_*.png
 scripts/send_notification_email.sh
 # 一次性 release notes
 scripts/_release_notes_*.md
+
+# Python 缓存
+__pycache__/
+
+# Claude 配置
+.claude/

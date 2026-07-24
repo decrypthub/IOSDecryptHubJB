@@ -1,6 +1,7 @@
 #!/bin/bash
 # 用法: ./scripts/inject.sh <input.ipa> <hook.dylib>
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IPA=$1
 DYLIB=$2
 WORK_DIR="work_$$"
@@ -15,8 +16,14 @@ mkdir -p "$WORK_DIR"
 cp "$DYLIB" "$WORK_DIR/"
 unzip -q "$IPA" -d "$WORK_DIR"
 
-APP=$(find "$WORK_DIR/Payload" -name "*.app" -maxdepth 1 | head -1)
-APP_BIN="$APP/$(basename "${APP%.app}")"
+APP=$(find "$WORK_DIR/Payload" -maxdepth 1 -name "*.app" | head -1)
+if [ -z "$APP" ]; then
+    echo "❌ IPA 中未找到 Payload/*.app"
+    exit 1
+fi
+python3 "$ROOT/tools/patch_info_plist.py" "$APP/Info.plist"
+APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist")
+APP_BIN="$APP/$APP_EXECUTABLE"
 DYLIB_NAME=$(basename "$DYLIB")
 
 echo "[*] 复制 dylib 到 App Bundle..."

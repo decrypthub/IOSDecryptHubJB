@@ -24,6 +24,12 @@
     <true/>
     <key>MinimumOSVersion</key>
     <string>14.0</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_idh-mcp._tcp.</string>
+    </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>用于在局域网内发现和访问 IOSDecryptHub 调试服务</string>
     <key>UIDeviceFamily</key>
     <array>
         <integer>1</integer>
