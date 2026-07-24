@@ -1,10 +1,6 @@
 // main.m - IOSDecryptHub (Decrypt Helper)
-// 注入入口: 在 dylib 被加载时安装所有 hook 并初始化悬浮窗 UI.
-//
-// 严格约束:
-//   1. 悬浮窗只显示统计信息和操作按钮, 不显示日志正文.
-//   2. 完整日志只能通过点击悬浮窗的 "日志" 按钮在全屏查看器里看.
-//   3. 落盘文件路径: Documents/decrypt_helper.log
+// 注入入口: 在 dylib 被加载时安装所有 hook 并初始化悬浮窗 UI。
+// 悬浮窗只负责状态与基础控制，日志查看和分析统一由 Web 控制台完成。
 
 #import <Foundation/Foundation.h>
 #if __has_include(<UIKit/UIKit.h>)

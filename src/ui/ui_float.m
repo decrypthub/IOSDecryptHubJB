@@ -1,6 +1,5 @@
 // ui_float.m
-// 悬浮窗 - 只显示状态(各算法计数)和控制按钮(打开日志/清空/暂停/缩小).
-// 严格不显示任何明文 / 密文 / 摘要 - 那些都在 ui_logview.
+// 悬浮窗 - 只显示采集状态、Web 地址和基础控制，不承载日志正文。
 //
 // UIKit 隔离: macOS 纯 target 没有 UIKit, 整个文件编译为空, 提供 no-op stub.
 // iOS / Mac Catalyst / iOS Simulator 都有 UIKit, 正常走.
@@ -10,7 +9,6 @@
 #if __has_include(<UIKit/UIKit.h>)
 
 #import <UIKit/UIKit.h>
-#import "ui_logview.h"
 #import "log_store.h"
 #import "dh_noise.h"
 #import "http_server.h"
@@ -36,7 +34,6 @@
 @property (nonatomic, strong) UIImageView *collapsedIcon;   // 缩小态的圆形小图标
 @property (nonatomic, strong) UILabel     *statsLabel;
 @property (nonatomic, strong) UILabel     *urlLabel;
-@property (nonatomic, strong) UIButton    *openBtn;
 @property (nonatomic, strong) UIButton    *clearBtn;
 @property (nonatomic, strong) UIButton    *pauseBtn;
 @property (nonatomic, strong) NSTimer     *statsTimer;
@@ -166,15 +163,12 @@ static DHFloatingController *gFloat = nil;
     [self.urlLabel addGestureRecognizer:tap];
     [root addSubview:self.urlLabel];
 
-    // 操作按钮区 (44pt 触控高度, 深色底 + 高对比浅字)
-    CGFloat by = 148, bw = 70, bh = 40, bx = 12, gap = 9;
-    self.openBtn  = [self makeButton:@"日志" style:0
-                               frame:CGRectMake(bx, by, bw, bh) action:@selector(onOpenLog)];
+    // App 内只保留基础控制，日志查看与分析统一在 Web 控制台完成。
+    CGFloat by = 148, bw = 109, bh = 40, bx = 12, gap = 10;
     self.pauseBtn = [self makeButton:@"暂停" style:1
-                               frame:CGRectMake(bx + (bw+gap), by, bw, bh) action:@selector(onTogglePause)];
+                               frame:CGRectMake(bx, by, bw, bh) action:@selector(onTogglePause)];
     self.clearBtn = [self makeButton:@"清空" style:2
-                               frame:CGRectMake(bx + 2*(bw+gap), by, bw, bh) action:@selector(onClear)];
-    [root addSubview:self.openBtn];
+                               frame:CGRectMake(bx + bw + gap, by, bw, bh) action:@selector(onClear)];
     [root addSubview:self.pauseBtn];
     [root addSubview:self.clearBtn];
 
@@ -329,7 +323,6 @@ static DHFloatingController *gFloat = nil;
         self.minBtn.alpha     = col ? 0 : 1;
         self.statsLabel.alpha = col ? 0 : 1;
         self.urlLabel.alpha   = col ? 0 : 1;
-        self.openBtn.alpha    = col ? 0 : 1;
         self.pauseBtn.alpha   = col ? 0 : 1;
         self.clearBtn.alpha   = col ? 0 : 1;
     } completion:nil];
@@ -338,10 +331,6 @@ static DHFloatingController *gFloat = nil;
 - (void)onBarTap {
     // 缩小态点击(标题栏或圆形图标)展开; 展开态点击不缩小, 避免误触(缩小用「–」按钮)
     if (self.collapsed) [self toggleCollapsed];
-}
-
-- (void)onOpenLog {
-    [DHLogViewer presentFromFloating];
 }
 
 - (void)onTogglePause {

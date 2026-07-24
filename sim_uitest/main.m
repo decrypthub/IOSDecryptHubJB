@@ -33,10 +33,6 @@ static NSString *dh_real_url(void) {
     return (u && ![u hasPrefix:@"("]) ? u : nil;
 }
 
-@interface DHLogViewer : NSObject
-+ (void)presentFromFloating;
-@end
-
 // ==================== 算法触发(加解密 tab) ====================
 static const char *kMsg = "decrypt-helper interactive test sample";
 
@@ -309,8 +305,8 @@ static NSString *chk_device_info(void) {
     [self addGroup:t0 title:@"非对称" color:purple buttons:@[@"RSA 签名",@"RSA 加密"]
               sels:@[@"onRSASign",@"onRSAEnc"] keys:@[@"rsasign",@"rsaenc"]];
     [self addGroup:t0 title:@"密钥派生" color:mint buttons:@[@"PBKDF2"] sels:@[@"onPBKDF"] keys:@[@"pbkdf"]];
-    [self addGroup:t0 title:@"压测 / 综合" color:red buttons:@[@"128KB 大数据",@"全部跑一遍",@"打开日志"]
-              sels:@[@"onBig",@"onAll",@"onLog"] keys:@[@"big",@"all",@"log"]];
+    [self addGroup:t0 title:@"压测 / 综合" color:red buttons:@[@"128KB 大数据",@"全部跑一遍"]
+              sels:@[@"onBig",@"onAll"] keys:@[@"big",@"all"]];
 
     // --- tab 1: 系统(文件 + 模块加载) ---
     UIStackView *t1 = [self addTabStack];
@@ -470,10 +466,6 @@ static NSString *chk_device_info(void) {
     do_sym(kCCAlgorithmDES, 8, 8); do_rc4(); do_pbkdf();
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ do_rsa_sign(); do_rsa_enc(); });
     [self flash:@"全部算法"];
-}
-- (void)onLog {
-    Class c = NSClassFromString(@"DHLogViewer");
-    if (c && [c respondsToSelector:@selector(presentFromFloating)]) [c performSelector:@selector(presentFromFloating)];
 }
 // 文件
 - (void)onFWrite   { do_file_write();  [self flash:@"写文件"]; }

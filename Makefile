@@ -60,7 +60,6 @@ SRC     := src/core/fishhook.c \
            src/server/mcp_server.m \
            src/server/dh_log_json.m \
            src/ui/ui_float.m \
-           src/ui/ui_logview.m \
            src/core/main.m \
            $(CAPSTONE_SRC)
 

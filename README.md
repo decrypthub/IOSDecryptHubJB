@@ -6,14 +6,11 @@
 
 ## 截图
 
-Web 面板多 tab（加解密 / 文件 / 系统 / 符号 / Dump）+ 宿主 App 图标 + 左右分栏 master-detail，配交互式测试台、iOS 悬浮窗与全屏日志查看器。
+Web 面板多 tab（加解密 / 文件 / 系统 / 符号 / Dump）+ 宿主 App 图标 + 左右分栏 master-detail，配交互式测试台与轻量 iOS 悬浮控制窗。
 
 | Web 面板（加解密 master-detail） | 交互式测试台（分 tab 触发各类调用） |
 | --- | --- |
 | ![web-net](docs/screenshots/02-web-panel.png) | ![test-host](docs/screenshots/01-test-host.png) |
-| 悬浮窗（毛玻璃，可拖动、可收起成胶囊） | 全屏日志查看器（分类切换、搜索、详情展开） |
-| ![floating](docs/screenshots/03-floating.png) | ![logview](docs/screenshots/04-logview.png) |
-
 ## 覆盖的算法
 
 拦截的是 CommonCrypto 与 Security.framework 这两套系统库，macOS 与 iOS 上同名同接口。
@@ -25,11 +22,10 @@ Web 面板多 tab（加解密 / 文件 / 系统 / 符号 / Dump）+ 宿主 App �
 - 非对称：RSA / EC 的签名、验签、加密、解密（SecKey 系列）。
 - 密钥派生（KDF）：CCKeyDerivationPBKDF（PBKDF2），记录明文口令、salt、迭代次数、PRF 与派生出的密钥。
 
-## 三种查看方式
+## 查看方式
 
 1. 本地 Web 服务（推荐）。dylib 加载后自动在 8088 起一个零依赖的 HTTP 服务，浏览器访问即可。多 tab 架构，加解密 tab 为左右分栏 master-detail（左列表 / 右详情，分隔条可拖动，输入/输出上下卡片）。支持实时列表、分类切换、关键字搜索、按数据大小过滤、详情展开（Key/IV/明文/密文的 Hex 与 HexDump、调用栈）、暂停、清空、下载日志文件。顶部展示宿主 App 图标与进程信息（应用名、bundle id、PID、系统版本、设备型号、物理内存）。
-2. iOS 内嵌悬浮窗 + 全屏查看器。悬浮窗是一个毛玻璃质感的小窗，显示各分类计数与服务地址，可拖动、可缩小成胶囊；点其中的日志按钮弹出全屏查看器看完整明细。
-3. 文件落盘。所有日志同时异步追加到 Documents/decrypt_helper.log，可用于导出。
+2. 文件落盘。所有日志同时异步追加到 Documents/decrypt_helper.log，可用于导出。iOS 悬浮窗只保留采集状态、Web 地址、暂停与清空，不再承载日志查看。
 
 安全提示：Web 服务无认证、监听所有网卡（0.0.0.0），会把 Key 与明文暴露给同网络中任何能连接的人，仅建议在可信网络中调试使用。
 
@@ -205,8 +201,7 @@ src/
     http_server.{h,m}   零依赖本地 HTTP 服务
     web_index_html.h    内嵌单页前端 (由 web/index.html 生成)
   ui/
-    ui_float.{h,m}      悬浮控制窗
-    ui_logview.{h,m}    全屏日志查看器
+    ui_float.{h,m}      悬浮控制窗 (状态 / Web 地址 / 暂停 / 清空)
 web/index.html          Web 面板源文件
 tools/gen_web.py        前端 → C 头文件生成器
 sim_uitest/             交互式测试宿主 App
