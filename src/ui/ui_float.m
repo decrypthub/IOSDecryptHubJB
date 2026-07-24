@@ -16,13 +16,14 @@
 #import "http_server.h"
 #import "dh_health.h"
 
-// 黑白设计系统: #0d0d0d accent / #000 ink / #8c8c8c muted / #dbdbdb line / #f5f5f5 surface / #101828 link
-#define DH_ACCENT   [UIColor colorWithRed:0.051 green:0.051 blue:0.051 alpha:1.0]  // #0d0d0d
-#define DH_INK      [UIColor blackColor]                                           // #000000
-#define DH_MUTED    [UIColor colorWithRed:0.549 green:0.549 blue:0.549 alpha:1.0]  // #8c8c8c
-#define DH_LINE     [UIColor colorWithRed:0.859 green:0.859 blue:0.859 alpha:1.0]  // #dbdbdb
-#define DH_SURFACE  [UIColor colorWithRed:0.961 green:0.961 blue:0.961 alpha:1.0]  // #f5f5f5
-#define DH_LINK     [UIColor colorWithRed:0.063 green:0.094 blue:0.157 alpha:1.0]  // #101828
+// 夜间设计系统: 黑底 + 高对比白字 + 少量冷蓝点缀
+#define DH_BG       [UIColor colorWithRed:0.035 green:0.039 blue:0.047 alpha:1.0]  // #090a0c
+#define DH_ACCENT   [UIColor colorWithRed:0.969 green:0.973 blue:0.984 alpha:1.0]  // #f7f8fb
+#define DH_INK      [UIColor colorWithRed:0.969 green:0.973 blue:0.984 alpha:1.0]  // #f7f8fb
+#define DH_MUTED    [UIColor colorWithRed:0.690 green:0.722 blue:0.769 alpha:1.0]  // #b0b8c4
+#define DH_LINE     [UIColor colorWithRed:0.255 green:0.290 blue:0.349 alpha:1.0]  // #414a59
+#define DH_SURFACE  [UIColor colorWithRed:0.090 green:0.106 blue:0.133 alpha:1.0]  // #171b22
+#define DH_LINK     [UIColor colorWithRed:0.541 green:0.706 blue:1.000 alpha:1.0]  // #8ab4ff
 
 @interface DHFloatingController : NSObject
 @property (nonatomic, strong) UIWindow    *window;
@@ -87,14 +88,14 @@ static DHFloatingController *gFloat = nil;
     self.window = w;
     UIView *root = w.rootViewController.view;
 
-    // 黑白卡片: 纯白底 + 1pt 黑描边 (不再用深色毛玻璃)
+    // 夜间卡片: 近黑底 + 1pt 浅描边 (不再用深色毛玻璃)
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W, H)];
     card.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    card.backgroundColor = [UIColor whiteColor];
+    card.backgroundColor = DH_BG;
     card.layer.cornerRadius = 8;
     card.layer.masksToBounds = YES;
     card.layer.borderWidth = 1.0;
-    card.layer.borderColor = [UIColor blackColor].CGColor;
+    card.layer.borderColor = DH_ACCENT.CGColor;
     [root addSubview:card];
     self.cardView = card;
 
@@ -111,7 +112,7 @@ static DHFloatingController *gFloat = nil;
     self.collapsedIcon = icon;
     [root addSubview:icon];
 
-    // 标题栏 (透明, 铺在白色卡面上)
+    // 标题栏 (透明, 铺在深色卡面上)
     UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W, 40)];
     bar.backgroundColor = [UIColor clearColor];
     bar.userInteractionEnabled = YES;
@@ -163,7 +164,7 @@ static DHFloatingController *gFloat = nil;
     [self.urlLabel addGestureRecognizer:tap];
     [root addSubview:self.urlLabel];
 
-    // 操作按钮区 (44pt 触控高度, 黑白按钮: 主操作黑底 / 次操作灰底 / 危险操作黑描边)
+    // 操作按钮区 (44pt 触控高度, 深色底 + 高对比浅字)
     CGFloat by = 148, bw = 70, bh = 40, bx = 12, gap = 9;
     self.openBtn  = [self makeButton:@"日志" style:0
                                frame:CGRectMake(bx, by, bw, bh) action:@selector(onOpenLog)];
@@ -196,30 +197,30 @@ static DHFloatingController *gFloat = nil;
     b.layer.cornerRadius = 8;
     b.layer.borderWidth = 1.0;
     if (style == 0) {
-        // 主操作: 黑底白字
-        b.backgroundColor = [UIColor blackColor];
-        [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        b.layer.borderColor = [UIColor blackColor].CGColor;
+        // 主操作: 浅底深字 (夜间反白)
+        b.backgroundColor = DH_ACCENT;
+        [b setTitleColor:DH_BG forState:UIControlStateNormal];
+        b.layer.borderColor = DH_ACCENT.CGColor;
     } else if (style == 1) {
-        // 次操作: #f5f5f5 灰底黑字
+        // 次操作: 深灰底浅字
         b.backgroundColor = DH_SURFACE;
         [b setTitleColor:DH_INK forState:UIControlStateNormal];
         b.layer.borderColor = DH_LINE.CGColor;
     } else {
-        // 危险操作: 白底黑描边黑字
-        b.backgroundColor = [UIColor whiteColor];
+        // 危险操作: 深底浅描边浅字
+        b.backgroundColor = DH_BG;
         [b setTitleColor:DH_INK forState:UIControlStateNormal];
-        b.layer.borderColor = [UIColor blackColor].CGColor;
+        b.layer.borderColor = DH_ACCENT.CGColor;
     }
     [b addTarget:self action:sel forControlEvents:UIControlEventTouchUpInside];
     return b;
 }
 
-// URL 行样式: 正常 = #101828 深色; 异常 = 黑底白字反白 (fail-loud, 不再用红/蓝)
+// URL 行样式: 正常 = 冷蓝; 异常 = 浅底深字反白 (fail-loud, 不再用红/蓝)
 - (void)applyUrlStyle:(BOOL)error {
     if (error) {
-        self.urlLabel.backgroundColor = [UIColor blackColor];
-        self.urlLabel.textColor = [UIColor whiteColor];
+        self.urlLabel.backgroundColor = DH_ACCENT;
+        self.urlLabel.textColor = DH_BG;
         self.urlLabel.layer.cornerRadius = 6;
         self.urlLabel.layer.masksToBounds = YES;
     } else {

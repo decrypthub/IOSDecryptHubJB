@@ -7,10 +7,11 @@
 #import "log_store.h"
 #import "dh_noise.h"
 
-// 黑白设计系统: #0d0d0d accent / #000 ink / #8c8c8c muted / #dbdbdb line
-#define DH_INK   [UIColor blackColor]
-#define DH_MUTED [UIColor colorWithRed:0.549 green:0.549 blue:0.549 alpha:1.0]
-#define DH_LINE  [UIColor colorWithRed:0.859 green:0.859 blue:0.859 alpha:1.0]
+// 夜间设计系统: 黑底 + 高对比白字 + 少量冷蓝点缀
+#define DH_BG    [UIColor colorWithRed:0.035 green:0.039 blue:0.047 alpha:1.0]  // #090a0c
+#define DH_INK   [UIColor colorWithRed:0.969 green:0.973 blue:0.984 alpha:1.0]  // #f7f8fb
+#define DH_MUTED [UIColor colorWithRed:0.690 green:0.722 blue:0.769 alpha:1.0]  // #b0b8c4
+#define DH_LINE  [UIColor colorWithRed:0.255 green:0.290 blue:0.349 alpha:1.0]  // #414a59
 
 // ===================== 详情页 =====================
 @interface DHLogDetailVC : UIViewController
@@ -26,7 +27,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor whiteColor];
+    self.view.backgroundColor = DH_BG;
     self.title = [NSString stringWithFormat:@"#%llu %@", (unsigned long long)_entry.seq, _entry.algorithm];
 
     UIBarButtonItem *copyBtn = [[UIBarButtonItem alloc] initWithTitle:@"拷贝全部"
@@ -113,7 +114,7 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"IOSDecryptHub - 日志";
-    self.view.backgroundColor = [UIColor whiteColor];
+    self.view.backgroundColor = DH_BG;
     self.filterCategory = -1;
     self.filterNoiseBoard = -1;
     self.searchKw = @"";
@@ -130,12 +131,12 @@
 
     self.segment = [[UISegmentedControl alloc] initWithItems:@[@"全部", @"加密", @"系统", @"加密噪声", @"系统噪声"]];
     self.segment.selectedSegmentIndex = 0;
-    // 黑白分段: 选中态黑底白字
+    // 夜间分段: 选中态浅底深字
     if (@available(iOS 13.0, *)) {
-        self.segment.selectedSegmentTintColor = [UIColor blackColor];
+        self.segment.selectedSegmentTintColor = DH_INK;
     }
     [self.segment setTitleTextAttributes:@{NSForegroundColorAttributeName: DH_MUTED} forState:UIControlStateNormal];
-    [self.segment setTitleTextAttributes:@{NSForegroundColorAttributeName: [UIColor whiteColor]} forState:UIControlStateSelected];
+    [self.segment setTitleTextAttributes:@{NSForegroundColorAttributeName: DH_BG} forState:UIControlStateSelected];
     [self.segment addTarget:self action:@selector(onSegment:) forControlEvents:UIControlEventValueChanged];
     self.segment.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.segment];
@@ -143,7 +144,8 @@
     self.searchBar = [[UISearchBar alloc] init];
     self.searchBar.placeholder = @"搜索: 算法/明文/Hex...";
     self.searchBar.delegate = self;
-    self.searchBar.barStyle = UIBarStyleDefault;
+    self.searchBar.barStyle = UIBarStyleBlack;
+    self.searchBar.barTintColor = DH_BG;
     self.searchBar.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.searchBar];
 
@@ -244,7 +246,7 @@
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:kCell];
     if (!c) {
         c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:kCell];
-        c.backgroundColor = [UIColor whiteColor];
+        c.backgroundColor = DH_BG;
         c.textLabel.font = [UIFont boldSystemFontOfSize:13];
         c.textLabel.textColor = DH_INK;
         c.detailTextLabel.font = [UIFont fontWithName:@"Menlo" size:10];
@@ -252,8 +254,19 @@
         c.detailTextLabel.numberOfLines = 2;
     }
     DHLogEntry *e = self.data[ip.row];
-    // 黑白风格: 分类不再用彩色区分 (靠分段筛选与算法名辨识)
+    // 克制功能色: 提亮一点, 只点缀标题, 不喧宾夺主
     UIColor *catColor = DH_INK;
+    switch (e.category) {
+        case DHCategoryDigest:     catColor = [UIColor colorWithRed:0.620 green:0.902 blue:0.714 alpha:1.0]; break; // #9ee6b6
+        case DHCategoryHMAC:       catColor = [UIColor colorWithRed:0.541 green:0.706 blue:1.000 alpha:1.0]; break; // #8ab4ff
+        case DHCategorySymmetric:  catColor = [UIColor colorWithRed:0.941 green:0.718 blue:0.435 alpha:1.0]; break; // #f0b76f
+        case DHCategoryAsymmetric: catColor = [UIColor colorWithRed:0.843 green:0.651 blue:1.000 alpha:1.0]; break; // #d7a6ff
+        case DHCategoryFile:       catColor = [UIColor colorWithRed:0.890 green:0.827 blue:0.486 alpha:1.0]; break; // #e3d37c
+        case DHCategorySystem:     catColor = [UIColor colorWithRed:0.722 green:0.647 blue:1.000 alpha:1.0]; break; // #b8a5ff
+        case DHCategoryNetwork:    catColor = [UIColor colorWithRed:0.498 green:0.839 blue:0.871 alpha:1.0]; break; // #7fd6df
+        case DHCategoryKeychain:   catColor = [UIColor colorWithRed:1.000 green:0.608 blue:0.722 alpha:1.0]; break; // #ff9bb8
+        default: break;
+    }
     NSMutableAttributedString *title = [[NSMutableAttributedString alloc] initWithString:
         [NSString stringWithFormat:@"#%llu  %@  %@", (unsigned long long)e.seq, e.algorithm, e.operation]];
     [title addAttribute:NSForegroundColorAttributeName value:catColor
@@ -324,12 +337,12 @@
         DHLogListVC *list = [DHLogListVC new];
         UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:list];
         nav.modalPresentationStyle = UIModalPresentationFullScreen;
-        nav.navigationBar.barStyle = UIBarStyleDefault;
+        nav.navigationBar.barStyle = UIBarStyleBlack;
         nav.navigationBar.tintColor = DH_INK;
         if (@available(iOS 13.0, *)) {
             UINavigationBarAppearance *ap = [UINavigationBarAppearance new];
             [ap configureWithOpaqueBackground];
-            ap.backgroundColor = [UIColor whiteColor];
+            ap.backgroundColor = DH_BG;
             ap.shadowColor = DH_LINE;
             ap.titleTextAttributes = @{NSForegroundColorAttributeName: DH_INK};
             nav.navigationBar.standardAppearance = ap;
