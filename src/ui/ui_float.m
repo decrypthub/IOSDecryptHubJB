@@ -24,6 +24,8 @@
 #define DH_LINE     [UIColor colorWithRed:0.255 green:0.290 blue:0.349 alpha:1.0]  // #414a59
 #define DH_SURFACE  [UIColor colorWithRed:0.090 green:0.106 blue:0.133 alpha:1.0]  // #171b22
 #define DH_LINK     [UIColor colorWithRed:0.541 green:0.706 blue:1.000 alpha:1.0]  // #8ab4ff
+#define DH_WARN     [UIColor colorWithRed:0.941 green:0.718 blue:0.435 alpha:1.0]  // #f0b76f
+#define DH_DANGER   [UIColor colorWithRed:1.000 green:0.608 blue:0.722 alpha:1.0]  // #ff9bb8
 
 @interface DHFloatingController : NSObject
 @property (nonatomic, strong) UIWindow    *window;
@@ -204,13 +206,13 @@ static DHFloatingController *gFloat = nil;
     } else if (style == 1) {
         // 次操作: 深灰底浅字
         b.backgroundColor = DH_SURFACE;
-        [b setTitleColor:DH_INK forState:UIControlStateNormal];
-        b.layer.borderColor = DH_LINE.CGColor;
+        [b setTitleColor:DH_WARN forState:UIControlStateNormal];
+        b.layer.borderColor = DH_WARN.CGColor;
     } else {
-        // 危险操作: 深底浅描边浅字
+        // 危险操作: 深底危险色描边
         b.backgroundColor = DH_BG;
-        [b setTitleColor:DH_INK forState:UIControlStateNormal];
-        b.layer.borderColor = DH_ACCENT.CGColor;
+        [b setTitleColor:DH_DANGER forState:UIControlStateNormal];
+        b.layer.borderColor = DH_DANGER.CGColor;
     }
     [b addTarget:self action:sel forControlEvents:UIControlEventTouchUpInside];
     return b;

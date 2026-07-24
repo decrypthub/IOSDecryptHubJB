@@ -12,6 +12,7 @@
 #define DH_INK   [UIColor colorWithRed:0.969 green:0.973 blue:0.984 alpha:1.0]  // #f7f8fb
 #define DH_MUTED [UIColor colorWithRed:0.690 green:0.722 blue:0.769 alpha:1.0]  // #b0b8c4
 #define DH_LINE  [UIColor colorWithRed:0.255 green:0.290 blue:0.349 alpha:1.0]  // #414a59
+#define DH_LINK  [UIColor colorWithRed:0.541 green:0.706 blue:1.000 alpha:1.0]  // #8ab4ff
 
 // ===================== 详情页 =====================
 @interface DHLogDetailVC : UIViewController
@@ -131,9 +132,9 @@
 
     self.segment = [[UISegmentedControl alloc] initWithItems:@[@"全部", @"加密", @"系统", @"加密噪声", @"系统噪声"]];
     self.segment.selectedSegmentIndex = 0;
-    // 夜间分段: 选中态浅底深字
+    // 夜间分段: 选中态用冷蓝, 比纯白更像工具当前状态
     if (@available(iOS 13.0, *)) {
-        self.segment.selectedSegmentTintColor = DH_INK;
+        self.segment.selectedSegmentTintColor = DH_LINK;
     }
     [self.segment setTitleTextAttributes:@{NSForegroundColorAttributeName: DH_MUTED} forState:UIControlStateNormal];
     [self.segment setTitleTextAttributes:@{NSForegroundColorAttributeName: DH_BG} forState:UIControlStateSelected];
