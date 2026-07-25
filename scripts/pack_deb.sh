@@ -53,6 +53,14 @@ PREFS_DIR="$STAGE${JBROOT}/Library/PreferenceLoader/Preferences"
 mkdir -p "$PREFS_DIR"
 cp packaging/DecryptHelper-prefs.plist "$PREFS_DIR/DecryptHelper.plist"
 
+# 管理器 App (桌面图标, 选择注入目标)
+if [ -d "build/app/DecryptHelper.app" ]; then
+    APP_DIR="$STAGE${JBROOT}/Applications"
+    mkdir -p "$APP_DIR"
+    cp -R build/app/DecryptHelper.app "$APP_DIR/"
+    echo "  + 管理器 App 已包含"
+fi
+
 # control: 模板占位符替换。
 sed -e "s/@VERSION@/$VERSION/" \
     -e "s/@ARCH@/$DEB_ARCH/" \

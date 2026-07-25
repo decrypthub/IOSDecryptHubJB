@@ -9,7 +9,7 @@
 #       export CROSS_CC=/path/to/theos/toolchain/linux/iphone/bin/clang
 #       make linux                 -> decrypt_helper.dylib
 
-VERSION := 1.22.1
+VERSION := 1.23.0
 TARGET  := decrypt_helper.dylib
 
 # Capstone 反汇编库源文件（仅 ARM/ARM64 架构）
@@ -59,7 +59,7 @@ SRC     := src/core/fishhook.c \
            src/hooks/behavior/hook_dyld.m \
            src/hooks/behavior/hook_network.m \
            src/server/http_server.m \
-           src/server/bonjour_publisher.m \
+           src/server/udp_beacon.m \
            src/server/mcp_server.m \
            src/server/dh_log_json.m \
            src/ui/ui_float.m \

@@ -8,8 +8,6 @@
 		<string>PSLinkCell</string>
 		<key>label</key>
 		<string>DecryptHelper</string>
-		<key>icon</key>
-		<string>DecryptHelper-icon.png</string>
 	</dict>
 	<key>items</key>
 	<array>

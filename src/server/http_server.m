@@ -35,7 +35,7 @@
 #import "dh_files.h"
 #import "dh_log_json.h"
 #import "mcp_server.h"
-#import "bonjour_publisher.h"
+#import "udp_beacon.h"
 
 #define DH_HTTP_PORT_FIRST  8088
 #define DH_HTTP_PORT_LAST   8108
@@ -1021,7 +1021,7 @@ void dh_http_start(void) {
         dispatch_async(gAcceptQ, ^{ accept_loop(); });
         dh_health_http_ok();
         NSLog(@"[IOSDecryptHub] HTTP 服务已启动: %@", gURL);
-        dh_bonjour_start(gPort);
+        dh_beacon_start(gPort);
     });
 }
 
