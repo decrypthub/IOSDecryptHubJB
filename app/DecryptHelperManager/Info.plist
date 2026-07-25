@@ -5,15 +5,15 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
-	<string>DecryptHelper</string>
+	<string>IOSDecryptHub</string>
 	<key>CFBundleExecutable</key>
-	<string>DecryptHelperManager</string>
+	<string>IOSDecryptHub</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.dh.decrypthelper.manager</string>
+	<string>com.dh.hub.v2</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>DecryptHelperManager</string>
+	<string>IOSDecryptHub</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

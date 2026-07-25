@@ -61,6 +61,19 @@ if [ -d "build/app/DecryptHelper.app" ]; then
     echo "  + 管理器 App 已包含"
 fi
 
+# root daemon: HTTP API 服务 (枚举 App / 读写偏好)
+if [ -f "build/daemon/dh_server" ]; then
+    HELPER_DIR="$STAGE${JBROOT}/usr/bin"
+    mkdir -p "$HELPER_DIR"
+    cp build/daemon/dh_server "$HELPER_DIR/dh_server"
+    chmod 755 "$HELPER_DIR/dh_server"
+    # LaunchDaemon: 开机自启 + 崩溃重拉
+    DAEMON_DIR="$STAGE${JBROOT}/Library/LaunchDaemons"
+    mkdir -p "$DAEMON_DIR"
+    cp packaging/com.dh.listapps.plist "$DAEMON_DIR/com.dh.server.plist"
+    echo "  + dh_server daemon + LaunchDaemon 已包含"
+fi
+
 # control: 模板占位符替换。
 sed -e "s/@VERSION@/$VERSION/" \
     -e "s/@ARCH@/$DEB_ARCH/" \

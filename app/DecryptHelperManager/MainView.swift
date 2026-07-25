@@ -1,61 +1,87 @@
-// MainView.swift — 主界面: 开关 + App 列表选择注入目标
+// MainView.swift — IOSDecryptHub 原生前端
+// 通过 HTTP API 与 root daemon (127.0.0.1:29817) 通信, 零文件系统访问, 无沙盒问题。
 
 import SwiftUI
 
-class PrefsManager: ObservableObject {
-    // 偏好文件路径 (roothide/rootless)
-    private static let prefsPaths = [
-        "/var/jb/var/mobile/Library/Preferences/com.dh.decrypthelper.plist",
-        "/var/mobile/Library/Preferences/com.dh.decrypthelper.plist",
-    ]
+// MARK: - API 客户端
+class DHApiClient: ObservableObject {
+    private let base = "http://127.0.0.1:29817"
 
-    @Published var enabled: Bool = false {
-        didSet { save() }
-    }
-    @Published var targetBundleId: String = "" {
-        didSet { save() }
-    }
+    @Published var enabled = false
+    @Published var targetBundleId = ""
+    @Published var apps: [AppInfo] = []
+    @Published var loading = false
+    @Published var daemonOnline = false
+    @Published var errorMsg: String?
 
-    private var prefsPath: String {
-        for p in Self.prefsPaths {
-            if FileManager.default.fileExists(atPath: p) { return p }
-        }
-        // 默认写 roothide/rootless 路径
-        return Self.prefsPaths[0]
+    func refresh() {
+        loading = true
+        errorMsg = nil
+        loadPrefs()
+        loadApps()
     }
 
-    init() { load() }
-
-    func load() {
-        guard let dict = NSDictionary(contentsOfFile: prefsPath) else { return }
-        enabled = (dict["DHEnabled"] as? Bool) ?? false
-        targetBundleId = (dict["DHTargetBundleId"] as? String) ?? ""
+    func loadPrefs() {
+        guard let url = URL(string: "\(base)/api/prefs") else { return }
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, err in
+            DispatchQueue.main.async {
+                guard let self, let data, err == nil,
+                      let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    self?.daemonOnline = false
+                    self?.errorMsg = "Daemon 未运行，请重启设备"
+                    self?.loading = false
+                    return
+                }
+                self.daemonOnline = true
+                self.enabled = (j["enabled"] as? Bool) ?? false
+                self.targetBundleId = (j["targetBundleId"] as? String) ?? ""
+                self.loading = false
+            }
+        }.resume()
     }
 
-    func save() {
-        let dict: [String: Any] = [
-            "DHEnabled": enabled,
-            "DHTargetBundleId": targetBundleId,
-        ]
-        // 确保目录存在
-        let dir = (prefsPath as NSString).deletingLastPathComponent
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        (dict as NSDictionary).write(toFile: prefsPath, atomically: true)
+    func loadApps() {
+        guard let url = URL(string: "\(base)/api/apps") else { return }
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, err in
+            DispatchQueue.main.async {
+                guard let self, let data, err == nil,
+                      let list = try? JSONDecoder().decode([AppInfo].self, from: data) else { return }
+                self.apps = list
+            }
+        }.resume()
+    }
+
+    func savePrefs() {
+        guard let url = URL(string: "\(base)/api/prefs") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = ["enabled": enabled, "targetBundleId": targetBundleId]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        URLSession.shared.dataTask(with: req) { [weak self] _, _, err in
+            if err != nil {
+                DispatchQueue.main.async { self?.errorMsg = "保存失败" }
+            }
+        }.resume()
     }
 }
 
+struct AppInfo: Identifiable, Codable {
+    let bundleId: String
+    let name: String
+    let isSystem: Bool
+    var id: String { bundleId }
+}
+
+// MARK: - 主视图
 struct MainView: View {
-    @StateObject private var prefs = PrefsManager()
-    @State private var apps: [AppInfo] = []
+    @StateObject private var api = DHApiClient()
     @State private var searchText = ""
     @State private var showSystem = false
-    @State private var loading = true
 
     private var filteredApps: [AppInfo] {
-        var list = apps
-        if !showSystem {
-            list = list.filter { !$0.isSystem }
-        }
+        var list = api.apps
+        if !showSystem { list = list.filter { !$0.isSystem } }
         if !searchText.isEmpty {
             list = list.filter {
                 $0.name.localizedCaseInsensitiveContains(searchText) ||
@@ -68,130 +94,88 @@ struct MainView: View {
     var body: some View {
         NavigationView {
             List {
+                // Daemon 状态
+                if !api.daemonOnline {
+                    Section {
+                        Label(api.errorMsg ?? "连接中...", systemImage: "exclamationmark.triangle")
+                            .foregroundColor(.orange)
+                        Button("重试连接") { api.refresh() }
+                    }
+                }
+
                 // 总开关
                 Section {
-                    Toggle(isOn: $prefs.enabled) {
+                    Toggle(isOn: $api.enabled) {
                         Label("启用注入", systemImage: "power")
                     }
                     .toggleStyle(SwitchToggleStyle(tint: .green))
+                    .onChange(of: api.enabled) { _ in api.savePrefs() }
                 } header: {
                     Text("注入控制")
                 } footer: {
-                    Text(prefs.enabled ? "已启用 — 目标 App 重启后生效" : "已关闭 — 不注入任何进程")
+                    Text(api.enabled ? "已启用 — 目标 App 重启后生效" : "已关闭 — 不注入任何进程")
                 }
 
                 // 当前目标
                 Section {
-                    if prefs.targetBundleId.isEmpty {
+                    if api.targetBundleId.isEmpty {
                         Label("所有 App（未指定目标）", systemImage: "apps.iphone")
                             .foregroundColor(.secondary)
                     } else {
                         HStack {
-                            Label(prefs.targetBundleId, systemImage: "target")
-                                .lineLimit(1)
+                            Label(api.targetBundleId, systemImage: "target").lineLimit(1)
                             Spacer()
                             Button("清除") {
-                                prefs.targetBundleId = ""
-                            }
-                            .foregroundColor(.red)
+                                api.targetBundleId = ""
+                                api.savePrefs()
+                            }.foregroundColor(.red)
                         }
                     }
                 } header: {
                     Text("当前目标")
                 } footer: {
-                    Text("点击下方 App 设为注入目标。留空 = 注入所有 App。")
+                    Text("点击下方 App 设为注入目标，留空 = 所有 App")
                 }
 
                 // App 列表
                 Section {
-                    if loading {
-                        HStack {
-                            Spacer()
-                            ProgressView("加载应用列表...")
-                            Spacer()
-                        }
+                    if api.loading {
+                        HStack { Spacer(); ProgressView("加载中..."); Spacer() }
                     } else {
                         ForEach(filteredApps) { app in
-                            AppRow(app: app, isSelected: prefs.targetBundleId == app.bundleId) {
-                                prefs.targetBundleId = app.bundleId
-                                prefs.enabled = true
+                            Button {
+                                api.targetBundleId = app.bundleId
+                                api.enabled = true
+                                api.savePrefs()
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(app.name).foregroundColor(.primary).lineLimit(1)
+                                        Text(app.bundleId).font(.caption2)
+                                            .foregroundColor(.secondary).lineLimit(1)
+                                    }
+                                    Spacer()
+                                    if api.targetBundleId == app.bundleId {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundColor(.green)
+                                    }
+                                }
                             }
                         }
                     }
                 } header: {
                     HStack {
-                        Text("已安装应用 (\(filteredApps.count))")
+                        Text("应用 (\(filteredApps.count))")
                         Spacer()
-                        Toggle("系统", isOn: $showSystem)
-                            .toggleStyle(SwitchToggleStyle(tint: .blue))
-                            .frame(width: 80)
+                        Toggle("系统", isOn: $showSystem).frame(width: 80)
                     }
                 }
             }
             .listStyle(InsetGroupedListStyle())
-            .navigationTitle("DecryptHelper")
-            .searchable(text: $searchText, prompt: "搜索应用名或 Bundle ID")
+            .navigationTitle("IOSDecryptHub")
+            .searchable(text: $searchText, prompt: "搜索应用")
+            .refreshable { api.refresh() }
         }
-        .onAppear {
-            DispatchQueue.global(qos: .userInitiated).async {
-                let result = AppEnumerator.allApps()
-                DispatchQueue.main.async {
-                    apps = result
-                    loading = false
-                }
-            }
-        }
-    }
-}
-
-struct AppRow: View {
-    let app: AppInfo
-    let isSelected: Bool
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 12) {
-                // 图标
-                if let icon = app.icon {
-                    Image(uiImage: icon)
-                        .resizable()
-                        .frame(width: 36, height: 36)
-                        .cornerRadius(8)
-                } else {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.gray.opacity(0.2))
-                        .frame(width: 36, height: 36)
-                        .overlay(
-                            Text(String(app.name.prefix(1)))
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(.gray)
-                        )
-                }
-
-                // 名称 + Bundle ID
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(app.name)
-                        .font(.body)
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                    Text(app.bundleId)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                // 选中标记
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.title3)
-                }
-            }
-            .padding(.vertical, 2)
-        }
-        .background(isSelected ? Color.green.opacity(0.08) : Color.clear)
+        .onAppear { api.refresh() }
     }
 }

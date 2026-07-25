@@ -25,17 +25,15 @@ mkdir -p "$APP_BUNDLE"
 
 echo "==> 编译 DecryptHelper 管理器 ($VARIANT, $ARCH)"
 "$CC" \
+    -parse-as-library \
     -target "${ARCH}-apple-ios${MIN_IOS}" \
     -sdk "$SDK" \
     -framework SwiftUI \
     -framework UIKit \
     -framework Foundation \
-    -framework CoreGraphics \
     -O \
-    -o "$APP_BUNDLE/DecryptHelperManager" \
-    "$APP_SRC/DecryptHelperApp.swift" \
-    "$APP_SRC/PrivateAPIs.swift" \
-    "$APP_SRC/MainView.swift"
+    -o "$APP_BUNDLE/IOSDecryptHub" \
+    "$APP_SRC/App.swift"
 
 echo "==> 组装 .app bundle"
 cp "$APP_SRC/Info.plist" "$APP_BUNDLE/"
@@ -43,7 +41,7 @@ cp "$APP_SRC/AppIcon60x60@2x.png" "$APP_BUNDLE/" 2>/dev/null || true
 
 echo "==> 伪签名 (ldid)"
 if [ -n "$LDID" ]; then
-    "$LDID" -S"$APP_SRC/entitlements.plist" "$APP_BUNDLE/DecryptHelperManager"
+    "$LDID" -S "$APP_BUNDLE/IOSDecryptHub"
 else
     echo "⚠️  ldid 未找到, 跳过签名"
 fi
