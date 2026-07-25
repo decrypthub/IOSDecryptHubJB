@@ -24,7 +24,7 @@ VERSION="$(grep -m1 '^VERSION' Makefile | sed 's/.*:=[[:space:]]*//')"
 case "$VARIANT" in
     rootless)  JBROOT="/var/jb"; DEB_ARCH="iphoneos-arm64"; DEPENDS="ellekit | mobilesubstrate" ;;
     rootful)   JBROOT="";        DEB_ARCH="iphoneos-arm";   DEPENDS="mobilesubstrate" ;;
-    roothide)  JBROOT="/var/jb"; DEB_ARCH="iphoneos-arm64"; DEPENDS="ellekit" ;;
+    roothide)  JBROOT="/var/jb"; DEB_ARCH="iphoneos-arm64e"; DEPENDS="ellekit" ;;
     *) echo "用法: $0 <rootless|rootful|roothide>"; exit 1 ;;
 esac
 
@@ -49,7 +49,7 @@ cp decrypt_helper.dylib          "$DYLIB_DIR/DecryptHelper.dylib"
 cp packaging/DecryptHelper.plist "$DYLIB_DIR/DecryptHelper.plist"
 
 # PreferenceLoader 设置面板 (Settings 里的注入开关)
-PREFS_DIR="$STAGE${JBROOT}/Library/PreferenceLoader"
+PREFS_DIR="$STAGE${JBROOT}/Library/PreferenceLoader/Preferences"
 mkdir -p "$PREFS_DIR"
 cp packaging/DecryptHelper-prefs.plist "$PREFS_DIR/DecryptHelper.plist"
 
