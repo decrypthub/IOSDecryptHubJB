@@ -312,3 +312,10 @@ clean:
 
 .PHONY: all linux mac sim test-mac sim-install dist clean \
         deb-rootless deb-rootful deb-roothide debs app daemon deb-full
+
+# ---------- 11) TrollStore IPA (非越狱, 管理器 App + dylib 打包) ----------
+# 参考 TrollFools 方案: App 直接 patch 目标 App 的 Mach-O 二进制。
+# 不依赖 daemon / plist / Substrate, 全程非越狱。
+ipa:
+	@chmod +x app-trollstore/build_ipa.sh
+	./app-trollstore/build_ipa.sh
