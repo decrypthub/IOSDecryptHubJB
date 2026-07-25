@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>entry</key>
+	<dict>
+		<key>cell</key>
+		<string>PSLinkCell</string>
+		<key>label</key>
+		<string>DecryptHelper</string>
+		<key>icon</key>
+		<string>DecryptHelper-icon.png</string>
+	</dict>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>注入控制</string>
+			<key>footerText</key>
+			<string>开启后对目标 App 注入解密助手。关闭则不注入任何进程。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.dh.decrypthelper</string>
+			<key>key</key>
+			<string>DHEnabled</string>
+			<key>label</key>
+			<string>启用注入</string>
+			<key>PostNotification</key>
+			<string>com.dh.decrypthelper/prefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSTextFieldSpecifier</string>
+			<key>defaults</key>
+			<string>com.dh.decrypthelper</string>
+			<key>key</key>
+			<string>DHTargetBundleId</string>
+			<key>label</key>
+			<string>目标 Bundle ID</string>
+			<key>placeholder</key>
+			<string>留空 = 所有 App</string>
+			<key>PostNotification</key>
+			<string>com.dh.decrypthelper/prefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>修改后需重启目标 App 生效（杀后台重开即可）。</string>
+		</dict>
+	</array>
+	<key>title</key>
+	<string>DecryptHelper</string>
+</dict>
+</plist>

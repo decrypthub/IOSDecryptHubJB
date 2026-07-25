@@ -48,6 +48,11 @@ mkdir -p "$DYLIB_DIR" "$STAGE/DEBIAN"
 cp decrypt_helper.dylib          "$DYLIB_DIR/DecryptHelper.dylib"
 cp packaging/DecryptHelper.plist "$DYLIB_DIR/DecryptHelper.plist"
 
+# PreferenceLoader 设置面板 (Settings 里的注入开关)
+PREFS_DIR="$STAGE${JBROOT}/Library/PreferenceLoader"
+mkdir -p "$PREFS_DIR"
+cp packaging/DecryptHelper-prefs.plist "$PREFS_DIR/DecryptHelper.plist"
+
 # control: 模板占位符替换。
 sed -e "s/@VERSION@/$VERSION/" \
     -e "s/@ARCH@/$DEB_ARCH/" \

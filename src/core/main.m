@@ -44,8 +44,46 @@ static void dh_install_all_hooks(void) {
     dh_install_network_hooks();
 }
 
+// ---- 注入开关: 越狱变体读 Settings 偏好, 默认不激活 ----
+// 偏好文件由 PreferenceLoader 写入, 路径:
+//   rootless/roothide: /var/jb/var/mobile/Library/Preferences/com.dh.decrypthelper.plist
+//   rootful:           /var/mobile/Library/Preferences/com.dh.decrypthelper.plist
+// 键:
+//   DHEnabled (BOOL)          — 总开关, 默认 NO
+//   DHTargetBundleId (String) — 目标 App Bundle ID, 留空 = 所有 App
+static BOOL dh_prefs_should_activate(void) {
+#if DH_VARIANT >= 2  // rootless(2) / rootful(3) / roothide(4) 才走偏好门控
+    // 尝试两个路径 (兼容 rootful 无 /var/jb 前缀)
+    NSDictionary *prefs = nil;
+    NSArray *paths = @[
+        @"/var/jb/var/mobile/Library/Preferences/com.dh.decrypthelper.plist",
+        @"/var/mobile/Library/Preferences/com.dh.decrypthelper.plist",
+    ];
+    for (NSString *p in paths) {
+        prefs = [NSDictionary dictionaryWithContentsOfFile:p];
+        if (prefs) break;
+    }
+    // 无偏好文件 = 从未在设置里开启过 → 不注入
+    if (!prefs) return NO;
+    // 总开关
+    if (![prefs[@"DHEnabled"] boolValue]) return NO;
+    // 目标 Bundle ID 过滤 (留空 = 全部)
+    NSString *target = prefs[@"DHTargetBundleId"];
+    if (target.length > 0) {
+        NSString *self_bid = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+        if (![self_bid isEqualToString:target]) return NO;
+    }
+    return YES;
+#else
+    // dev / trollstore 变体: 手动注入, 不走偏好门控
+    return YES;
+#endif
+}
+
 __attribute__((constructor))
 static void dh_bootstrap(void) {
+    // 越狱变体: 设置未开启则不注入, 静默退出
+    if (!dh_prefs_should_activate()) return;
     // 预热 Foundation 的 locale / NSDateFormatter / backtrace, 避免 hook 安装后首次时间格式化
     // 在 hooked_open 内部触发 open/dlopen 递归(与 dh_in_hook 标志双保险).
     (void)DHTimestampNow();
