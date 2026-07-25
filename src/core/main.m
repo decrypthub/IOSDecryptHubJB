@@ -44,28 +44,16 @@ static void dh_install_all_hooks(void) {
     dh_install_network_hooks();
 }
 
-// ---- 注入开关: 越狱变体读 Settings 偏好, 默认不激活 ----
-// 偏好文件由 PreferenceLoader 写入, 路径:
-//   rootless/roothide: /var/jb/var/mobile/Library/Preferences/com.dh.decrypthelper.plist
-//   rootful:           /var/mobile/Library/Preferences/com.dh.decrypthelper.plist
+// ---- 注入开关: 越狱变体读偏好, 默认不激活 ----
+// 偏好路径由 Makefile 按 VARIANT 编译期注入 (DH_PREFS_PATH), 运行时不猜路径。
 // 键:
 //   DHEnabled (BOOL)          — 总开关, 默认 NO
 //   DHTargetBundleId (String) — 目标 App Bundle ID, 留空 = 所有 App
 static BOOL dh_prefs_should_activate(void) {
 #if DH_VARIANT >= 2  // rootless(2) / rootful(3) / roothide(4) 才走偏好门控
-    // 尝试两个路径 (兼容 rootful 无 /var/jb 前缀)
-    NSDictionary *prefs = nil;
-    NSArray *paths = @[
-        @"/var/jb/var/mobile/Library/Preferences/com.dh.decrypthelper.plist",
-        @"/var/mobile/Library/Preferences/com.dh.decrypthelper.plist",
-    ];
-    for (NSString *p in paths) {
-        prefs = [NSDictionary dictionaryWithContentsOfFile:p];
-        if (prefs) break;
-    }
-    // 无偏好文件 = 从未在设置里开启过 → 不注入
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:@DH_PREFS_PATH];
+    // 无偏好文件 = 从未开启过 → 不注入 (fail loud: 用户必须显式开启)
     if (!prefs) return NO;
-    // 总开关
     if (![prefs[@"DHEnabled"] boolValue]) return NO;
     // 目标 Bundle ID 过滤 (留空 = 全部)
     NSString *target = prefs[@"DHTargetBundleId"];

@@ -47,13 +47,11 @@ static NSString *dh_path(NSString *relative) {
 }
 
 #define DH_SERVER_PORT 29817
-#define PREFS_PATH @"/var/jb/var/mobile/Library/Preferences/com.dh.decrypthelper.plist"
-#define PREFS_PATH_ROOTFUL @"/var/mobile/Library/Preferences/com.dh.decrypthelper.plist"
 
 // ---- 偏好读写 ----
 static NSString *dh_prefs_path(void) {
     // 必须和 dylib 读取路径一致: <jbroot>/var/mobile/Library/Preferences/
-    return dh_path(@"var/mobile/Library/Preferences/com.dh.decrypthelper.plist");
+    return dh_path(@"var/mobile/Library/Preferences/com.dh.iosdecrypthub.plist");
 }
 
 static NSDictionary *dh_read_prefs(void) {

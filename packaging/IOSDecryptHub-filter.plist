@@ -9,7 +9,7 @@
       要缩小到单个目标 App, 把 com.apple.UIKit 换成目标 Bundle ID, 例如:
         <string>com.tencent.xin</string>
       多个目标就并列多个 <string>。改完重装 .deb 或直接编辑设备上的
-        {jbroot}/Library/MobileSubstrate/DynamicLibraries/DecryptHelper.plist
+        {jbroot}/Library/MobileSubstrate/DynamicLibraries/IOSDecryptHub.plist
       后 respring 生效。
     -->
     <key>Filter</key>

@@ -7,7 +7,7 @@
 		<key>cell</key>
 		<string>PSLinkCell</string>
 		<key>label</key>
-		<string>DecryptHelper</string>
+		<string>IOSDecryptHub</string>
 	</dict>
 	<key>items</key>
 	<array>
@@ -25,19 +25,19 @@
 			<key>default</key>
 			<false/>
 			<key>defaults</key>
-			<string>com.dh.decrypthelper</string>
+			<string>com.dh.iosdecrypthub</string>
 			<key>key</key>
 			<string>DHEnabled</string>
 			<key>label</key>
 			<string>启用注入</string>
 			<key>PostNotification</key>
-			<string>com.dh.decrypthelper/prefs</string>
+			<string>com.dh.iosdecrypthub/prefs</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSTextFieldSpecifier</string>
 			<key>defaults</key>
-			<string>com.dh.decrypthelper</string>
+			<string>com.dh.iosdecrypthub</string>
 			<key>key</key>
 			<string>DHTargetBundleId</string>
 			<key>label</key>
@@ -45,7 +45,7 @@
 			<key>placeholder</key>
 			<string>留空 = 所有 App</string>
 			<key>PostNotification</key>
-			<string>com.dh.decrypthelper/prefs</string>
+			<string>com.dh.iosdecrypthub/prefs</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -55,6 +55,6 @@
 		</dict>
 	</array>
 	<key>title</key>
-	<string>DecryptHelper</string>
+	<string>IOSDecryptHub</string>
 </dict>
 </plist>

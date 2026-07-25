@@ -45,19 +45,19 @@ DYLIB_DIR="$STAGE${JBROOT}/Library/MobileSubstrate/DynamicLibraries"
 mkdir -p "$DYLIB_DIR" "$STAGE/DEBIAN"
 
 # dylib 与 plist 同名 (MobileSubstrate 约定: 同前缀配对)。
-cp decrypt_helper.dylib          "$DYLIB_DIR/DecryptHelper.dylib"
-cp packaging/DecryptHelper.plist "$DYLIB_DIR/DecryptHelper.plist"
+cp decrypt_helper.dylib          "$DYLIB_DIR/IOSDecryptHub.dylib"
+cp packaging/IOSDecryptHub-filter.plist "$DYLIB_DIR/IOSDecryptHub.plist"
 
 # PreferenceLoader 设置面板 (Settings 里的注入开关)
 PREFS_DIR="$STAGE${JBROOT}/Library/PreferenceLoader/Preferences"
 mkdir -p "$PREFS_DIR"
-cp packaging/DecryptHelper-prefs.plist "$PREFS_DIR/DecryptHelper.plist"
+cp packaging/IOSDecryptHub-prefs.plist "$PREFS_DIR/IOSDecryptHub.plist"
 
 # 管理器 App (桌面图标, 选择注入目标)
-if [ -d "build/app/DecryptHelper.app" ]; then
+if [ -d "build/app/IOSDecryptHub.app" ]; then
     APP_DIR="$STAGE${JBROOT}/Applications"
     mkdir -p "$APP_DIR"
-    cp -R build/app/DecryptHelper.app "$APP_DIR/"
+    cp -R build/app/IOSDecryptHub.app "$APP_DIR/"
     echo "  + 管理器 App 已包含"
 fi
 
@@ -86,6 +86,6 @@ sed -e "s/@VERSION@/$VERSION/" \
     packaging/control.tmpl > "$STAGE/DEBIAN/control"
 
 # ---- 封包 ----
-OUT="decrypt_helper_${VARIANT}_${VERSION}.deb"
+OUT="IOSDecryptHub_${VARIANT}_${VERSION}.deb"
 "$DM" -Zgzip -b "$STAGE" "$OUT"
 echo "✅ 打包完成: $OUT  ($(du -h "$OUT" | cut -f1))"

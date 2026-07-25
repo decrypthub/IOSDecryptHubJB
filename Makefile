@@ -106,6 +106,14 @@ else
     $(error 未知 VARIANT=$(VARIANT); 可选: dev / trollstore / rootless / rootful / roothide)
 endif
 
+# 偏好文件路径: 编译期确定, 运行时不猜 (fail loud, 不 fail silent)
+# dylib 注入进程有越狱 patch, /var/jb 可正常解析。
+ifeq ($(VARIANT),rootful)
+    DH_PREFS_PATH := /var/mobile/Library/Preferences/com.dh.iosdecrypthub.plist
+else
+    DH_PREFS_PATH := /var/jb/var/mobile/Library/Preferences/com.dh.iosdecrypthub.plist
+endif
+
 # 越狱变体才可 inline hook(改写 __TEXT, 需 AMFI 被绕过)。inline 引擎属二期, 落地前保持关闭;
 # 届时取消下一行注释即可让 rootless/rootful/roothide 编译期开启(dh_capability 已按此宏 + 运行时越狱双门控)。
 # DH_INLINE_FLAG := $(if $(filter rootless rootful roothide,$(VARIANT)),-DDH_ENABLE_INLINE_HOOK,)
@@ -114,7 +122,8 @@ DH_INLINE_FLAG :=
 # 挂到共享的 INCLUDES 上, 让编译目标 (iOS/mac/sim/linux) 都带上。
 # 版本号单一真相源 = 上面的 VERSION; 变体经 -DDH_VARIANT 注入, 代码不硬编码。
 INCLUDES   := -Isrc/core -Isrc/core/capstone/include -Isrc/server -Isrc/ui $(CAPSTONE_DEF) \
-              -DDH_VERSION_STR='"$(VERSION)"' -DDH_VARIANT=$(DH_VARIANT_NUM) $(DH_INLINE_FLAG)
+              -DDH_VERSION_STR='"$(VERSION)"' -DDH_VARIANT=$(DH_VARIANT_NUM) $(DH_INLINE_FLAG) \
+              -DDH_PREFS_PATH='"$(DH_PREFS_PATH)"'  
 
 # ---------- 1) macOS xcrun ----------
 SDK     ?= $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)

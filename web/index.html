@@ -1217,10 +1217,28 @@
     } else { listHasMore = false; }
     renderList(false);
   }
+  function netSummary(detail){
+    if(!detail) return '';
+    const ls = detail.split('\n');
+    const first = ls[0]||'';
+    let url = first;
+    const sp = first.indexOf(' ');
+    if (sp > 0) { try { const u = new URL(first.slice(sp+1)); url = first.slice(0,sp)+' '+u.host+u.pathname; } catch(e){} }
+    const sm = detail.match(/--\s*Status:\s*(\d+)/);
+    const em = detail.match(/--\s*Error:\s*([^\n]+)/);
+    if (sm) url += ' \u00b7 '+sm[1];
+    else if (em) url += ' \u00b7 ERR';
+    return url;
+  }
   function rowHTML(e){
     const cls = CAT_CLS[e.category]||'other', cname = CAT_NAMES[e.category]||'其它';
     const sel = (selectedSeq===e.seq) ? ' selected' : '';
-    const meta = e.detail ? escapeHTML(e.detail) : ('in:'+(e.inLen||0)+'B · out:'+(e.outLen||0)+'B');
+    const isNet = e.categoryName==='net';
+    let rawMeta;
+    if (isNet) rawMeta = netSummary(e.detail);
+    else rawMeta = e.detail ? e.detail : ('in:'+(e.inLen||0)+'B · out:'+(e.outLen||0)+'B');
+    const meta = escapeHTML(rawMeta);
+    const lensExtra = (!isNet && !e.detail && e.outputHexPreview) ? ' <span style="color:#7fd6df">⇢'+escapeHTML(e.outputHexPreview)+'</span>' : '';
     return '<div class="row cat-'+cls+sel+'" data-seq="'+e.seq+'">' +
       '<div class="top">' +
       '<span class="seq">#'+e.seq+'</span>' +
@@ -1229,7 +1247,7 @@
       '<span class="op">'+escapeHTML(e.operation)+'</span>' +
       '<span class="ts">'+escapeHTML(e.timestamp)+'</span>' +
       '</div>' +
-      '<div class="lens">'+meta+'</div>' +
+      '<div class="lens">'+meta+lensExtra+'</div>' +
       (e.preview ? '<div class="preview">'+escapeHTML(e.preview)+'</div>' : '') +
       '</div>';
   }
@@ -1255,6 +1273,7 @@
   }
   function _s2hex(s) { let h=''; for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);if(c<128){h+=c.toString(16).padStart(2,'0');}else if(c<2048){h+=((c>>6)|0xc0).toString(16).padStart(2,'0')+((c&0x3f)|0x80).toString(16).padStart(2,'0');}else{h+=((c>>12)|0xe0).toString(16).padStart(2,'0')+(((c>>6)&0x3f)|0x80).toString(16).padStart(2,'0')+((c&0x3f)|0x80).toString(16).padStart(2,'0');}} return h; }
   function _s2dump(s) { const hex=_s2hex(s); let r=''; for(let i=0;i<hex.length;i+=32){const off=(i/2).toString(16).padStart(6,'0')+': ';const chunk=hex.substring(i,i+32);let h='',a='';for(let j=0;j<chunk.length;j+=2){if(j>0&&j%8===0)h+=' ';h+=chunk[j]+chunk[j+1]+' ';const b=parseInt(chunk.substring(j,j+2),16);a+=(b>=32&&b<127)?String.fromCharCode(b):'.';}r+=off+h.padEnd(40,' ')+' |'+a+'|\n';} return r.trimEnd(); }
+  function _hex2dump(hex){let r='';for(let i=0;i<hex.length;i+=32){const off=(i/2).toString(16).padStart(6,'0')+': ';const chunk=hex.substring(i,i+32);let h='',a='';for(let j=0;j<chunk.length;j+=2){if(j>0&&j%8===0)h+=' ';h+=chunk[j]+chunk[j+1]+' ';const b=parseInt(chunk.substring(j,j+2),16);a+=(b>=32&&b<127)?String.fromCharCode(b):'.';}r+=off+h.padEnd(40,' ')+' |'+a+'|\n';}return r.trimEnd();}
   function buildRawHttp(d) {
     if (!d.detail || d.categoryName !== 'net') return null;
     const lines = d.detail.split('\n');
@@ -1287,10 +1306,15 @@
       resp += '\r\n';
       if (d.outputUtf8) resp += d.outputUtf8;
     }
+    const reqBin = !d.inputUtf8 && (d.input||0) > 0;
+    const respBin = !d.outputUtf8 && (d.output||0) > 0;
+    const reqBodyDump = reqBin ? _hex2dump(d.inputHex||'') : '';
+    const respBodyDump = respBin ? _hex2dump(d.outputHex||'') : '';
     return {
       request: req, requestHex: _s2hex(req), requestDump: _s2dump(req),
       body: body, bodyHex: _s2hex(body), bodyDump: _s2dump(body),
-      response: resp || null, responseHex: resp ? _s2hex(resp) : null, responseDump: resp ? _s2dump(resp) : null
+      response: resp || null, responseHex: resp ? _s2hex(resp) : null, responseDump: resp ? _s2dump(resp) : null,
+      reqBin: reqBin, respBin: respBin, reqBodyDump: reqBodyDump, respBodyDump: respBodyDump
     };
   }
   function renderDetailPane(d) {
@@ -1306,17 +1330,21 @@
     let h = '<div class="detail-head"><h2><span class="cat-dot '+dcls+'"></span>#'+d.seq+'  '+escapeHTML(d.algorithm)+'</h2>' +
       '<div class="sub">'+escapeHTML(d.operation)+' · '+escapeHTML(d.timestamp)+(d.publicKeyInfo?' · '+escapeHTML(d.publicKeyInfo):'')+'</div>' +
       actions + '</div>';
-    if (d.detail) h += '<div class="io-section kv-card"><div class="io-label kv">详情</div><pre>'+escapeHTML(d.detail)+'</pre></div>';
+    if (d.detail && !rawHttp) h += '<div class="io-section kv-card"><div class="io-label kv">详情</div><pre>'+escapeHTML(d.detail)+'</pre></div>';
     if (rawHttp) {
+      const reqBodySec = rawHttp.reqBin ? '<h3>请求体 HexDump (二进制, '+d.input+' bytes)</h3><pre class="hex">'+escapeHTML(rawHttp.reqBodyDump)+'</pre>' : '';
       h += '<div class="io-section raw-card"><div class="io-label raw">原始请求 / RAW REQUEST</div>' +
-        '<div class="io-meta">'+rawHttp.request.length+' bytes</div>' +
+        '<div class="io-meta">'+rawHttp.request.length+' bytes'+(rawHttp.reqBin?' · 请求体为二进制 '+d.input+' bytes':'')+'</div>' +
         '<h3>Text</h3><pre style="white-space:pre;word-break:normal;">'+escapeHTML(rawHttp.request)+'</pre>' +
-        '<h3>Hex</h3><pre class="hex">'+escapeHTML(rawHttp.requestHex)+'</pre></div>';
+        '<h3>Hex</h3><pre class="hex">'+escapeHTML(rawHttp.requestHex)+'</pre>' +
+        reqBodySec + '</div>';
       if (rawHttp.response) {
+        const respBodySec = rawHttp.respBin ? '<h3>响应体 HexDump (二进制, '+d.output+' bytes)</h3><pre class="hex">'+escapeHTML(rawHttp.respBodyDump)+'</pre>' : '';
         h += '<div class="io-section raw-card"><div class="io-label raw">原始响应 / RAW RESPONSE</div>' +
-          '<div class="io-meta">'+rawHttp.response.length+' bytes</div>' +
+          '<div class="io-meta">'+rawHttp.response.length+' bytes'+(rawHttp.respBin?' · 响应体为二进制 '+d.output+' bytes':'')+'</div>' +
           '<h3>Text</h3><pre style="white-space:pre;word-break:normal;">'+escapeHTML(rawHttp.response)+'</pre>' +
-          '<h3>Hex</h3><pre class="hex">'+escapeHTML(rawHttp.responseHex)+'</pre></div>';
+          '<h3>Hex</h3><pre class="hex">'+escapeHTML(rawHttp.responseHex)+'</pre>' +
+          respBodySec + '</div>';
       }
     }
     if (d.key) h += ioKV('KEY', d.key, d.keyHex);

@@ -1,10 +1,10 @@
 #!/bin/bash
-# 构建 DecryptHelper 管理器 App (越狱设备用, 无需 Xcode 工程)
+# 构建 IOSDecryptHub 管理器 App (越狱设备用, 无需 Xcode 工程)
 # 用法: ./app/build_app.sh [roothide|rootless|rootful]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_SRC="$ROOT/app/DecryptHelperManager"
+APP_SRC="$ROOT/app/IOSDecryptHubApp"
 VARIANT="${1:-roothide}"
 
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
@@ -20,10 +20,10 @@ case "$VARIANT" in
 esac
 
 OUT_DIR="$ROOT/build/app"
-APP_BUNDLE="$OUT_DIR/DecryptHelper.app"
+APP_BUNDLE="$OUT_DIR/IOSDecryptHub.app"
 mkdir -p "$APP_BUNDLE"
 
-echo "==> 编译 DecryptHelper 管理器 ($VARIANT, $ARCH)"
+echo "==> 编译 IOSDecryptHub 管理器 ($VARIANT, $ARCH)"
 "$CC" \
     -parse-as-library \
     -target "${ARCH}-apple-ios${MIN_IOS}" \
@@ -47,5 +47,5 @@ else
 fi
 
 echo "✅ App 构建完成: $APP_BUNDLE"
-echo "   安装到设备: /var/jb/Applications/DecryptHelper.app (roothide/rootless)"
-echo "   或:         /Applications/DecryptHelper.app (rootful)"
+echo "   安装到设备: /var/jb/Applications/IOSDecryptHub.app (roothide/rootless)"
+echo "   或:         /Applications/IOSDecryptHub.app (rootful)"
