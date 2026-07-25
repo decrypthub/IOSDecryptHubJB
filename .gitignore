@@ -1,6 +1,7 @@
 # 构建产物
 build/
 *.dylib
+*.deb
 *.dSYM/
 default.profraw
 CryptoTestHost-hooked.ipa

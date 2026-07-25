@@ -269,8 +269,21 @@ sim-install:
 	@chmod +x scripts/sim_install.sh
 	./scripts/sim_install.sh
 
+# ---------- 7) 越狱变体 .deb 打包 ----------
+# 纯 fishhook+runtime 引擎不链接 Substrate/ElleKit, 越狱包 = dylib + filter plist + control,
+# 由设备注入器读 plist 自动注入。dm.pl(Theos 自带)封包, 无需系统 dpkg-deb。
+# 巨魔/开发者路径不走 deb: 用 scripts/inject.sh 把 dylib 塞进 IPA。
+deb-rootless deb-rootful deb-roothide:
+	@chmod +x scripts/pack_deb.sh
+	./scripts/pack_deb.sh $(@:deb-%=%)
+
+# 一次性打全三个越狱包。
+debs: deb-rootless deb-rootful deb-roothide
+	@echo "✅ 越狱三变体 .deb 全部完成"
+
 clean:
-	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib
+	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib decrypt_helper_*.deb
 	rm -rf build/sim
 
-.PHONY: all linux mac sim test-mac sim-install dist clean
+.PHONY: all linux mac sim test-mac sim-install dist clean \
+        deb-rootless deb-rootful deb-roothide debs
