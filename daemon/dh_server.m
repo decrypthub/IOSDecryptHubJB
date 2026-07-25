@@ -52,7 +52,8 @@ static NSString *dh_path(NSString *relative) {
 
 // ---- 偏好读写 ----
 static NSString *dh_prefs_path(void) {
-    return dh_path(@"tmp/com.dh.decrypthelper.plist");
+    // 必须和 dylib 读取路径一致: <jbroot>/var/mobile/Library/Preferences/
+    return dh_path(@"var/mobile/Library/Preferences/com.dh.decrypthelper.plist");
 }
 
 static NSDictionary *dh_read_prefs(void) {
@@ -66,16 +67,18 @@ static NSDictionary *dh_read_prefs(void) {
 
 static void dh_write_prefs(BOOL enabled, NSString *targetBid) {
     NSDictionary *d = @{@"DHEnabled": @(enabled), @"DHTargetBundleId": targetBid ?: @""};
-    // 写 daemon 推导的真实路径
-    [d writeToFile:dh_prefs_path() atomically:YES];
-    // 也尝试写 dylib 读取的标准路径 (roothide 下可能失败)
-    [d writeToFile:PREFS_PATH atomically:YES];
-    [d writeToFile:PREFS_PATH_ROOTFUL atomically:YES];
+    NSString *path = dh_prefs_path();
+    // 确保目录存在
+    NSString *dir = [path stringByDeletingLastPathComponent];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    [d writeToFile:path atomically:YES];
+    NSLog(@"[dh_server] 偏好已写入: %@ (enabled=%d, target=%@)", path, enabled, targetBid);
 }
 
 // ---- App 列表: 读 JSON 缓存 (由 LaunchDaemon 启动时的 helper 脚本生成) ----
 static NSString *dh_applist_path(void) {
-    return dh_path(@"tmp/com.dh.applist.json");
+    // 和 helper 脚本写入路径一致
+    return dh_path(@"var/mobile/Library/Preferences/com.dh.applist.json");
 }
 
 static NSArray *dh_list_apps(void) {

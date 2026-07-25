@@ -3,7 +3,7 @@
 # 使用 uicache -l 获取完整 App 列表
 # 输出: /var/jb/var/mobile/Library/Preferences/com.dh.applist.json
 
-OUT="/var/jb/tmp/com.dh.applist.json"
+OUT="/var/jb/var/mobile/Library/Preferences/com.dh.applist.json"
 TMP="${OUT}.tmp"
 
 uicache -l 2>/dev/null | awk '
