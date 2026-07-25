@@ -67,10 +67,14 @@ if [ -f "build/daemon/dh_server" ]; then
     mkdir -p "$HELPER_DIR"
     cp build/daemon/dh_server "$HELPER_DIR/dh_server"
     chmod 755 "$HELPER_DIR/dh_server"
+    # helper 脚本 (生成 App 列表 JSON)
+    cp app/dh_listapps.sh "$HELPER_DIR/dh_listapps"
+    chmod 755 "$HELPER_DIR/dh_listapps"
     # LaunchDaemon: 开机自启 + 崩溃重拉
     DAEMON_DIR="$STAGE${JBROOT}/Library/LaunchDaemons"
     mkdir -p "$DAEMON_DIR"
-    cp packaging/com.dh.listapps.plist "$DAEMON_DIR/com.dh.server.plist"
+    # LaunchDaemon plist 中的路径按变体替换 (rootful 无 /var/jb 前缀)
+    sed "s|/var/jb/usr/bin|${JBROOT}/usr/bin|g" packaging/com.dh.server.plist > "$DAEMON_DIR/com.dh.server.plist"
     echo "  + dh_server daemon + LaunchDaemon 已包含"
 fi
 

@@ -9,7 +9,7 @@
 	<key>CFBundleExecutable</key>
 	<string>IOSDecryptHub</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.dh.hub.v2</string>
+	<string>com.dh.iosdecrypthub</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

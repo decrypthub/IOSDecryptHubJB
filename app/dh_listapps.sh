@@ -1,9 +1,16 @@
-#!/bin/bash
+#!/bin/sh
 # dh_listapps — 以 root 权限枚举已安装 App, 输出 JSON
 # 使用 uicache -l 获取完整 App 列表
 # 输出: /var/jb/var/mobile/Library/Preferences/com.dh.applist.json
 
-OUT="/var/jb/var/mobile/Library/Preferences/com.dh.applist.json"
+# 从脚本自身路径推导 jbroot (兼容 rootless/rootful/roothide)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+JBROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"  # /usr/bin → jbroot
+if [ "$JBROOT" = "/" ]; then
+    OUT="/var/mobile/Library/Preferences/com.dh.applist.json"
+else
+    OUT="${JBROOT}/var/mobile/Library/Preferences/com.dh.applist.json"
+fi
 TMP="${OUT}.tmp"
 
 uicache -l 2>/dev/null | awk '
