@@ -290,9 +290,24 @@ deb-rootless deb-rootful deb-roothide:
 debs: deb-rootless deb-rootful deb-roothide
 	@echo "✅ 越狱三变体 .deb 全部完成"
 
+# ---------- 8) 管理器 App (越狱设备 SwiftUI 前端) ----------
+app:
+	@chmod +x app/build_app.sh
+	./app/build_app.sh $(VARIANT)
+
+# ---------- 9) root daemon (越狱设备 HTTP API 服务) ----------
+daemon:
+	@chmod +x daemon/build_daemon.sh
+	./daemon/build_daemon.sh
+
+# ---------- 10) 全量构建 (dylib + daemon + app + deb) ----------
+deb-full: daemon app
+	@chmod +x scripts/pack_deb.sh
+	./scripts/pack_deb.sh $(VARIANT)
+
 clean:
-	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib decrypt_helper_*.deb
-	rm -rf build/sim
+	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib IOSDecryptHub_*.deb
+	rm -rf build/
 
 .PHONY: all linux mac sim test-mac sim-install dist clean \
-        deb-rootless deb-rootful deb-roothide debs
+        deb-rootless deb-rootful deb-roothide debs app daemon deb-full

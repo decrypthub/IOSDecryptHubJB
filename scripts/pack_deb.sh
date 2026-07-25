@@ -68,7 +68,7 @@ if [ -f "build/daemon/dh_server" ]; then
     cp build/daemon/dh_server "$HELPER_DIR/dh_server"
     chmod 755 "$HELPER_DIR/dh_server"
     # helper 脚本 (生成 App 列表 JSON)
-    cp app/dh_listapps.sh "$HELPER_DIR/dh_listapps"
+    cp daemon/dh_listapps.sh "$HELPER_DIR/dh_listapps"
     chmod 755 "$HELPER_DIR/dh_listapps"
     # LaunchDaemon: 开机自启 + 崩溃重拉
     DAEMON_DIR="$STAGE${JBROOT}/Library/LaunchDaemons"
