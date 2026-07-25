@@ -32,7 +32,6 @@ esac
 [ -n "$LDID" ] || { echo "❌ 缺 ldid (brew install ldid)"; exit 1; }
 
 echo "==> 编译 $VARIANT 变体 dylib (VERSION=$VERSION)"
-make -s clean >/dev/null 2>&1 || true
 make -s VARIANT="$VARIANT"
 
 echo "==> 伪签名 (ldid -S)"

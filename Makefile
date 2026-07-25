@@ -290,10 +290,11 @@ deb-rootless deb-rootful deb-roothide:
 debs: deb-rootless deb-rootful deb-roothide
 	@echo "✅ 越狱三变体 .deb 全部完成"
 
-# ---------- 8) 管理器 App (越狱设备 SwiftUI 前端) ----------
+# ---------- 8) 管理器 App (越狱设备 SwiftUI 前端, 仅越狱变体) ----------
+APP_VARIANT := $(if $(filter rootless rootful roothide,$(VARIANT)),$(VARIANT),roothide)
 app:
 	@chmod +x app/build_app.sh
-	./app/build_app.sh $(VARIANT)
+	./app/build_app.sh $(APP_VARIANT)
 
 # ---------- 9) root daemon (越狱设备 HTTP API 服务) ----------
 daemon:

@@ -5,7 +5,7 @@ set -euo pipefail
 
 REPO="${1:-taisuii/ios-decrypt-helper}"
 TAG="${2:-v1.1.0}"
-DYLIB="${3:-decrypt_helper.dylib}"
+DYLIB="${3:-decrypt_helper.dylib}"  # 内部构建产物名, 打包时重命名为 IOSDecryptHub.dylib
 NOTES_PATH="${4:-}"
 
 TOKEN=$(grep -oE 'https?://[^:]+:[^@]+@github\.com' "$HOME/.git-credentials" \
@@ -46,7 +46,7 @@ else
 ### 用法
 
 ```bash
-./scripts/inject.sh YourApp.ipa decrypt_helper.dylib
+./scripts/inject.sh YourApp.ipa decrypt_helper.dylib  # 或 make VARIANT=trollstore 后用产物
 ```
 
 或自己构建:
