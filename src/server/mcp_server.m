@@ -13,6 +13,7 @@
 #include "log_store.h"
 #include "dh_log_json.h"
 #include "dh_capture.h"
+#include "dh_capability.h"
 #include "dh_health.h"
 #include "dh_noise.h"
 #include "dh_spoof.h"
@@ -777,6 +778,34 @@ static NSDictionary *tool_get_stats(NSDictionary *args) {
     });
 }
 
+// get_capabilities —— 能力握手。上层 AI 首个应调用的工具: 拿到插件版本 / 打包变体 / CPU 架构 /
+// 越狱状态 / 当前阶段(观测 or 改写) / 各档 hook 能力位, 据此决定后续用哪一档 hook, 不对着做不到的能力空转。
+static NSDictionary *tool_get_capabilities(NSDictionary *args) {
+    (void)args;
+    uint32_t bits = dh_capability_bits();
+    dh_variant v = dh_variant_current();
+    return tool_ok(@{
+        @"pluginVersion":  @MCP_SERVER_VERSION,
+        @"variant":        @(dh_variant_id(v)),
+        @"variantLabel":   @(dh_variant_label(v)),
+        @"arch":           @(dh_cpu_arch()),
+        @"jailbroken":     dh_is_jailbroken() ? @YES : @NO,
+        @"jbroot":         @(dh_jbroot()),
+        @"phase":          @"observe",   // 一期: 只观测; 二期: override(改写参数/返回值)
+        @"capabilities":   @{
+            @"hook_import":   (bits & DH_CAPBIT_HOOK_IMPORT)   ? @YES : @NO,  // fishhook GOT 改写
+            @"hook_method":   (bits & DH_CAPBIT_HOOK_METHOD)   ? @YES : @NO,  // ObjC swizzle
+            @"hook_inline":   (bits & DH_CAPBIT_HOOK_INLINE)   ? @YES : @NO,  // __TEXT inline (仅越狱)
+            @"hook_override": (bits & DH_CAPBIT_HOOK_OVERRIDE) ? @YES : @NO,  // 改写 (二期)
+            @"unpack":        (bits & DH_CAPBIT_UNPACK)        ? @YES : @NO,   // 脱壳
+        },
+        @"capabilityBits": @(bits),
+        @"process":        [[DHLogStore shared] processInfo] ?: @{},
+        // 本变体暴露的动态 hook 工具名。一期尚未实现动态 hook, 故为空; 二期按能力位填充。
+        @"dynamicHookTools": @[],
+    });
+}
+
 // 事件是否通过「增量过滤」(output_hex/output_len/thread_id/时间窗/stack_contains)。
 // 复用于 query_events 与 correlate_request。传入的过滤值缺省(nil/0)即不约束该项。
 static BOOL event_passes_extra(DHLogEntry *e,
@@ -1179,6 +1208,11 @@ static NSDictionary *tool_get_diag(NSDictionary *args) {
 // ============================================================
 static NSArray *tool_definitions(void) {
     return @[
+        @{
+            @"name": @"get_capabilities",
+            @"description": @"Handshake — call FIRST. Returns plugin version, packaging variant (dev/trollstore/rootless/rootful/roothide), CPU arch, jailbreak state, current phase (observe|override), and per-tier hook capability flags (hook_import/hook_method/hook_inline/hook_override/unpack). Use it to decide which hook tier to use instead of attempting unsupported ones.",
+            @"inputSchema": @{@"type": @"object", @"properties": @{}},
+        },
         @{
             @"name": @"disassemble",
             @"description": @"Disassemble a hex byte string into assembly instructions (ARM64/ARM/Thumb).",
@@ -1585,6 +1619,7 @@ static NSArray *tool_definitions(void) {
 }
 
 static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
+    if ([name isEqualToString:@"get_capabilities"])      return tool_get_capabilities(args);
     if ([name isEqualToString:@"disassemble"])           return tool_disassemble(args);
     if ([name isEqualToString:@"analyze_function"])      return tool_analyze_function(args);
     if ([name isEqualToString:@"disassemble_function"])  return tool_disassemble_function(args);

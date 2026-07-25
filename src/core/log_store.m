@@ -2,6 +2,7 @@
 #import "log_store.h"
 #import "dh_health.h"
 #import "dh_capture.h"
+#import "dh_capability.h"
 #import "dh_noise.h"
 #import <sys/sysctl.h>
 #import <sys/time.h>
@@ -436,6 +437,7 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
             @"appName":         appName,
             @"systemVersion":   pi.operatingSystemVersionString ?: @"",
             @"deviceModel":     model[0] ? [NSString stringWithUTF8String:model] : @"",
+            @"arch":            @(dh_cpu_arch()),
             @"physicalMemoryMB":@(pi.physicalMemory / (1024 * 1024)),
         };
     });
