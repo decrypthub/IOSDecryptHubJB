@@ -73,11 +73,48 @@ FRAMEWORKS := -framework Foundation -framework UIKit -framework CoreGraphics -fr
 #   CAPSTONE_HAS_ARM / _ARM64 — 注册 ARM/AArch64 架构, 否则 cs_open 返回 CS_ERR_ARCH
 CAPSTONE_DEF := -DCAPSTONE_USE_SYS_DYN_MEM -DCAPSTONE_HAS_ARM -DCAPSTONE_HAS_ARM64
 
-# 挂到共享的 INCLUDES 上, 让 4 个编译目标 (iOS/mac/sim/linux) 都带上。
-# 版本号单一真相源 = 上面的 VERSION; 经 -D 注入, http_server/mcp_server 不再各自硬编码。
-INCLUDES   := -Isrc/core -Isrc/core/capstone/include -Isrc/server -Isrc/ui $(CAPSTONE_DEF) -DDH_VERSION_STR='"$(VERSION)"'
-ARCH       := arm64
-MIN_IOS    := 14.0
+# ---------- 打包变体矩阵 ----------
+# 一份源码产出 4 变体, 差异仅: DH_VARIANT 编号 / CPU 架构 / 最低 iOS / inline hook 门控。
+#   make                    -> dev  (开发者 / DYLD_INSERT 注入, arm64)
+#   make VARIANT=trollstore -> 巨魔 (arm64)
+#   make VARIANT=rootless   -> 越狱 rootless (arm64, /var/jb)
+#   make VARIANT=rootful    -> 越狱 rootful (arm64, /)
+#   make VARIANT=roothide   -> roothide (arm64e)
+VARIANT ?= dev
+
+ifeq ($(VARIANT),dev)
+    DH_VARIANT_NUM := 0
+    ARCH    := arm64
+    MIN_IOS := 14.0
+else ifeq ($(VARIANT),trollstore)
+    DH_VARIANT_NUM := 1
+    ARCH    := arm64
+    MIN_IOS := 14.0
+else ifeq ($(VARIANT),rootless)
+    DH_VARIANT_NUM := 2
+    ARCH    := arm64
+    MIN_IOS := 15.0
+else ifeq ($(VARIANT),rootful)
+    DH_VARIANT_NUM := 3
+    ARCH    := arm64
+    MIN_IOS := 13.0
+else ifeq ($(VARIANT),roothide)
+    DH_VARIANT_NUM := 4
+    ARCH    := arm64e
+    MIN_IOS := 15.0
+else
+    $(error 未知 VARIANT=$(VARIANT); 可选: dev / trollstore / rootless / rootful / roothide)
+endif
+
+# 越狱变体才可 inline hook(改写 __TEXT, 需 AMFI 被绕过)。inline 引擎属二期, 落地前保持关闭;
+# 届时取消下一行注释即可让 rootless/rootful/roothide 编译期开启(dh_capability 已按此宏 + 运行时越狱双门控)。
+# DH_INLINE_FLAG := $(if $(filter rootless rootful roothide,$(VARIANT)),-DDH_ENABLE_INLINE_HOOK,)
+DH_INLINE_FLAG :=
+
+# 挂到共享的 INCLUDES 上, 让编译目标 (iOS/mac/sim/linux) 都带上。
+# 版本号单一真相源 = 上面的 VERSION; 变体经 -DDH_VARIANT 注入, 代码不硬编码。
+INCLUDES   := -Isrc/core -Isrc/core/capstone/include -Isrc/server -Isrc/ui $(CAPSTONE_DEF) \
+              -DDH_VERSION_STR='"$(VERSION)"' -DDH_VARIANT=$(DH_VARIANT_NUM) $(DH_INLINE_FLAG)
 
 # ---------- 1) macOS xcrun ----------
 SDK     ?= $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
