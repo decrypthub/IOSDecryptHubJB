@@ -14,6 +14,7 @@
 #include "dh_log_json.h"
 #include "dh_capture.h"
 #include "dh_capability.h"
+#include "dh_thunk.h"
 #include "dh_health.h"
 #include "dh_noise.h"
 #include "dh_spoof.h"
@@ -804,6 +805,65 @@ static NSDictionary *tool_get_capabilities(NSDictionary *args) {
         // 本变体暴露的动态 hook 工具名。一期尚未实现动态 hook, 故为空; 二期按能力位填充。
         @"dynamicHookTools": @[],
     });
+}
+
+// ===== 动态 hook (一期: record-only, 观测) =====
+// hook_import — 对导入 C 符号装只读 hook (fishhook GOT)。命中即记录参数寄存器快照+调用栈, 再透明转发。
+static NSDictionary *tool_hook_import(NSDictionary *args) {
+    NSString *sym = args[@"symbol"];
+    if (![sym isKindOfClass:NSString.class] || sym.length == 0) return tool_err(@"symbol required");
+    NSString *label = [args[@"label"] isKindOfClass:NSString.class] ? args[@"label"] : nil;
+    int slot = dh_thunk_install_import(sym.UTF8String, label.UTF8String);
+    if (slot == -1) return tool_err(@"thunk slots exhausted (max 128)");
+    if (slot == -2) return tool_err([NSString stringWithFormat:
+        @"symbol '%@' not found in any image's import table — it is statically linked or not imported, so fishhook cannot rebind it. Try list_imports to confirm the symbol is an external import.", sym]);
+    return tool_ok(@{@"slot": @(slot), @"symbol": sym, @"kind": @"import", @"enabled": @YES,
+                     @"note": @"record-only; events land in category 'other' as algorithm 'import-hook'. Query with query_events category=other."});
+}
+
+// hook_method — 对 ObjC 方法装只读 hook (method_setImplementation swizzle)。同一套 thunk, x0=self x1=_cmd。
+static NSDictionary *tool_hook_method(NSDictionary *args) {
+    NSString *cls = args[@"class"];
+    NSString *sel = args[@"selector"];
+    if (![cls isKindOfClass:NSString.class] || cls.length == 0) return tool_err(@"class required");
+    if (![sel isKindOfClass:NSString.class] || sel.length == 0) return tool_err(@"selector required");
+    BOOL classMethod = [args[@"classMethod"] boolValue];
+    int slot = dh_thunk_install_method(cls.UTF8String, sel.UTF8String, classMethod ? 1 : 0);
+    if (slot == -1) return tool_err(@"thunk slots exhausted (max 128)");
+    if (slot == -3) return tool_err([NSString stringWithFormat:@"class '%@' or its %@ method '%@' not found",
+                                     cls, classMethod ? @"class" : @"instance", sel]);
+    return tool_ok(@{@"slot": @(slot),
+                     @"target": [NSString stringWithFormat:@"%@[%@ %@]", classMethod ? @"+" : @"-", cls, sel],
+                     @"kind": @"method", @"enabled": @YES,
+                     @"note": @"record-only; events land in category 'other' as algorithm 'objc-hook'."});
+}
+
+// list_hooks — 枚举当前所有动态 hook (含命中次数与启用状态)。
+static NSDictionary *tool_list_hooks(NSDictionary *args) {
+    (void)args;
+    dh_hook_info info[DH_THUNK_COUNT];
+    int n = dh_thunk_list(info, DH_THUNK_COUNT);
+    NSMutableArray *arr = [NSMutableArray array];
+    for (int i = 0; i < n; i++) {
+        [arr addObject:@{
+            @"slot":    @(info[i].slot),
+            @"kind":    info[i].kind == DH_HOOK_METHOD ? @"method" : @"import",
+            @"name":    info[i].name ? @(info[i].name) : @"",
+            @"hits":    @(info[i].hits),
+            @"enabled": info[i].enabled ? @YES : @NO,
+        }];
+    }
+    return tool_ok(@{@"count": @((NSInteger)arr.count), @"capacity": @(DH_THUNK_COUNT), @"hooks": arr});
+}
+
+// unhook — 原子关闭一个 hook (停止记录, thunk 仍透明转发, 槽位不回收)。
+static NSDictionary *tool_unhook(NSDictionary *args) {
+    NSNumber *slot = args[@"slot"];
+    if (![slot isKindOfClass:NSNumber.class]) return tool_err(@"slot (number) required");
+    int r = dh_thunk_disable(slot.intValue);
+    if (r != 0) return tool_err([NSString stringWithFormat:@"slot %@ is not an active hook", slot]);
+    return tool_ok(@{@"slot": slot, @"enabled": @NO,
+                     @"note": @"recording stopped; the thunk keeps forwarding transparently (slot not reclaimed)."});
 }
 
 // 事件是否通过「增量过滤」(output_hex/output_len/thread_id/时间窗/stack_contains)。
@@ -1615,6 +1675,46 @@ static NSArray *tool_definitions(void) {
                 @"properties": @{@"board": @{@"type": @"string", @"enum": @[@"general", @"crypto", @"file", @"sys", @"dump"], @"description": @"Diag board (default all)"}},
             },
         },
+        // ===== 动态 hook (一期: record-only) — 能力见 get_capabilities.capabilities =====
+        @{
+            @"name": @"hook_import",
+            @"description": @"Install a record-only hook on an imported C symbol via fishhook (GOT rebind). On each call it snapshots arg registers x0-x8 + backtrace, records an event (category 'other', algorithm 'import-hook'), then transparently forwards to the original. Only works for symbols that appear in some image's import table (check with list_imports); statically-linked symbols cannot be rebound. Observe-only — does not alter behavior.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"symbol": @{@"type": @"string", @"description": @"Imported symbol name, no leading underscore, e.g. \"SSL_write\""},
+                    @"label":  @{@"type": @"string", @"description": @"Optional note appended to the event name"},
+                },
+                @"required": @[@"symbol"],
+            },
+        },
+        @{
+            @"name": @"hook_method",
+            @"description": @"Install a record-only hook on an Objective-C method via method_setImplementation swizzle. On each call it snapshots self (x0), _cmd/SEL (x1), and arg registers, records an event (category 'other', algorithm 'objc-hook'), then forwards to the original IMP. Observe-only.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"class":       @{@"type": @"string", @"description": @"ObjC class name, e.g. \"NSURLSession\""},
+                    @"selector":    @{@"type": @"string", @"description": @"Selector, e.g. \"dataTaskWithRequest:completionHandler:\""},
+                    @"classMethod": @{@"type": @"boolean", @"description": @"true for a class (+) method; default false (instance -)"},
+                },
+                @"required": @[@"class", @"selector"],
+            },
+        },
+        @{
+            @"name": @"list_hooks",
+            @"description": @"List all dynamic hooks installed this session (slot, kind, name, hit count, enabled). Slots are not reclaimed; a disabled hook still shows with enabled=false.",
+            @"inputSchema": @{@"type": @"object", @"properties": @{}},
+        },
+        @{
+            @"name": @"unhook",
+            @"description": @"Atomically disable a dynamic hook by slot (from hook_import/hook_method/list_hooks). Stops recording; the thunk keeps forwarding transparently so there is no unbind race.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{@"slot": @{@"type": @"number", @"description": @"Hook slot id"}},
+                @"required": @[@"slot"],
+            },
+        },
     ];
 }
 
@@ -1659,6 +1759,11 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"get_config"])            return tool_get_config(args);
     if ([name isEqualToString:@"set_config"])            return tool_set_config(args);
     if ([name isEqualToString:@"get_diag"])              return tool_get_diag(args);
+    // 动态 hook (一期: record-only)
+    if ([name isEqualToString:@"hook_import"])           return tool_hook_import(args);
+    if ([name isEqualToString:@"hook_method"])           return tool_hook_method(args);
+    if ([name isEqualToString:@"list_hooks"])            return tool_list_hooks(args);
+    if ([name isEqualToString:@"unhook"])                return tool_unhook(args);
     return nil;   // 未知工具
 }
 

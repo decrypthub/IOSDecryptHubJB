@@ -34,6 +34,7 @@ SRC     := src/core/fishhook.c \
            src/core/dh_health.c \
            src/core/dh_capture.c \
            src/core/dh_capability.c \
+           src/core/dh_thunk.m \
            src/core/dh_noise.m \
            src/core/dh_spoof.m \
            src/core/dh_symtab.c \
