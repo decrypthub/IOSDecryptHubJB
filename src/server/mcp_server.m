@@ -780,7 +780,7 @@ static NSDictionary *tool_get_stats(NSDictionary *args) {
 }
 
 // get_capabilities —— 能力握手。上层 AI 首个应调用的工具: 拿到插件版本 / 打包变体 / CPU 架构 /
-// 越狱状态 / 当前阶段(观测 or 改写) / 各档 hook 能力位, 据此决定后续用哪一档 hook, 不对着做不到的能力空转。
+// 当前阶段(观测 or 改写) / 各档 hook 能力位, 据此决定后续用哪一档 hook, 不对着做不到的能力空转。
 static NSDictionary *tool_get_capabilities(NSDictionary *args) {
     (void)args;
     uint32_t bits = dh_capability_bits();
@@ -790,14 +790,10 @@ static NSDictionary *tool_get_capabilities(NSDictionary *args) {
         @"variant":        @(dh_variant_id(v)),
         @"variantLabel":   @(dh_variant_label(v)),
         @"arch":           @(dh_cpu_arch()),
-        @"jailbroken":     dh_is_jailbroken() ? @YES : @NO,
-        @"jbroot":         @(dh_jbroot()),
         @"phase":          @"observe",   // 一期: 只观测; 二期: override(改写参数/返回值)
         @"capabilities":   @{
             @"hook_import":   (bits & DH_CAPBIT_HOOK_IMPORT)   ? @YES : @NO,  // fishhook GOT 改写
             @"hook_method":   (bits & DH_CAPBIT_HOOK_METHOD)   ? @YES : @NO,  // ObjC swizzle
-            @"hook_inline":   (bits & DH_CAPBIT_HOOK_INLINE)   ? @YES : @NO,  // __TEXT inline (仅越狱)
-            @"hook_override": (bits & DH_CAPBIT_HOOK_OVERRIDE) ? @YES : @NO,  // 改写 (二期)
             @"unpack":        (bits & DH_CAPBIT_UNPACK)        ? @YES : @NO,   // 脱壳
         },
         @"capabilityBits": @(bits),
@@ -1270,7 +1266,7 @@ static NSArray *tool_definitions(void) {
     return @[
         @{
             @"name": @"get_capabilities",
-            @"description": @"Handshake — call FIRST. Returns plugin version, packaging variant (dev/trollstore/rootless/rootful/roothide), CPU arch, jailbreak state, current phase (observe|override), and per-tier hook capability flags (hook_import/hook_method/hook_inline/hook_override/unpack). Use it to decide which hook tier to use instead of attempting unsupported ones.",
+            @"description": @"Handshake — call FIRST. Returns plugin version, packaging variant (dev/trollstore), CPU arch, current phase (observe|override), and per-tier hook capability flags (hook_import/hook_method/unpack). Use it to decide which hook tier to use instead of attempting unsupported ones.",
             @"inputSchema": @{@"type": @"object", @"properties": @{}},
         },
         @{

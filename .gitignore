@@ -33,3 +33,4 @@ __pycache__/
 
 # Claude 配置
 .claude/
+src/server/web_panel.h

@@ -44,34 +44,8 @@ static void dh_install_all_hooks(void) {
     dh_install_network_hooks();
 }
 
-// ---- 注入开关: 越狱变体读偏好, 默认不激活 ----
-// 偏好路径由 Makefile 按 VARIANT 编译期注入 (DH_PREFS_PATH), 运行时不猜路径。
-// 键:
-//   DHEnabled (BOOL)          — 总开关, 默认 NO
-//   DHTargetBundleId (String) — 目标 App Bundle ID, 留空 = 所有 App
-static BOOL dh_prefs_should_activate(void) {
-#if DH_VARIANT >= 2  // rootless(2) / rootful(3) / roothide(4) 才走偏好门控
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:@DH_PREFS_PATH];
-    // 无偏好文件 = 从未开启过 → 不注入 (fail loud: 用户必须显式开启)
-    if (!prefs) return NO;
-    if (![prefs[@"DHEnabled"] boolValue]) return NO;
-    // 目标 Bundle ID 过滤 (留空 = 全部)
-    NSString *target = prefs[@"DHTargetBundleId"];
-    if (target.length > 0) {
-        NSString *self_bid = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
-        if (![self_bid isEqualToString:target]) return NO;
-    }
-    return YES;
-#else
-    // dev / trollstore 变体: 手动注入, 不走偏好门控
-    return YES;
-#endif
-}
-
 __attribute__((constructor))
 static void dh_bootstrap(void) {
-    // 越狱变体: 设置未开启则不注入, 静默退出
-    if (!dh_prefs_should_activate()) return;
     // 预热 Foundation 的 locale / NSDateFormatter / backtrace, 避免 hook 安装后首次时间格式化
     // 在 hooked_open 内部触发 open/dlopen 递归(与 dh_in_hook 标志双保险).
     (void)DHTimestampNow();

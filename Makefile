@@ -74,12 +74,9 @@ FRAMEWORKS := -framework Foundation -framework UIKit -framework CoreGraphics -fr
 CAPSTONE_DEF := -DCAPSTONE_USE_SYS_DYN_MEM -DCAPSTONE_HAS_ARM -DCAPSTONE_HAS_ARM64
 
 # ---------- 打包变体矩阵 ----------
-# 一份源码产出 4 变体, 差异仅: DH_VARIANT 编号 / CPU 架构 / 最低 iOS / inline hook 门控。
-#   make                    -> dev  (开发者 / DYLD_INSERT 注入, arm64)
-#   make VARIANT=trollstore -> 巨魔 (arm64)
-#   make VARIANT=rootless   -> 越狱 rootless (arm64, /var/jb)
-#   make VARIANT=rootful    -> 越狱 rootful (arm64, /)
-#   make VARIANT=roothide   -> roothide (arm64e)
+# 一份源码产出 2 变体, 差异仅: DH_VARIANT 编号。
+#   make                       -> dev  (开发者 / DYLD_INSERT 注入, arm64)
+#   make VARIANT=trollstore    -> 巨魔 (arm64, TrollStore 持久化)
 VARIANT ?= dev
 
 ifeq ($(VARIANT),dev)
@@ -90,117 +87,75 @@ else ifeq ($(VARIANT),trollstore)
     DH_VARIANT_NUM := 1
     ARCH    := arm64
     MIN_IOS := 14.0
-else ifeq ($(VARIANT),rootless)
-    DH_VARIANT_NUM := 2
-    ARCH    := arm64
-    MIN_IOS := 15.0
-else ifeq ($(VARIANT),rootful)
-    DH_VARIANT_NUM := 3
-    ARCH    := arm64
-    MIN_IOS := 13.0
-else ifeq ($(VARIANT),roothide)
-    DH_VARIANT_NUM := 4
-    ARCH    := arm64e
-    MIN_IOS := 15.0
 else
-    $(error 未知 VARIANT=$(VARIANT); 可选: dev / trollstore / rootless / rootful / roothide)
+    $(error 未知 VARIANT=$(VARIANT); 可选: dev / trollstore)
 endif
 
-# 偏好文件路径: 编译期确定, 运行时不猜 (fail loud, 不 fail silent)
-# dylib 注入进程有越狱 patch, /var/jb 可正常解析。
-ifeq ($(VARIANT),rootful)
-    DH_PREFS_PATH := /var/mobile/Library/Preferences/com.dh.iosdecrypthub.plist
-else
-    DH_PREFS_PATH := /var/jb/var/mobile/Library/Preferences/com.dh.iosdecrypthub.plist
-endif
-
-# 越狱变体才可 inline hook(改写 __TEXT, 需 AMFI 被绕过)。inline 引擎属二期, 落地前保持关闭;
-# 届时取消下一行注释即可让 rootless/rootful/roothide 编译期开启(dh_capability 已按此宏 + 运行时越狱双门控)。
-# DH_INLINE_FLAG := $(if $(filter rootless rootful roothide,$(VARIANT)),-DDH_ENABLE_INLINE_HOOK,)
-DH_INLINE_FLAG :=
-
-# 挂到共享的 INCLUDES 上, 让编译目标 (iOS/mac/sim/linux) 都带上。
-# 版本号单一真相源 = 上面的 VERSION; 变体经 -DDH_VARIANT 注入, 代码不硬编码。
-INCLUDES   := -Isrc/core -Isrc/core/capstone/include -Isrc/server -Isrc/ui $(CAPSTONE_DEF) \
-              -DDH_VERSION_STR='"$(VERSION)"' -DDH_VARIANT=$(DH_VARIANT_NUM) $(DH_INLINE_FLAG) \
-              -DDH_PREFS_PATH='"$(DH_PREFS_PATH)"'  
-
-# ---------- 1) macOS xcrun ----------
-SDK     ?= $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
-CC      ?= $(shell xcrun --find clang 2>/dev/null)
+# ---------- 1) iOS 真机 dylib (默认 target) ----------
+SDK     := $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
+CC      := $(shell xcrun --find clang)
+INCLUDES := -Isrc/core -Isrc/core/capstone/include -Isrc/hooks/crypto -Isrc/hooks/behavior -Isrc/server -Isrc/ui
+WEB_HEADER := src/server/web_panel.h
 
 CFLAGS  := -arch $(ARCH) \
            -isysroot $(SDK) \
            -miphoneos-version-min=$(MIN_IOS) \
            -dynamiclib \
            -install_name @executable_path/$(TARGET) \
-           -Xlinker -current_version -Xlinker $(VERSION) \
-           -Xlinker -compatibility_version -Xlinker 1.0.0 \
            -ObjC -fobjc-arc \
            -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
-           -Os \
+           -O2 \
            $(INCLUDES) \
+           $(CAPSTONE_DEF) \
+           -DDH_VARIANT=$(DH_VARIANT_NUM) \
            $(FRAMEWORKS)
 
 all: $(TARGET)
 
-# 前端: 改 web/index.html 后自动重生成内嵌头(字节数组), 不再手刮 C 字符串。
-WEB_HEADER := src/server/web_index_html.h
 $(WEB_HEADER): web/index.html tools/gen_web.py
-	@echo "[*] 生成前端内嵌头 $(WEB_HEADER) ..."
 	python3 tools/gen_web.py web/index.html $(WEB_HEADER)
 
-$(TARGET): $(WEB_HEADER) $(SRC) $(wildcard src/*/*.h)
-	@echo "[*] 使用 $(CC) 编译..."
+$(TARGET): $(WEB_HEADER) $(SRC)
+	@if [ -z "$(SDK)" ]; then echo "❌ 没找到 iPhoneOS SDK (xcrun --sdk iphoneos)"; exit 1; fi
+	@echo "[*] 编译 iOS dylib (VARIANT=$(VARIANT), arch=$(ARCH), min=$(MIN_IOS))..."
 	$(CC) $(CFLAGS) $(SRC) -o $(TARGET)
-	@echo "✅ 编译完成: $(TARGET)"
+	@echo "✅ $(TARGET)"
 
 # ---------- 2) Linux 交叉编译 (WSL) ----------
-.PHONY: linux
-linux: $(WEB_HEADER)
-	@if [ -z "$$IOS_SDK" ]; then echo "❌ 请先 export IOS_SDK=/path/to/iPhoneOS17.x.sdk"; exit 1; fi
-	@if [ -z "$$CROSS_CC" ]; then echo "❌ 请先 export CROSS_CC=/path/to/clang (支持 apple target)"; exit 1; fi
-	$$CROSS_CC \
-	    -target arm64-apple-ios$(MIN_IOS) \
-	    -isysroot $$IOS_SDK \
-	    -dynamiclib \
-	    -install_name @executable_path/$(TARGET) \
-	    -Xlinker -current_version -Xlinker $(VERSION) \
-	    -Xlinker -compatibility_version -Xlinker 1.0.0 \
-	    -ObjC -fobjc-arc \
-	    -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
-	    -Os \
-	    $(INCLUDES) \
-	    $(FRAMEWORKS) \
-	    $(SRC) -o $(TARGET)
-	@command -v ldid >/dev/null 2>&1 && ldid -S $(TARGET) && echo "✅ 已用 ldid 自签" || echo "⚠️ 未找到 ldid, 请手动签名"
-	@echo "✅ 交叉编译完成: $(TARGET)"
+linux:
+	@if [ -z "$(IOS_SDK)" ] || [ -z "$(CROSS_CC)" ]; then \
+		echo "❌ 需设置 IOS_SDK 和 CROSS_CC, 参考 scripts/wsl_setup_toolchain.sh"; exit 1; fi
+	@echo "[*] Linux 交叉编译 (VARIANT=$(VARIANT))..."
+	python3 tools/gen_web.py web/index.html $(WEB_HEADER)
+	$(CROSS_CC) -arch $(ARCH) -isysroot $(IOS_SDK) -miphoneos-version-min=$(MIN_IOS) \
+		-dynamiclib -install_name @executable_path/$(TARGET) \
+		-ObjC -fobjc-arc -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
+		-O2 $(INCLUDES) $(CAPSTONE_DEF) -DDH_VARIANT=$(DH_VARIANT_NUM) $(FRAMEWORKS) \
+		$(SRC) -o $(TARGET)
+	@echo "✅ $(TARGET) (linux cross)"
 
-# ---------- 3) macOS native (用于 Mac 上灰度测试) ----------
-# 不带 UIKit (UI 代码自己用 __has_include 隔离了, 没 UIKit 就只编 stub),
-# 只保留 hook + HTTP 服务. 浏览器开 http://127.0.0.1:8088 看效果.
+# ---------- 3a) macOS 灰度测试 ----------
 MAC_TARGET := decrypt_helper.mac.dylib
 MAC_SDK    := $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
 MAC_ARCH   := $(shell uname -m)
-MAC_MIN    := 11.0
-MAC_FRAMEWORKS := -framework Foundation -framework CoreFoundation -framework Security
-MAC_CFLAGS := -arch $(MAC_ARCH) \
+MAC_MIN    := 12.0
+MAC_CFLAGS := -target $(MAC_ARCH)-apple-macos$(MAC_MIN) \
               -isysroot $(MAC_SDK) \
-              -mmacosx-version-min=$(MAC_MIN) \
               -dynamiclib \
-              -install_name @rpath/$(MAC_TARGET) \
-              -Xlinker -current_version -Xlinker $(VERSION) \
+              -install_name @executable_path/$(MAC_TARGET) \
               -ObjC -fobjc-arc \
               -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
               -O0 -g \
               $(INCLUDES) \
-              $(MAC_FRAMEWORKS)
+              $(CAPSTONE_DEF) \
+              -DDH_VARIANT=0 \
+              -framework Foundation -framework CoreGraphics -framework Security
 
 mac: $(WEB_HEADER) $(MAC_TARGET)
 
 $(MAC_TARGET): $(WEB_HEADER) $(SRC)
-	@if [ -z "$(MAC_SDK)" ]; then echo "❌ 没找到 macOS SDK, 请先装 Xcode 或 CommandLineTools"; exit 1; fi
-	@echo "[*] macOS 原生编译 (arch=$(MAC_ARCH), min=$(MAC_MIN))..."
+	@if [ -z "$(MAC_SDK)" ]; then echo "❌ 没找到 macOS SDK"; exit 1; fi
+	@echo "[*] macOS 编译 (arch=$(MAC_ARCH))..."
 	$(CC) $(MAC_CFLAGS) $(SRC) -o $(MAC_TARGET)
 	@echo "✅ macOS dylib: $(MAC_TARGET)"
 
@@ -278,44 +233,15 @@ sim-install:
 	@chmod +x scripts/sim_install.sh
 	./scripts/sim_install.sh
 
-# ---------- 7) 越狱变体 .deb 打包 ----------
-# 纯 fishhook+runtime 引擎不链接 Substrate/ElleKit, 越狱包 = dylib + filter plist + control,
-# 由设备注入器读 plist 自动注入。dm.pl(Theos 自带)封包, 无需系统 dpkg-deb。
-# 巨魔/开发者路径不走 deb: 用 scripts/inject.sh 把 dylib 塞进 IPA。
-deb-rootless deb-rootful deb-roothide:
-	@chmod +x scripts/pack_deb.sh
-	./scripts/pack_deb.sh $(@:deb-%=%)
-
-# 一次性打全三个越狱包。
-debs: deb-rootless deb-rootful deb-roothide
-	@echo "✅ 越狱三变体 .deb 全部完成"
-
-# ---------- 8) 管理器 App (越狱设备 SwiftUI 前端, 仅越狱变体) ----------
-APP_VARIANT := $(if $(filter rootless rootful roothide,$(VARIANT)),$(VARIANT),roothide)
-app:
-	@chmod +x app/build_app.sh
-	./app/build_app.sh $(APP_VARIANT)
-
-# ---------- 9) root daemon (越狱设备 HTTP API 服务) ----------
-daemon:
-	@chmod +x daemon/build_daemon.sh
-	./daemon/build_daemon.sh
-
-# ---------- 10) 全量构建 (dylib + daemon + app + deb) ----------
-deb-full: daemon app
-	@chmod +x scripts/pack_deb.sh
-	./scripts/pack_deb.sh $(VARIANT)
-
-clean:
-	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib IOSDecryptHub_*.deb
-	rm -rf build/
-
-.PHONY: all linux mac sim test-mac sim-install dist clean \
-        deb-rootless deb-rootful deb-roothide debs app daemon deb-full
-
-# ---------- 11) TrollStore IPA (非越狱, 管理器 App + dylib 打包) ----------
+# ---------- 7) TrollStore IPA (管理器 App + dylib 打包) ----------
 # 参考 TrollFools 方案: App 直接 patch 目标 App 的 Mach-O 二进制。
 # 不依赖 daemon / plist / Substrate, 全程非越狱。
 ipa:
 	@chmod +x app-trollstore/build_ipa.sh
 	./app-trollstore/build_ipa.sh
+
+clean:
+	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib
+	rm -rf build/
+
+.PHONY: all linux mac sim test-mac sim-install dist clean ipa
