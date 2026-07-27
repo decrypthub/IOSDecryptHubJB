@@ -3,6 +3,8 @@
 // 这个程序把所有我们 hook 的 API 都调一遍, 然后停着等浏览器看.
 // 用法 (macOS):
 //   make test-mac
+//   ./tests/exercise_runner --list-scenarios
+//   ./tests/exercise_runner --scenario baseline.crypto.digest --timeout 30
 // 它会:
 //   1. 用 macOS target 编译 decrypt_helper.mac.dylib (不带 UI, 只有 hook + HTTP)
 //   2. 编出 exercise_runner
@@ -350,28 +352,116 @@ static void test_network(void) {
     printf("[exercise] network: X-Validator = base64(SHA256(body)) 已发\n");
 }
 
+// ============================================================
+// 确定性场景注册表
+// ============================================================
+
+typedef void (*DHScenarioFn)(void);
+
+typedef struct {
+    const char *scenarioId;
+    DHScenarioFn run;
+} DHScenario;
+
+static void scenario_rsa(void) { @autoreleasepool { test_rsa(); } }
+static void scenario_keychain(void) { @autoreleasepool { test_keychain(); } }
+static void scenario_network(void) { @autoreleasepool { test_network(); } }
+
+static const DHScenario kScenarios[] = {
+    { "baseline.crypto.digest",       test_digests },
+    { "baseline.crypto.hmac",         test_hmac },
+    { "baseline.crypto.aes-roundtrip", test_aes },
+    { "baseline.crypto.rsa",          scenario_rsa },
+    { "baseline.file.lifecycle",      test_file },
+    { "baseline.keychain.lifecycle",  scenario_keychain },
+    { "baseline.environment.probes",  test_env },
+    { "baseline.injection.visibility",test_inject },
+    { "baseline.network.request",     scenario_network },
+};
+
+static const size_t kScenarioCount = sizeof(kScenarios) / sizeof(kScenarios[0]);
+
+static void print_scenarios(void) {
+    for (size_t i = 0; i < kScenarioCount; i++) printf("%s\n", kScenarios[i].scenarioId);
+}
+
+static int run_scenario(const char *scenarioId) {
+    for (size_t i = 0; i < kScenarioCount; i++) {
+        if (strcmp(kScenarios[i].scenarioId, scenarioId) != 0) continue;
+        printf("[scenario] START %s\n", scenarioId);
+        kScenarios[i].run();
+        printf("[scenario] DONE %s\n", scenarioId);
+        return 1;
+    }
+    fprintf(stderr, "[scenario] UNKNOWN %s\n", scenarioId ?: "(null)");
+    return 0;
+}
+
 int main(int argc, char **argv) {
-    (void)argc; (void)argv;
     setvbuf(stdout, NULL, _IONBF, 0);
+
+    const char *selectedScenario = NULL;
+    int holdSeconds = 600;
+    int listOnly = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--list-scenarios") == 0) {
+            listOnly = 1;
+        } else if (strcmp(argv[i], "--scenario") == 0 && i + 1 < argc) {
+            selectedScenario = argv[++i];
+            holdSeconds = 30;
+        } else if (strcmp(argv[i], "--all") == 0) {
+            selectedScenario = NULL;
+        } else if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc) {
+            holdSeconds = atoi(argv[++i]);
+            if (holdSeconds < 0 || holdSeconds > 3600) {
+                fprintf(stderr, "--timeout 必须在 0..3600 秒之间\n");
+                return 2;
+            }
+        } else {
+            fprintf(stderr, "未知参数: %s\n", argv[i]);
+            fprintf(stderr, "用法: %s [--list-scenarios] [--scenario ID|--all] [--timeout SEC]\n", argv[0]);
+            return 2;
+        }
+    }
+
+    if (listOnly) {
+        print_scenarios();
+        return 0;
+    }
 
     printf("[exercise] PID %d — IOSDecryptHub hook 验证\n", getpid());
     printf("[exercise] 等 dylib 起 HTTP 服务 (1.5s)...\n");
     usleep(1500 * 1000);
 
-    test_digests();
-    test_hmac();
-    test_aes();
+    if (selectedScenario) {
+        if (!run_scenario(selectedScenario)) return 2;
+    } else {
+        // 保留 main -> test_* 的直接调用，作为静态调用图/Xref 的确定性 fixture。
+        printf("[scenario] START baseline.crypto.digest\n"); test_digests();
+        printf("[scenario] DONE baseline.crypto.digest\n");
+        printf("[scenario] START baseline.crypto.hmac\n"); test_hmac();
+        printf("[scenario] DONE baseline.crypto.hmac\n");
+        printf("[scenario] START baseline.crypto.aes-roundtrip\n"); test_aes();
+        printf("[scenario] DONE baseline.crypto.aes-roundtrip\n");
 #if defined(HAVE_OPENSSL) && HAVE_OPENSSL
-    test_evp_aes();
+        printf("[scenario] START baseline.crypto.evp\n"); test_evp_aes();
+        printf("[scenario] DONE baseline.crypto.evp\n");
 #endif
-    @autoreleasepool { test_rsa(); }
-    test_file();
-    @autoreleasepool { test_keychain(); }
-    test_env();
-    test_inject();
-    @autoreleasepool { test_network(); }
+        printf("[scenario] START baseline.crypto.rsa\n"); @autoreleasepool { test_rsa(); }
+        printf("[scenario] DONE baseline.crypto.rsa\n");
+        printf("[scenario] START baseline.file.lifecycle\n"); test_file();
+        printf("[scenario] DONE baseline.file.lifecycle\n");
+        printf("[scenario] START baseline.keychain.lifecycle\n"); @autoreleasepool { test_keychain(); }
+        printf("[scenario] DONE baseline.keychain.lifecycle\n");
+        printf("[scenario] START baseline.environment.probes\n"); test_env();
+        printf("[scenario] DONE baseline.environment.probes\n");
+        printf("[scenario] START baseline.injection.visibility\n"); test_inject();
+        printf("[scenario] DONE baseline.injection.visibility\n");
+        printf("[scenario] START baseline.network.request\n"); @autoreleasepool { test_network(); }
+        printf("[scenario] DONE baseline.network.request\n");
+    }
 
-    printf("\n[exercise] 全部 hook 调用完毕.\n");
+    printf("\n[exercise] SCENARIOS_COMPLETE\n");
     printf("[exercise] 用浏览器打开 http://127.0.0.1:8088\n");
     printf("[exercise] 应该能看到 MD5 / SHA1 / SHA256 / SHA512 (4 摘要) +\n");
     printf("           SHA256-streaming + HMAC-SHA256/SHA1 + HMAC-streaming +\n");
@@ -381,9 +471,9 @@ int main(int argc, char **argv) {
 #endif
     printf("           RSA SIGN/VERIFY/ENC/DEC, 一共 ~12 条日志.\n");
     printf("[exercise] 另有 1 条 MGCopyAnswer 噪点 → 应出现在「噪点」tab, 不在加解密 tab.\n");
-    printf("[exercise] Ctrl-C 退出. (默认 600s 自动退)\n");
+    printf("[exercise] Ctrl-C 退出. (%ds 后自动退)\n", holdSeconds);
 
     signal(SIGINT, on_sigint);
-    for (int i = 0; i < 600 && gKeepRunning; i++) sleep(1);
+    for (int i = 0; i < holdSeconds && gKeepRunning; i++) sleep(1);
     return 0;
 }

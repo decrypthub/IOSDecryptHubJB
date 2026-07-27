@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "fixture_notice": "所有场景仅使用虚构测试数据，不包含真实密钥、口令或用户数据。",
+  "scenarios": [
+    {
+      "id": "baseline.crypto.digest",
+      "platforms": ["mac", "sim", "device"],
+      "trigger": "sha256",
+      "expected_events": ["SHA256"],
+      "timeout_ms": 5000
+    },
+    {
+      "id": "baseline.crypto.hmac",
+      "platforms": ["mac", "sim", "device"],
+      "trigger": "hmac",
+      "expected_events": ["HMAC-SHA256"],
+      "timeout_ms": 5000
+    },
+    {
+      "id": "baseline.crypto.aes-roundtrip",
+      "platforms": ["mac", "device"],
+      "trigger": "aes",
+      "expected_events": ["AES-128-CBC"],
+      "timeout_ms": 5000
+    },
+    {
+      "id": "baseline.crypto.rsa",
+      "platforms": ["mac", "sim", "device"],
+      "trigger": "rsasign",
+      "expected_events": ["RSA"],
+      "timeout_ms": 10000
+    },
+    {
+      "id": "baseline.file.lifecycle",
+      "platforms": ["mac", "sim", "device"],
+      "trigger": "file_lifecycle",
+      "expected_events": ["open", "write", "read", "rename", "unlink"],
+      "timeout_ms": 5000
+    },
+    {
+      "id": "baseline.keychain.lifecycle",
+      "platforms": ["mac", "device"],
+      "trigger": "keychain_lifecycle",
+      "expected_events": ["SecItemAdd", "SecItemCopyMatching", "SecItemUpdate", "SecItemDelete"],
+      "timeout_ms": 10000
+    },
+    {
+      "id": "baseline.environment.probes",
+      "platforms": ["mac", "sim", "device"],
+      "trigger": "chkanti",
+      "expected_events": ["ptrace", "sysctl"],
+      "timeout_ms": 5000
+    },
+    {
+      "id": "baseline.injection.visibility",
+      "platforms": ["mac", "sim", "device"],
+      "trigger": "chkdyld",
+      "expected_events": [],
+      "timeout_ms": 5000
+    },
+    {
+      "id": "baseline.network.request",
+      "platforms": ["mac", "sim", "device"],
+      "trigger": "network",
+      "expected_events": ["SHA256", "HTTP"],
+      "timeout_ms": 10000
+    }
+  ]
+}

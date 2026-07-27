@@ -161,7 +161,12 @@ static void do_network(void) {
     CC_SHA256(body.bytes, (CC_LONG)body.length, dg);   // 被 hook -> 产生一条 SHA256 事件, output=dg
     NSString *validator = [[NSData dataWithBytes:dg length:sizeof(dg)] base64EncodedStringWithOptions:0];
 
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://httpbin.org/post"]];
+    // 只打 dylib 自己的回环 HTTP 服务，测试不依赖公网。端口可能因本机占用而顺延，
+    // 所以优先使用 dh_http_url() 返回的真实地址。
+    NSURL *serviceURL = [NSURL URLWithString:dh_real_url() ?: @""];
+    NSNumber *servicePort = serviceURL.port ?: @8088;
+    NSString *baseURL = [NSString stringWithFormat:@"http://127.0.0.1:%@/", servicePort];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:baseURL]];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     [req setValue:validator forHTTPHeaderField:@"X-Validator"];   // = base64(SHA256(body))
@@ -245,6 +250,7 @@ static NSString *chk_device_info(void) {
 @property (nonatomic, strong) UISegmentedControl *seg;
 @property (nonatomic, strong) UITextView *checkOut;
 - (BOOL)triggerByKey:(NSString *)key;
+- (BOOL)triggerScenarioById:(NSString *)scenarioId;
 @end
 
 @implementation TestVC
@@ -428,9 +434,36 @@ static NSString *chk_device_info(void) {
 }
 
 - (BOOL)triggerByKey:(NSString *)key {
+    if ([key hasPrefix:@"baseline."]) return [self triggerScenarioById:key];
     UIButton *b = self.btnMap[key.lowercaseString];
     if (!b) return NO;
     [b sendActionsForControlEvents:UIControlEventTouchUpInside];
+    return YES;
+}
+
+- (BOOL)triggerScenarioById:(NSString *)scenarioId {
+    if (![scenarioId isKindOfClass:NSString.class]) return NO;
+    NSLog(@"[scenario] START %@", scenarioId);
+    if ([scenarioId isEqualToString:@"baseline.crypto.digest"]) {
+        do_digest(2);
+    } else if ([scenarioId isEqualToString:@"baseline.crypto.hmac"]) {
+        do_hmac();
+    } else if ([scenarioId isEqualToString:@"baseline.crypto.rsa"]) {
+        dispatch_async(dispatch_get_global_queue(0, 0), ^{ do_rsa_sign(); });
+    } else if ([scenarioId isEqualToString:@"baseline.file.lifecycle"]) {
+        do_file_write(); do_file_read(); do_file_rename(); do_file_delete();
+    } else if ([scenarioId isEqualToString:@"baseline.environment.probes"]) {
+        (void)chk_antidebug();
+    } else if ([scenarioId isEqualToString:@"baseline.injection.visibility"]) {
+        (void)chk_dyld_images();
+    } else if ([scenarioId isEqualToString:@"baseline.network.request"]) {
+        do_network();
+    } else {
+        NSLog(@"[scenario] UNKNOWN %@", scenarioId);
+        return NO;
+    }
+    NSLog(@"[scenario] DONE %@", scenarioId);
+    [self flash:scenarioId];
     return YES;
 }
 
