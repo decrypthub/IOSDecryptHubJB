@@ -19,6 +19,7 @@ extern "C" {
 typedef enum {
     DH_VARIANT_DEV = 0,      // insert_dylib / DYLD_INSERT_LIBRARIES (开发者手动注入)
     DH_VARIANT_TROLLSTORE,   // 巨魔 (TrollStore) 持久化安装
+    DH_VARIANT_JAILBREAK,    // 越狱 (Substrate/ElleKit 加载器注入)
     DH_VARIANT_COUNT
 } dh_variant;
 

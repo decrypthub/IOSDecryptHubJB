@@ -3,34 +3,28 @@ build/
 *.dylib
 *.deb
 *.dSYM/
-default.profraw
-CryptoTestHost-hooked.ipa
 *.o
 *.a
-*.dSYM/
 *.profraw
 tests/exercise_runner
+
+# 生成的 Web 面板头文件 (make 自动从 web/index.html 生成)
+src/server/web_index_html.h
 
 # 注入脚本中间产物
 work_*/
 hooked_*.ipa
 *-hooked*.ipa
 
+# 签名工具 (build_ipa.sh 自动下载)
+app-trollstore/tools/
+
 # 系统/编辑器垃圾
 .DS_Store
 *.swp
 
-# 截图临时中间文件 (_ 前缀)
-docs/screenshots/_*.png
-
-# 含密钥不上传 (QQ SMTP 授权码)
-scripts/send_notification_email.sh
-# 一次性 release notes
-scripts/_release_notes_*.md
-
 # Python 缓存
 __pycache__/
 
-# Claude 配置
+# AI 工具配置
 .claude/
-src/server/web_panel.h

@@ -87,15 +87,19 @@ else ifeq ($(VARIANT),trollstore)
     DH_VARIANT_NUM := 1
     ARCH    := arm64
     MIN_IOS := 14.0
+else ifeq ($(VARIANT),jailbreak)
+    DH_VARIANT_NUM := 2
+    ARCH    := arm64
+    MIN_IOS := 14.0
 else
-    $(error 未知 VARIANT=$(VARIANT); 可选: dev / trollstore)
+    $(error 未知 VARIANT=$(VARIANT); 可选: dev / trollstore / jailbreak)
 endif
 
 # ---------- 1) iOS 真机 dylib (默认 target) ----------
 SDK     := $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
 CC      := $(shell xcrun --find clang)
 INCLUDES := -Isrc/core -Isrc/core/capstone/include -Isrc/hooks/crypto -Isrc/hooks/behavior -Isrc/server -Isrc/ui
-WEB_HEADER := src/server/web_panel.h
+WEB_HEADER := src/server/web_index_html.h
 
 CFLAGS  := -arch $(ARCH) \
            -isysroot $(SDK) \
@@ -228,11 +232,6 @@ dist: $(TARGET)
 	install_name_tool -id @executable_path/$(DIST_DYLIB) $(DIST_DYLIB)
 	@echo "✅ 发布产物: $(DIST_DYLIB)"
 
-# ---------- 6) 模拟器一键部署 (sim_uitest + 注入 sim dylib) ----------
-sim-install:
-	@chmod +x scripts/sim_install.sh
-	./scripts/sim_install.sh
-
 # ---------- 7) TrollStore IPA (管理器 App + dylib 打包) ----------
 # 参考 TrollFools 方案: App 直接 patch 目标 App 的 Mach-O 二进制。
 # 不依赖 daemon / plist / Substrate, 全程非越狱。
@@ -240,8 +239,26 @@ ipa:
 	@chmod +x app-trollstore/build_ipa.sh
 	./app-trollstore/build_ipa.sh
 
+# ---------- 8) 越狱 deb 包 (三端: rootless / roothide / rootful) ----------
+# 编译 jailbreak 变体 dylib + 加载器 + 设置面板, 打包为 deb。
+deb:
+	@chmod +x jailbreak/build_deb.sh
+	./jailbreak/build_deb.sh all
+
+deb-rootless:
+	@chmod +x jailbreak/build_deb.sh
+	./jailbreak/build_deb.sh rootless
+
+deb-roothide:
+	@chmod +x jailbreak/build_deb.sh
+	./jailbreak/build_deb.sh roothide
+
+deb-rootful:
+	@chmod +x jailbreak/build_deb.sh
+	./jailbreak/build_deb.sh rootful
+
 clean:
 	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib
 	rm -rf build/
 
-.PHONY: all linux mac sim test-mac sim-install dist clean ipa
+.PHONY: all linux mac sim test-mac dist clean ipa deb deb-rootless deb-roothide deb-rootful
