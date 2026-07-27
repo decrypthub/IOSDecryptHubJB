@@ -17,11 +17,21 @@ hooked_*.ipa
 *-hooked*.ipa
 
 # 签名工具 (build_ipa.sh 自动下载)
-app-trollstore/tools/
+app-trollstore/tools/ct_bypass
+app-trollstore/tools/ldid
 
 # 系统/编辑器垃圾
 .DS_Store
 *.swp
+
+# 截图临时中间文件 (_ 前缀)
+docs/screenshots/_*.png
+
+# 含密钥不上传 (QQ SMTP 授权码)
+scripts/send_notification_email.sh
+
+# 一次性 release notes
+scripts/_release_notes_*.md
 
 # Python 缓存
 __pycache__/

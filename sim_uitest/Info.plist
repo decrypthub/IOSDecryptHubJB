@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>CryptoTestHost</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.taisuii.cryptotesthost</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>CryptoTestHost</string>
+    <key>CFBundleDisplayName</key>
+    <string>Crypto Test</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>MinimumOSVersion</key>
+    <string>14.0</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_idh-mcp._tcp.</string>
+    </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>用于在局域网内发现和访问 IOSDecryptHub 调试服务</string>
+    <key>UIDeviceFamily</key>
+    <array>
+        <integer>1</integer>
+    </array>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>iPhoneSimulator</string>
+    </array>
+    <key>DTPlatformName</key>
+    <string>iphonesimulator</string>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>AppIcon60x60</string>
+            </array>
+        </dict>
+    </dict>
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+    </dict>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.taisuii.dhtest</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>dhtest</string>
+            </array>
+        </dict>
+    </array>
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+        <string>cydia</string>
+        <string>sileo</string>
+        <string>filza</string>
+        <string>zbra</string>
+    </array>
+</dict>
+</plist>

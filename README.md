@@ -1,5 +1,10 @@
 # IOSDecryptHub
 
+<div align="right">
+  <b>中文</b> | <a href="./README.en.md">English</a>
+</div>
+
+
 IOSDecryptHub 是一个注入到 iOS App 进程中的运行时分析 dylib，可捕获加解密、文件、网络、Keychain 与动态加载行为，并提供 Web 面板、脱壳和 MCP 分析能力。
 
 完整能力与效果演示请访问：[ios.decrypthub.com](https://ios.decrypthub.com/)

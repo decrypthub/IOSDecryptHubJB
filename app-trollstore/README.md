@@ -1,5 +1,10 @@
 # IOSDecryptHub TrollStore 管理器
 
+<div align="right">
+  <b>中文</b> | <a href="./README.en.md">English</a>
+</div>
+
+
 > **非越狱方案** — 通过 TrollStore 安装，直接 patch 目标 App 的 Mach-O 二进制实现 dylib 注入。
 > 参考 [TrollFools](https://github.com/Lessica/TrollFools) 开源方案。
 

@@ -1,5 +1,10 @@
 # IOSDecryptHub 越狱注入包
 
+<div align="right">
+  <b>中文</b> | <a href="./README.en.md">English</a>
+</div>
+
+
 > 通过越狱框架（Substrate/ElleKit/libhooker）将主 dylib 注入目标 App。
 > 支持 rootless / roothide / rootful 三端越狱。
 
