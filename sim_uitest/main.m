@@ -451,7 +451,11 @@ static NSString *chk_device_info(void) {
     } else if ([scenarioId isEqualToString:@"baseline.crypto.rsa"]) {
         dispatch_async(dispatch_get_global_queue(0, 0), ^{ do_rsa_sign(); });
     } else if ([scenarioId isEqualToString:@"baseline.file.lifecycle"]) {
-        do_file_write(); do_file_read(); do_file_rename(); do_file_delete();
+        do_file_write();
+        do_file_read();
+        do_file_rename();
+        NSString *backup = [test_file_path() stringByAppendingPathExtension:@"bak"];
+        unlink(backup.UTF8String);
     } else if ([scenarioId isEqualToString:@"baseline.environment.probes"]) {
         (void)chk_antidebug();
     } else if ([scenarioId isEqualToString:@"baseline.injection.visibility"]) {
