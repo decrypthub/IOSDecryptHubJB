@@ -52,11 +52,35 @@ static NSString *const DHBundleIDProperty = @"dhBundleID";
 static NSString *const DHPrefsPath =
     @"/var/mobile/Library/Preferences/com.iosdecrypthub.loader.plist";
 
+// 从 PreferenceBundle 自身二进制路径反推 bootstrap 根目录，不再硬编码 /var/jb。
+// 布局: <bootstrap>/Library/PreferenceBundles/IOSDecryptHubPrefs.bundle/IOSDecryptHubPrefs
+//    → <bootstrap>/usr/lib/IOSDecryptHub/config/enabledBundles.plist
+static NSString *dh_bootstrap_root(void) {
+    Dl_info info = {0};
+    if (dladdr((const void *)&dh_bootstrap_root, &info) == 0 || !info.dli_fname) {
+        return nil;
+    }
+    NSString *binaryPath = [NSString stringWithUTF8String:info.dli_fname];
+    // 向上四级: IOSDecryptHubPrefs → .bundle → PreferenceBundles → Library → <bootstrap>
+    NSString *root = binaryPath;
+    for (int i = 0; i < 4; i++) {
+        root = [root stringByDeletingLastPathComponent];
+    }
+    if (root.length <= 1) return nil;
+    return root;
+}
+
 static NSArray<NSString *> *dh_loader_config_paths(void) {
-    return @[
-        @"/var/jb/usr/lib/IOSDecryptHub/config/enabledBundles.plist",
-        @"/usr/lib/IOSDecryptHub/config/enabledBundles.plist",
-    ];
+    NSMutableArray<NSString *> *paths = [NSMutableArray array];
+    NSString *root = dh_bootstrap_root();
+    if (root) {
+        [paths addObject:[root stringByAppendingPathComponent:
+            @"usr/lib/IOSDecryptHub/config/enabledBundles.plist"]];
+    }
+    // 固定路径兜底（rootful 或 dladdr 失败时）
+    [paths addObject:@"/var/jb/usr/lib/IOSDecryptHub/config/enabledBundles.plist"];
+    [paths addObject:@"/usr/lib/IOSDecryptHub/config/enabledBundles.plist"];
+    return paths;
 }
 
 static NSDictionary *dh_loader_config(void) {

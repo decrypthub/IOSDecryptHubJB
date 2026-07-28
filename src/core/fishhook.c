@@ -20,6 +20,14 @@
 // CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+// ---- IOSDecryptHub 扩展 ----
+// 在经典 fishhook (间接符号表) 基础上增加:
+//   1. LC_DYLD_CHAINED_FIXUPS 支持 (iOS 15+ / arm64e 新格式)
+//   2. __AUTH_CONST 段扫描 (arm64e authenticated GOT)
+//   3. arm64e Pointer Authentication 感知 (strip + re-sign)
+//   4. hook 写入失败的能力报告 (dh_health)
+// 仍然只改函数指针，不使用 inline hook，不违反架构边界。
 
 #include "fishhook.h"
 #include "dh_health.h"
@@ -37,6 +45,7 @@
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
+#include <mach-o/fixup-chains.h>
 
 #ifdef __LP64__
 typedef struct mach_header_64 mach_header_t;
@@ -54,6 +63,25 @@ typedef struct nlist nlist_t;
 
 #ifndef SEG_DATA_CONST
 #define SEG_DATA_CONST  "__DATA_CONST"
+#endif
+
+#ifndef SEG_AUTH_CONST
+#define SEG_AUTH_CONST  "__AUTH_CONST"
+#endif
+
+// arm64e PAC helpers — 非 arm64e 编译时退化为 no-op
+#if defined(__arm64e__)
+#include <ptrauth.h>
+#define DH_PAC_STRIP(ptr)       ptrauth_strip((ptr), ptrauth_key_asia)
+#define DH_PAC_SIGN_DATA(ptr)   ptrauth_sign_unauthenticated((ptr), ptrauth_key_asia, 0)
+#define DH_PAC_SIGN_DATA_D(ptr, div) \
+    ptrauth_sign_unauthenticated((ptr), ptrauth_key_asia, (div))
+#define DH_IS_ARM64E 1
+#else
+#define DH_PAC_STRIP(ptr)       (ptr)
+#define DH_PAC_SIGN_DATA(ptr)   (ptr)
+#define DH_PAC_SIGN_DATA_D(ptr, div) (ptr)
+#define DH_IS_ARM64E 0
 #endif
 
 struct rebindings_entry {
@@ -83,35 +111,9 @@ static int prepend_rebindings(struct rebindings_entry **rebindings_head,
   return 0;
 }
 
-#if 0
-static int get_protection(void *addr, vm_prot_t *prot, vm_prot_t *max_prot) {
-  mach_port_t task = mach_task_self();
-  vm_size_t size = 0;
-  vm_address_t address = (vm_address_t)addr;
-  memory_object_name_t object;
-#ifdef __LP64__
-  mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
-  vm_region_basic_info_data_64_t info;
-  kern_return_t info_ret = vm_region_64(
-      task, &address, &size, VM_REGION_BASIC_INFO_64, (vm_region_info_64_t)&info, &count, &object);
-#else
-  mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT;
-  vm_region_basic_info_data_t info;
-  kern_return_t info_ret = vm_region(task, &address, &size, VM_REGION_BASIC_INFO, (vm_region_info_t)&info, &count, &object);
-#endif
-  if (info_ret == KERN_SUCCESS) {
-    if (prot != NULL)
-      *prot = info.protection;
-
-    if (max_prot != NULL)
-      *max_prot = info.max_protection;
-
-    return 0;
-  }
-
-  return -1;
-}
-#endif
+// ---------------------------------------------------------------------------
+// 经典路径: 间接符号表 (传统 __DATA/__DATA_CONST GOT)
+// ---------------------------------------------------------------------------
 
 static void perform_rebinding_with_section(struct rebindings_entry *rebindings,
                                            section_t *section,
@@ -134,31 +136,18 @@ static void perform_rebinding_with_section(struct rebindings_entry *rebindings,
     struct rebindings_entry *cur = rebindings;
     while (cur) {
       for (uint j = 0; j < cur->rebindings_nel; j++) {
-        if (symbol_name_longer_than_1 && strcmp(&symbol_name[1], cur->rebindings[j].name) == 0) {
-          kern_return_t err;
-
-          if (cur->rebindings[j].replaced != NULL && indirect_symbol_bindings[i] != cur->rebindings[j].replacement)
+        if (symbol_name_longer_than_1 &&
+            strcmp(&symbol_name[1], cur->rebindings[j].name) == 0) {
+          if (cur->rebindings[j].replaced != NULL &&
+              indirect_symbol_bindings[i] != cur->rebindings[j].replacement) {
             *(cur->rebindings[j].replaced) = indirect_symbol_bindings[i];
-
-          /**
-           * 1. Moved the vm protection modifying codes to here to reduce the
-           *    changing scope.
-           * 2. Adding VM_PROT_WRITE mode unconditionally because vm_region
-           *    API on some iOS/Mac reports mismatch vm protection attributes.
-           * -- Lianfu Hao Jun 16th, 2021
-           **/
-          err = vm_protect (mach_task_self (), (uintptr_t)indirect_symbol_bindings, section->size, 0, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+          }
+          kern_return_t err = vm_protect (mach_task_self (),
+              (uintptr_t)indirect_symbol_bindings, section->size, 0,
+              VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
           if (err == KERN_SUCCESS) {
-            /**
-             * Once we failed to change the vm protection, we
-             * MUST NOT continue the following write actions!
-             * iOS 15 has corrected the const segments prot.
-             * -- Lionfore Hao Jun 11th, 2021
-             **/
             indirect_symbol_bindings[i] = cur->rebindings[j].replacement;
           } else {
-            // fail-loud: 找到了符号但 vm_protect 失败, 替换没写进去 = hook 未生效.
-            // 上报健康中心(内部已写 stderr 并去重).
             dh_health_hook_fail(DH_DIAG_GENERAL, cur->rebindings[j].name);
           }
           goto symbol_loop;
@@ -170,17 +159,338 @@ static void perform_rebinding_with_section(struct rebindings_entry *rebindings,
   }
 }
 
+// ---------------------------------------------------------------------------
+// 新路径: LC_DYLD_CHAINED_FIXUPS (iOS 15+ / arm64e)
+// ---------------------------------------------------------------------------
+
+// 从 imports 表中获取第 ordinal 个符号名
+static const char *chained_import_symbol_name(
+    const struct dyld_chained_fixups_header *hdr,
+    uint32_t ordinal) {
+  if (ordinal >= hdr->imports_count) return NULL;
+
+  const uint8_t *base = (const uint8_t *)hdr;
+  uint32_t name_offset = 0;
+
+  switch (hdr->imports_format) {
+    case DYLD_CHAINED_IMPORT: {
+      const struct dyld_chained_import *imports =
+          (const struct dyld_chained_import *)(base + hdr->imports_offset);
+      name_offset = imports[ordinal].name_offset;
+      break;
+    }
+    case DYLD_CHAINED_IMPORT_ADDEND: {
+      const struct dyld_chained_import_addend *imports =
+          (const struct dyld_chained_import_addend *)(base + hdr->imports_offset);
+      name_offset = imports[ordinal].name_offset;
+      break;
+    }
+    case DYLD_CHAINED_IMPORT_ADDEND64: {
+      const struct dyld_chained_import_addend64 *imports =
+          (const struct dyld_chained_import_addend64 *)(base + hdr->imports_offset);
+      name_offset = imports[ordinal].name_offset;
+      break;
+    }
+    default:
+      return NULL;
+  }
+
+  return (const char *)(base + hdr->symbols_offset + name_offset);
+}
+
+// 在 rebindings 链表中查找匹配符号名 (带下划线前缀)
+static struct rebinding *find_rebinding_for_symbol(
+    struct rebindings_entry *rebindings,
+    const char *symbol_name) {
+  if (!symbol_name || symbol_name[0] != '_') return NULL;
+  const char *bare = symbol_name + 1;  // 跳过 '_'
+  struct rebindings_entry *cur = rebindings;
+  while (cur) {
+    for (size_t j = 0; j < cur->rebindings_nel; j++) {
+      if (strcmp(bare, cur->rebindings[j].name) == 0) {
+        return &cur->rebindings[j];
+      }
+    }
+    cur = cur->next;
+  }
+  return NULL;
+}
+
+// 安全写入一个指针槽位 (vm_protect + 写入)
+static bool safe_write_pointer(void **slot, void *new_value, size_t slot_size) {
+  // 对齐到页边界
+  uintptr_t page_start = (uintptr_t)slot & ~((uintptr_t)vm_page_size - 1);
+  uintptr_t page_end = ((uintptr_t)slot + slot_size + vm_page_size - 1)
+                       & ~((uintptr_t)vm_page_size - 1);
+  vm_size_t region_size = page_end - page_start;
+
+  kern_return_t err = vm_protect(mach_task_self(), page_start, region_size, 0,
+                                 VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+  if (err != KERN_SUCCESS) {
+    return false;
+  }
+  *slot = new_value;
+  return true;
+}
+
+// 遍历一个 segment 的 chained fixups 链，执行 rebinding
+static void rebind_chained_segment(
+    struct rebindings_entry *rebindings,
+    const struct dyld_chained_fixups_header *hdr,
+    const struct dyld_chained_starts_in_segment *seg_starts,
+    uintptr_t segment_vm_addr,
+    intptr_t slide) {
+
+  uint16_t pointer_format = seg_starts->pointer_format;
+
+  for (uint16_t page_idx = 0; page_idx < seg_starts->page_count; page_idx++) {
+    uint16_t page_start_offset = seg_starts->page_start[page_idx];
+    if (page_start_offset == DYLD_CHAINED_PTR_START_NONE) {
+      continue;
+    }
+    // 暂不处理 MULTI (极少见于用户态 dylib)
+    if (page_start_offset & DYLD_CHAINED_PTR_START_MULTI) {
+      continue;
+    }
+
+    // 链起始地址
+    uintptr_t chain_addr = segment_vm_addr
+                         + (uintptr_t)page_idx * seg_starts->page_size
+                         + page_start_offset;
+
+    // 沿链遍历
+    bool chain_end = false;
+    while (!chain_end) {
+      uint64_t raw = *(uint64_t *)chain_addr;
+
+      // 根据 pointer_format 解析 bind/rebase 和 next
+      uint32_t ordinal = 0;
+      bool is_bind = false;
+      uint16_t next_stride = 0;
+      bool is_auth = false;
+      uint16_t diversity = 0;
+      uint8_t key = 0;
+
+      switch (pointer_format) {
+        case DYLD_CHAINED_PTR_64:
+        case DYLD_CHAINED_PTR_64_OFFSET: {
+          // 通用 64 位: bit63 = bind
+          struct dyld_chained_ptr_64_bind bind_info;
+          memcpy(&bind_info, &raw, sizeof(bind_info));
+          is_bind = (raw >> 63) & 1;
+          if (is_bind) {
+            ordinal = bind_info.ordinal;
+          }
+          next_stride = bind_info.next * 4;
+          break;
+        }
+        case DYLD_CHAINED_PTR_ARM64E:
+        case DYLD_CHAINED_PTR_ARM64E_USERLAND:
+        case DYLD_CHAINED_PTR_ARM64E_USERLAND24: {
+          // arm64e: bit63 = auth, bit62 = bind
+          is_auth = (raw >> 63) & 1;
+          is_bind = (raw >> 62) & 1;
+          if (is_bind) {
+            if (is_auth) {
+              if (pointer_format == DYLD_CHAINED_PTR_ARM64E_USERLAND24) {
+                struct dyld_chained_ptr_arm64e_auth_bind24 ab24;
+                memcpy(&ab24, &raw, sizeof(ab24));
+                ordinal = ab24.ordinal;
+                next_stride = ab24.next * 8;
+                diversity = ab24.diversity;
+                key = ab24.key;
+              } else {
+                struct dyld_chained_ptr_arm64e_auth_bind ab;
+                memcpy(&ab, &raw, sizeof(ab));
+                ordinal = ab.ordinal;
+                next_stride = ab.next * 8;
+                diversity = ab.diversity;
+                key = ab.key;
+              }
+            } else {
+              if (pointer_format == DYLD_CHAINED_PTR_ARM64E_USERLAND24) {
+                struct dyld_chained_ptr_arm64e_bind24 b24;
+                memcpy(&b24, &raw, sizeof(b24));
+                ordinal = b24.ordinal;
+                next_stride = b24.next * 8;
+              } else {
+                struct dyld_chained_ptr_arm64e_bind b;
+                memcpy(&b, &raw, sizeof(b));
+                ordinal = b.ordinal;
+                next_stride = b.next * 8;
+              }
+            }
+          } else {
+            // rebase — 提取 next
+            if (is_auth) {
+              struct dyld_chained_ptr_arm64e_auth_rebase ar;
+              memcpy(&ar, &raw, sizeof(ar));
+              next_stride = ar.next * 8;
+            } else {
+              struct dyld_chained_ptr_arm64e_rebase r;
+              memcpy(&r, &raw, sizeof(r));
+              next_stride = r.next * 8;
+            }
+          }
+          break;
+        }
+        default:
+          // 未知格式，跳过整个 segment
+          return;
+      }
+
+      // 处理 bind 条目
+      if (is_bind) {
+        const char *sym_name = chained_import_symbol_name(hdr, ordinal);
+        struct rebinding *rb = find_rebinding_for_symbol(rebindings, sym_name);
+        if (rb) {
+          void **slot = (void **)chain_addr;
+          void *old_value = *slot;
+
+          // 保存原始指针
+          if (rb->replaced != NULL && old_value != rb->replacement) {
+#if DH_IS_ARM64E
+            *(rb->replaced) = DH_PAC_STRIP(old_value);
+#else
+            *(rb->replaced) = old_value;
+#endif
+          }
+
+          // 根据认证状态签名替换指针
+          void *new_value;
+#if DH_IS_ARM64E
+          if (is_auth) {
+            // 使用与原始条目相同的 key 和 diversity 签名
+            // key 0 = IA (Instruction A), 1 = IB, 2 = DA, 3 = DB
+            // GOT 条目通常用 DA (key=2) 或 IA (key=0)
+            if (key == 2) {
+              new_value = ptrauth_sign_unauthenticated(
+                  rb->replacement, ptrauth_key_asda, diversity);
+            } else {
+              new_value = ptrauth_sign_unauthenticated(
+                  rb->replacement, ptrauth_key_asia, diversity);
+            }
+          } else {
+            new_value = rb->replacement;
+          }
+#else
+          (void)is_auth;
+          (void)diversity;
+          (void)key;
+          new_value = rb->replacement;
+#endif
+
+          if (!safe_write_pointer(slot, new_value, sizeof(void *))) {
+            dh_health_hook_fail(DH_DIAG_GENERAL, rb->name);
+          }
+        }
+      }
+
+      // 移动到链中下一个条目
+      if (next_stride == 0) {
+        chain_end = true;
+      } else {
+        chain_addr += next_stride;
+      }
+    }
+  }
+}
+
+// 处理一个 image 的 LC_DYLD_CHAINED_FIXUPS
+static bool rebind_symbols_with_chained_fixups(
+    struct rebindings_entry *rebindings,
+    const struct mach_header *header,
+    intptr_t slide) {
+
+  // 查找 LC_DYLD_CHAINED_FIXUPS
+  const struct linkedit_data_command *chained_cmd = NULL;
+  const segment_command_t *linkedit_seg = NULL;
+
+  uintptr_t cur = (uintptr_t)header + sizeof(mach_header_t);
+  for (uint32_t i = 0; i < header->ncmds; i++) {
+    const struct load_command *lc = (const struct load_command *)cur;
+    if (lc->cmd == LC_DYLD_CHAINED_FIXUPS) {
+      chained_cmd = (const struct linkedit_data_command *)lc;
+    } else if (lc->cmd == LC_SEGMENT_ARCH_DEPENDENT) {
+      const segment_command_t *seg = (const segment_command_t *)lc;
+      if (strcmp(seg->segname, SEG_LINKEDIT) == 0) {
+        linkedit_seg = seg;
+      }
+    }
+    cur += lc->cmdsize;
+  }
+
+  if (!chained_cmd || !linkedit_seg) {
+    return false;  // 没有 chained fixups，回退到经典路径
+  }
+
+  // 计算 LINKEDIT 基地址
+  uintptr_t linkedit_base = (uintptr_t)slide + linkedit_seg->vmaddr - linkedit_seg->fileoff;
+  const struct dyld_chained_fixups_header *hdr =
+      (const struct dyld_chained_fixups_header *)(linkedit_base + chained_cmd->dataoff);
+
+  if (hdr->fixups_version != 0) {
+    return false;
+  }
+
+  const struct dyld_chained_starts_in_image *starts =
+      (const struct dyld_chained_starts_in_image *)
+      ((const uint8_t *)hdr + hdr->starts_offset);
+
+  // 构建 segment index → vm_addr 映射
+  // chained fixups 的 seg_info_offset 按 segment 索引排列
+  const segment_command_t *segments[64];
+  uint32_t seg_count = 0;
+  cur = (uintptr_t)header + sizeof(mach_header_t);
+  for (uint32_t i = 0; i < header->ncmds && seg_count < 64; i++) {
+    const struct load_command *lc = (const struct load_command *)cur;
+    if (lc->cmd == LC_SEGMENT_ARCH_DEPENDENT) {
+      segments[seg_count++] = (const segment_command_t *)lc;
+    }
+    cur += lc->cmdsize;
+  }
+
+  // 遍历每个有 fixups 的 segment
+  for (uint32_t seg_idx = 0; seg_idx < starts->seg_count && seg_idx < seg_count; seg_idx++) {
+    uint32_t seg_info_off = starts->seg_info_offset[seg_idx];
+    if (seg_info_off == 0) {
+      continue;  // 该 segment 没有 fixups
+    }
+
+    const struct dyld_chained_starts_in_segment *seg_starts =
+        (const struct dyld_chained_starts_in_segment *)
+        ((const uint8_t *)starts + seg_info_off);
+
+    uintptr_t segment_vm_addr = (uintptr_t)slide + seg_starts->segment_offset;
+
+    rebind_chained_segment(rebindings, hdr, seg_starts, segment_vm_addr, slide);
+  }
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// 入口: 对单个 image 执行 rebinding
+// ---------------------------------------------------------------------------
+
 static void rebind_symbols_for_image(struct rebindings_entry *rebindings,
                                      const struct mach_header *header,
                                      intptr_t slide) {
   Dl_info info;
   if (dladdr(header, &info) == 0) {
-    // fail-loud: 整个 image 无法定位, 其上所有待 hook 的符号都会被静默跳过.
     fprintf(stderr, "[IOSDecryptHub/ERR] dladdr 失败, 跳过 image header=%p (该 image 的 hook 全部未生效)\n",
             (const void *)header);
     return;
   }
 
+  // 优先尝试 chained fixups (iOS 15+ / arm64e 新格式)
+  if (rebind_symbols_with_chained_fixups(rebindings, header, slide)) {
+    // chained fixups 成功处理了该 image。
+    // 注意: 即使有 chained fixups，某些 section 可能仍用间接符号表（混合情况极少，
+    // 但为安全起见仍扫描传统 section）。
+  }
+
+  // 经典路径: 间接符号表 (兼容旧格式 + 混合情况)
   segment_command_t *cur_seg_cmd;
   segment_command_t *linkedit_segment = NULL;
   struct symtab_command* symtab_cmd = NULL;
@@ -217,8 +527,10 @@ static void rebind_symbols_for_image(struct rebindings_entry *rebindings,
   for (uint i = 0; i < header->ncmds; i++, cur += cur_seg_cmd->cmdsize) {
     cur_seg_cmd = (segment_command_t *)cur;
     if (cur_seg_cmd->cmd == LC_SEGMENT_ARCH_DEPENDENT) {
+      // 扫描 __DATA, __DATA_CONST, __AUTH_CONST 三个段
       if (strcmp(cur_seg_cmd->segname, SEG_DATA) != 0 &&
-          strcmp(cur_seg_cmd->segname, SEG_DATA_CONST) != 0) {
+          strcmp(cur_seg_cmd->segname, SEG_DATA_CONST) != 0 &&
+          strcmp(cur_seg_cmd->segname, SEG_AUTH_CONST) != 0) {
         continue;
       }
       for (uint j = 0; j < cur_seg_cmd->nsects; j++) {

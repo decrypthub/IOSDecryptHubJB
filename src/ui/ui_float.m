@@ -25,6 +25,9 @@
 #define DH_WARN     [UIColor colorWithRed:0.941 green:0.718 blue:0.435 alpha:1.0]  // #f0b76f
 #define DH_DANGER   [UIColor colorWithRed:1.000 green:0.608 blue:0.722 alpha:1.0]  // #ff9bb8
 
+// 前向声明 (定义在文件后部)
+static UIWindowScene *dh_best_window_scene(void);
+
 @interface DHFloatingController : NSObject
 @property (nonatomic, strong) UIWindow    *window;
 @property (nonatomic, strong) UIView      *bar;
@@ -52,20 +55,13 @@ static DHFloatingController *gFloat = nil;
     return self;
 }
 
-- (UIWindow *)mostUsableWindowScene {
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]
-                && s.activationState == UISceneActivationStateForegroundActive) {
-                return [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)s];
-            }
-        }
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]) {
-                return [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)s];
-            }
-        }
+// 创建悬浮窗并绑定到最佳 scene; 无 scene 时降级到 mainScreen (旧 UIKit)
+- (UIWindow *)createFloatingWindow {
+    UIWindowScene *scene = dh_best_window_scene();
+    if (scene) {
+        return [[UIWindow alloc] initWithWindowScene:scene];
     }
+    // 旧 UIKit 无 Scene Manifest: 直接用 screen 创建
     return [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
 }
 
@@ -76,7 +72,7 @@ static DHFloatingController *gFloat = nil;
     CGRect frame = CGRectMake(screen.size.width - W - 12, 64, W, H);
     self.expandedFrame = frame;
 
-    UIWindow *w = [self mostUsableWindowScene];
+    UIWindow *w = [self createFloatingWindow];
     w.frame = frame;
     w.windowLevel = UIWindowLevelAlert + 1000;
     w.backgroundColor = [UIColor clearColor];
@@ -359,18 +355,19 @@ static DHFloatingController *gFloat = nil;
 
 @end
 
-static BOOL dh_scene_ready(void) {
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]
-                && s.activationState == UISceneActivationStateForegroundActive) {
-                return YES;
-            }
-        }
-        return NO;
-    }
-    return YES;
-}
+// ---------------------------------------------------------------------------
+// 生命周期管理
+//
+// 覆盖场景:
+//   - UIScene 前台 App (iOS 13+, 含 SwiftUI)
+//   - 没有 Scene Manifest 的旧 UIKit App (iOS 13 以下或 UIApplicationSceneManifest 缺失)
+//   - iPad 多窗口切换 (scene 断开/重连)
+//   - 横竖屏旋转
+//   - scene 从后台恢复
+//
+// 策略: 注册通知 → 找到前台 UIWindowScene → 创建/迁移悬浮窗。
+// 找不到前台 scene 时降级到 UIApplicationStateActive + 现有 UIWindow。
+// ---------------------------------------------------------------------------
 
 // 读取宿主被注入 App 的图标 -> PNG (best-effort): 优先 CFBundleIcons 里最大的一张,
 // 退化尝试常见 AppIcon 名。imageNamed 能从 Assets.car 读出真机图标。
@@ -395,15 +392,104 @@ NSData *dh_host_app_icon_png(void) {
     return png;
 }
 
-void dh_ui_install_floating(void) {
+// 查找最佳前台 UIWindowScene (iOS 13+)
+static UIWindowScene *dh_best_window_scene(void) {
+    if (@available(iOS 13.0, *)) {
+        // 优先: 前台活跃
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]]
+                && s.activationState == UISceneActivationStateForegroundActive) {
+                return (UIWindowScene *)s;
+            }
+        }
+        // 次选: 前台非活跃 (即将激活)
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]]
+                && s.activationState == UISceneActivationStateForegroundInactive) {
+                return (UIWindowScene *)s;
+            }
+        }
+        // 兜底: 任何 UIWindowScene
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]]) {
+                return (UIWindowScene *)s;
+            }
+        }
+    }
+    return nil;
+}
+
+// 判断当前环境是否可以创建悬浮窗
+static BOOL dh_can_show_floating(void) {
+    if (@available(iOS 13.0, *)) {
+        // 有 scene 支持: 需要至少一个 UIWindowScene
+        if (dh_best_window_scene() != nil) return YES;
+        // 没有 scene (旧 UIKit 无 Scene Manifest): 检查 App 是否活跃
+        if ([UIApplication sharedApplication].applicationState == UIApplicationStateActive) {
+            return YES;
+        }
+        return NO;
+    }
+    // iOS 12 及以下: 无 scene 概念, App 活跃即可
+    return [UIApplication sharedApplication].applicationState == UIApplicationStateActive;
+}
+
+// 尝试创建悬浮窗 (如果条件满足)
+static void dh_try_show_floating(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gFloat) return;
-        if (!dh_scene_ready()) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{ dh_ui_install_floating(); });
-            return;
-        }
+        if (!dh_can_show_floating()) return;
         gFloat = [[DHFloatingController alloc] init];
+    });
+}
+
+// 通知回调: scene 激活 / App 活跃 / 方向变化
+static void dh_on_scene_activated(NSNotification *note) {
+    (void)note;
+    dh_try_show_floating();
+}
+
+static void dh_on_app_did_become_active(NSNotification *note) {
+    (void)note;
+    dh_try_show_floating();
+}
+
+// 安装通知监听 + 首次尝试
+void dh_ui_install_floating(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // 注册通知 (幂等: 只在第一次安装)
+        static BOOL notifications_installed = NO;
+        if (!notifications_installed) {
+            notifications_installed = YES;
+            NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+
+            if (@available(iOS 13.0, *)) {
+                // UIScene 激活 (覆盖 SwiftUI / 标准 UIKit / iPad 多窗口)
+                [nc addObserverForName:UISceneDidActivateNotification
+                                object:nil queue:[NSOperationQueue mainQueue]
+                            usingBlock:^(NSNotification *note_) { dh_on_scene_activated(note_); }];
+
+            }
+
+            // 旧 UIKit 无 Scene Manifest 的兜底
+            [nc addObserverForName:UIApplicationDidBecomeActiveNotification
+                            object:nil queue:[NSOperationQueue mainQueue]
+                        usingBlock:^(NSNotification *note_) { dh_on_app_did_become_active(note_); }];
+        }
+
+        // 首次尝试 (可能 App 已经活跃)
+        dh_try_show_floating();
+
+        // 如果首次失败, 延迟重试几次 (覆盖启动慢的 App)
+        if (!gFloat) {
+            for (int delay_ms = 500; delay_ms <= 3000; delay_ms += 500) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                    (int64_t)(delay_ms * NSEC_PER_MSEC)),
+                    dispatch_get_main_queue(), ^{
+                    dh_try_show_floating();
+                });
+            }
+        }
     });
 }
 
