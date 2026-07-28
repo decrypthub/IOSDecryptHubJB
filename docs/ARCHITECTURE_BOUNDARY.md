@@ -54,6 +54,11 @@
 允许：
 
 - fishhook（GOT / 符号指针改写），用于 C 函数。
+  - 经典路径：间接符号表（`__DATA` / `__DATA_CONST` 的 `S_LAZY_SYMBOL_POINTERS` / `S_NON_LAZY_SYMBOL_POINTERS`）。
+  - 新路径：`LC_DYLD_CHAINED_FIXUPS`（iOS 15+ / arm64e），支持 `DYLD_CHAINED_PTR_64`、`ARM64E`、`ARM64E_USERLAND`、`ARM64E_USERLAND24` 四种指针格式。
+  - arm64e PAC 感知：strip 原始指针、按 key/diversity 重签名替换指针。
+  - `__AUTH_CONST` 段扫描（authenticated GOT）。
+  - 两种路径并行执行，覆盖混合格式。
 - ObjC method swizzle，用于 Objective-C 方法。
 
 绝对禁止：
@@ -62,7 +67,7 @@
 - `MSHookFunction`、`%hook` 等越狱框架 hook API。
 - QBDI、Frida Stalker 等 DBI 框架。
 
-原因：免越狱侧拿不到 `dynamic-codesigning` entitlement，无法可靠分配可执行内存。统一使用指针改写才能保证两条路线行为一致。
+原因：免越狱侧拿不到 `dynamic-codesigning` entitlement，无法可靠分配可执行内存。统一使用指针改写才能保证两条路线行为一致。chained fixups 仍然只改函数指针（bind 条目），不改指令，不生成可执行内存。
 
 ---
 
