@@ -34,6 +34,7 @@ error() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 # ---------- 检查依赖 ----------
 command -v dpkg-deb >/dev/null 2>&1 || error "需要 dpkg-deb (brew install dpkg)"
 command -v xcrun >/dev/null 2>&1 || error "需要 Xcode (xcrun)"
+command -v ldid >/dev/null 2>&1 || error "需要 ldid (brew install ldid)"
 
 # ---------- 编译主 dylib (jailbreak 变体) ----------
 info "编译主 dylib (VARIANT=jailbreak)..."
@@ -73,6 +74,7 @@ build_variant() {
     local VARIANT="$1"
     local PREFIX="$2"
     local DEPENDS="$3"
+    local ARCHITECTURE="$4"
 
     local STAGE="$BUILD_DIR/stage-$VARIANT"
     local DEB_OUT="$BUILD_DIR/${PKG_NAME}_${VERSION}_${VARIANT}.deb"
@@ -90,7 +92,7 @@ build_variant() {
 Package: ${PKG_NAME}
 Name: IOSDecryptHub
 Version: ${VERSION}
-Architecture: iphoneos-arm
+Architecture: ${ARCHITECTURE}
 Description: iOS runtime security analysis tool (dylib injection via jailbreak)
 Maintainer: IOSDecryptHub
 Author: IOSDecryptHub
@@ -105,13 +107,69 @@ CTRL
 
     # 主 dylib
     cp "$PROJECT_DIR/decrypt_helper.dylib" "$STAGE/${PREFIX}/usr/lib/IOSDecryptHub/decrypt_helper.dylib"
+    cp "$SCRIPT_DIR/enabledBundles.default.plist" \
+        "$STAGE/${PREFIX}/usr/lib/IOSDecryptHub/enabledBundles.default.plist"
+
+    # 主门控配置不作为 dpkg conffile 打包，避免升级覆盖用户选择。postinst 在干净安装时
+    # 创建，在旧版升级时从 /var/mobile/Library/Preferences 自动迁移。
+    cat > "$STAGE/DEBIAN/postinst" << POSTINST
+#!/bin/sh
+set -e
+CONFIG_DIR="${PREFIX}/usr/lib/IOSDecryptHub/config"
+CONFIG_PATH="\$CONFIG_DIR/enabledBundles.plist"
+DEFAULT_PATH="${PREFIX}/usr/lib/IOSDecryptHub/enabledBundles.default.plist"
+LEGACY_PATH="/var/mobile/Library/Preferences/com.iosdecrypthub.loader.plist"
+mkdir -p "\$CONFIG_DIR"
+if [ ! -f "\$CONFIG_PATH" ]; then
+    if [ -f "\$LEGACY_PATH" ]; then
+        cp "\$LEGACY_PATH" "\$CONFIG_PATH"
+    else
+        cp "\$DEFAULT_PATH" "\$CONFIG_PATH"
+    fi
+fi
+chown mobile:mobile "\$CONFIG_DIR" "\$CONFIG_PATH" 2>/dev/null || true
+chmod 0755 "\$CONFIG_DIR"
+chmod 0644 "\$CONFIG_PATH"
+exit 0
+POSTINST
+    chmod 0755 "$STAGE/DEBIAN/postinst"
 
     # 设置面板
     cp -R "$PREFS_BUNDLE" "$STAGE/${PREFIX}/Library/PreferenceBundles/"
     cp "$SCRIPT_DIR/prefs/entry.plist" "$STAGE/${PREFIX}/Library/PreferenceLoader/Preferences/IOSDecryptHubPrefs.plist"
 
+    # 越狱环境仍要求可加载 Mach-O 具备 ad-hoc 签名。
+    ldid -S "$STAGE/${PREFIX}/Library/MobileSubstrate/DynamicLibraries/IOSDecryptHubLoader.dylib"
+    ldid -S "$STAGE/${PREFIX}/usr/lib/IOSDecryptHub/decrypt_helper.dylib"
+    ldid -S "$STAGE/${PREFIX}/Library/PreferenceBundles/IOSDecryptHubPrefs.bundle/IOSDecryptHubPrefs"
+
     # 构建 deb
     dpkg-deb --build --root-owner-group "$STAGE" "$DEB_OUT" >/dev/null 2>&1
+
+    # 发布包必须能在干净环境中由包管理器完整解析，禁止依赖设备侧手工补文件。
+    local ACTUAL_ARCH
+    local ACTUAL_DEPENDS
+    local PACKAGE_CONTENTS
+    ACTUAL_ARCH=$(dpkg-deb -f "$DEB_OUT" Architecture)
+    ACTUAL_DEPENDS=$(dpkg-deb -f "$DEB_OUT" Depends)
+    PACKAGE_CONTENTS=$(dpkg-deb -c "$DEB_OUT")
+    [ "$ACTUAL_ARCH" = "$ARCHITECTURE" ] || error "$VARIANT 架构错误: $ACTUAL_ARCH"
+    case "$ACTUAL_DEPENDS" in
+        *"preferenceloader (>= 2.2.6)"*) ;;
+        *) error "$VARIANT 缺少 PreferenceLoader 运行时依赖" ;;
+    esac
+    case "$PACKAGE_CONTENTS" in
+        *"/PreferenceLoader/Preferences/IOSDecryptHubPrefs.plist"*) ;;
+        *) error "$VARIANT 缺少设置入口" ;;
+    esac
+    case "$PACKAGE_CONTENTS" in
+        *"/usr/lib/IOSDecryptHub/enabledBundles.default.plist"*) ;;
+        *) error "$VARIANT 缺少内置门控配置模板" ;;
+    esac
+    grep -q '<string>com.apple.UIKit</string>' \
+        "$STAGE/${PREFIX}/Library/MobileSubstrate/DynamicLibraries/IOSDecryptHubLoader.plist" \
+        || error "$VARIANT 的 MobileLoader 过滤器未覆盖 UIKit App"
+
     info "✅ $DEB_OUT ($(du -h "$DEB_OUT" | cut -f1))"
 }
 
@@ -122,18 +180,18 @@ mkdir -p "$BUILD_DIR"
 
 case "$TARGETS" in
     rootless)
-        build_variant "rootless" "/var/jb" "mobilesubstrate (>= 0.9.5000), applist (>= 1.5)"
+        build_variant "rootless" "/var/jb" "mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" "iphoneos-arm64"
         ;;
     roothide)
-        build_variant "roothide" "/var/jb" "mobilesubstrate (>= 0.9.5000), applist (>= 1.5)"
+        build_variant "roothide" "/var/jb" "mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" "iphoneos-arm64"
         ;;
     rootful)
-        build_variant "rootful" "" "mobilesubstrate (>= 0.9.5000), applist (>= 1.5)"
+        build_variant "rootful" "" "mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" "iphoneos-arm"
         ;;
     all)
-        build_variant "rootless" "/var/jb" "mobilesubstrate (>= 0.9.5000), applist (>= 1.5)"
-        build_variant "roothide" "/var/jb" "mobilesubstrate (>= 0.9.5000), applist (>= 1.5)"
-        build_variant "rootful" "" "mobilesubstrate (>= 0.9.5000), applist (>= 1.5)"
+        build_variant "rootless" "/var/jb" "mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" "iphoneos-arm64"
+        build_variant "roothide" "/var/jb" "mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" "iphoneos-arm64"
+        build_variant "rootful" "" "mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" "iphoneos-arm"
         ;;
     *)
         error "未知目标: $TARGETS (可选: rootless / roothide / rootful / all)"

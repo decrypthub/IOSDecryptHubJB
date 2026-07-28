@@ -12,13 +12,13 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Substrate / ElleKit / libhooker                            │
-│  Loads IOSDecryptHubLoader.dylib into all apps (Filter: *)  │
+│  Loads IOSDecryptHubLoader.dylib into UIKit apps            │
 └──────────────────────────┬──────────────────────────────────┘
                            │ %ctor / constructor
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  IOSDecryptHubLoader.dylib (thin loader)                    │
-│  1. Read plist preferences (com.iosdecrypthub.loader)       │
+│  1. Read the bundled enabledBundles.plist config            │
 │  2. Check whether the current bundleID is in the enabled    │
 │     list                                                    │
 │  3. If enabled  → dlopen the main dylib                     │
@@ -72,10 +72,18 @@ Artifacts under `build/deb/`:
 
 **No app is injected by default** — you must enable it manually.
 
+The app selection is stored in `config/enabledBundles.plist` next to the main dylib. On a clean
+install, the package creates an empty configuration; during an upgrade it migrates the legacy
+`/var/mobile/Library/Preferences/com.iosdecrypthub.loader.plist` automatically. The configuration
+directory is owned by `mobile`, allowing the Settings pane to update it atomically. The loader
+locates it relative to its actual dyld path, avoiding host-app preference container isolation and
+rootless `/var/jb` alias differences. The legacy preference domain remains a compatibility fallback.
+
 ## Dependencies
 
 - `mobilesubstrate` (>= 0.9.5000) or `ellekit` — dylib loading mechanism
-- `applist` (>= 1.5) — app-list UI for the settings panel
+- `preferenceloader` (>= 2.2.6) — loads the IOSDecryptHub pane in Settings
+- The settings panel includes its own app selector and does not depend on AppList
 
 ## Design Constraints
 

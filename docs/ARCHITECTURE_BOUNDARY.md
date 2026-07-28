@@ -24,7 +24,7 @@
 |------|----------|------|------|
 | `dev` (`DH_VARIANT=0`) | 开发者手动注入 | 手动注入即明确意图 | 裸 dylib |
 | `trollstore` (`DH_VARIANT=1`) | 管理器 App patch Mach-O | 管理器内 per-app Toggle | 管理器 IPA + dylib |
-| `jailbreak` (`DH_VARIANT=2`) | Substrate / ElleKit / libhooker 加载器 | Settings + AppList 偏好 | rootless / roothide / rootful deb |
+| `jailbreak` (`DH_VARIANT=2`) | Substrate / ElleKit / libhooker 加载器 | Settings + 内置应用选择器 | rootless / roothide / rootful deb |
 
 ### 2.1 TrollStore 路线
 

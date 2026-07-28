@@ -114,6 +114,13 @@ IOSDecryptHub/
 - `tests/test_patch_info_plist.py`：Info.plist patch 单元测试
 - 新 hook 模块应补充对应的 exercise 触发路径
 
+### 发布完整性
+
+- 正式产物必须面向所有受支持环境完整可用，单台设备跑通不能代替发布验证
+- 必需组件必须整合进产物，或在 deb/IPA 清单中声明为硬依赖并由安装器解析
+- 禁止用强装、删除硬依赖、降级为建议依赖或设备侧手工补文件来掩盖打包缺陷
+- 越狱 deb 发布前必须验证依赖、架构、签名、安装路径、PreferenceLoader 入口和默认应用选择流程
+
 ---
 
 ## Git 规范

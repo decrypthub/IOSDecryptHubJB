@@ -13,13 +13,13 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Substrate / ElleKit / libhooker                            │
-│  加载 IOSDecryptHubLoader.dylib 到所有 App（Filter: *）      │
+│  加载 IOSDecryptHubLoader.dylib 到 UIKit App                 │
 └──────────────────────────┬──────────────────────────────────┘
                            │ %ctor / constructor
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  IOSDecryptHubLoader.dylib（薄层加载器）                      │
-│  1. 读取 plist 偏好（com.iosdecrypthub.loader）              │
+│  1. 读取插件自带的 enabledBundles.plist                     │
 │  2. 检查当前 bundleID 是否在启用列表中                        │
 │  3. 如果启用 → dlopen 主 dylib                               │
 │  4. 如果未启用 → 立即返回（零开销）                           │
@@ -71,10 +71,17 @@ make deb-rootful
 
 **默认不注入任何 App**，必须手动开启。
 
+应用选择结果保存在主 dylib 目录下的 `config/enabledBundles.plist`。安装脚本会在
+干净安装时创建空配置，在旧版升级时自动迁移
+`/var/mobile/Library/Preferences/com.iosdecrypthub.loader.plist`。配置目录归属
+`mobile`，设置面板可原子更新；loader 从自身实际路径定位该文件，避免宿主 App 的
+偏好容器隔离以及 rootless `/var/jb` 别名差异。旧偏好域继续作为降级兼容通道。
+
 ## 依赖
 
 - `mobilesubstrate` (>= 0.9.5000) 或 `ellekit` — dylib 加载机制
-- `applist` (>= 1.5) — 设置面板的 App 列表 UI
+- `preferenceloader` (>= 2.2.6) — 在系统设置中加载 IOSDecryptHub 配置入口
+- 应用选择器由设置面板内置，不依赖 AppList
 
 ## 设计约束
 
