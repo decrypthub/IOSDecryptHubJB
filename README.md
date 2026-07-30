@@ -84,13 +84,12 @@ idh mcp
 | trollstore | `make VARIANT=trollstore` | 巨魔注入器 / 管理器 IPA |
 | jailbreak | `make VARIANT=jailbreak` | 越狱 deb 包 |
 
-### 越狱 deb 包（三端）
+### 越狱 deb 包（双端）
 
 ```bash
-make deb              # 构建 rootless + roothide + rootful 三端
+make deb              # 构建 rootless + roothide 双端
 make deb-rootless     # 仅 rootless (Dopamine 等)
 make deb-roothide     # 仅 roothide
-make deb-rootful      # 仅 rootful (经典越狱)
 ```
 
 产物在 `build/deb/`，通过 Sileo / Zebra 安装后在「设置 → IOSDecryptHub」中选择要注入的 App。

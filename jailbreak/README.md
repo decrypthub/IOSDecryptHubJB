@@ -6,7 +6,7 @@
 
 
 > 通过越狱框架（Substrate/ElleKit/libhooker）将主 dylib 注入目标 App。
-> 支持 rootless / roothide / rootful 三端越狱。
+> 支持 rootless / roothide 双端越狱。
 
 ## 架构
 
@@ -35,13 +35,12 @@
 ## 构建
 
 ```bash
-# 构建全部三端 deb
+# 构建全部双端 deb
 make deb
 
 # 单独构建
 make deb-rootless
 make deb-roothide
-make deb-rootful
 
 # 或直接调用脚本
 ./jailbreak/build_deb.sh all
@@ -51,7 +50,6 @@ make deb-rootful
 产物在 `build/deb/` 下：
 - `com.iosdecrypthub.jailbreak_<version>_rootless.deb`
 - `com.iosdecrypthub.jailbreak_<version>_roothide.deb`
-- `com.iosdecrypthub.jailbreak_<version>_rootful.deb`
 
 ## 安装路径
 
@@ -59,7 +57,6 @@ make deb-rootful
 |----|-----------|--------------|
 | rootless | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
 | roothide | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
-| rootful | `/Library/MobileSubstrate/DynamicLibraries/` | `/usr/lib/IOSDecryptHub/` |
 
 ## 使用
 

@@ -4,9 +4,8 @@
 // 唯一职责：读取偏好设置 → 判断当前 App 是否启用 → dlopen 主 dylib。
 // 不包含任何 hook 逻辑。hook 全部由主 dylib 的 constructor 完成。
 //
-// 三端路径：
-//   rootless / roothide: /var/jb/usr/lib/IOSDecryptHub/decrypt_helper.dylib
-//   rootful:             /usr/lib/IOSDecryptHub/decrypt_helper.dylib
+// 双端路径（rootless / roothide）：
+//   /var/jb/usr/lib/IOSDecryptHub/decrypt_helper.dylib
 
 #import <Foundation/Foundation.h>
 #import <dlfcn.h>
@@ -19,7 +18,7 @@
 #define CONFIG_NAME    @"IOSDecryptHub/config/enabledBundles.plist"
 
 // rootless 下 /var/jb 只是引导期别名，宿主沙盒中不一定可见。优先从 loader 的 dyld
-// 实际路径推导同一 bootstrap 下的主 dylib，再兼容固定路径和 rootful。
+// 实际路径推导同一 bootstrap 下的主 dylib，再兼容固定路径。
 static NSArray<NSString *> *dh_dylib_candidates(void) {
     NSMutableArray<NSString *> *paths = [NSMutableArray array];
     Dl_info info = {0};
@@ -33,7 +32,6 @@ static NSArray<NSString *> *dh_dylib_candidates(void) {
         }
     }
     [paths addObject:@"/var/jb/usr/lib/IOSDecryptHub/decrypt_helper.dylib"];
-    [paths addObject:@"/usr/lib/IOSDecryptHub/decrypt_helper.dylib"];
     return paths;
 }
 
@@ -49,7 +47,6 @@ static NSArray<NSString *> *dh_config_candidates(void) {
         }
     }
     [paths addObject:@"/var/jb/usr/lib/IOSDecryptHub/config/enabledBundles.plist"];
-    [paths addObject:@"/usr/lib/IOSDecryptHub/config/enabledBundles.plist"];
     return paths;
 }
 

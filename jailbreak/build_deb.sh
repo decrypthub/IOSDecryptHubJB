@@ -1,23 +1,21 @@
 #!/bin/bash
-# build_deb.sh — 构建 IOSDecryptHub 越狱 deb 包（三端）
+# build_deb.sh — 构建 IOSDecryptHub 越狱 deb 包（双端）
 #
 # 用法:
-#   ./jailbreak/build_deb.sh              # 构建全部三端
+#   ./jailbreak/build_deb.sh              # 构建全部双端
 #   ./jailbreak/build_deb.sh rootless     # 仅 rootless
 #   ./jailbreak/build_deb.sh roothide     # 仅 roothide
-#   ./jailbreak/build_deb.sh rootful      # 仅 rootful
 #
 # 前提:
 #   - macOS + Xcode (xcrun)
 #   - dpkg-deb (brew install dpkg)
 #   - ldid (brew install ldid)
 #
-# 产物: build/deb/ 下三个 .deb 文件
+# 产物: build/deb/ 下两个 .deb 文件
 #
-# 三端差异:
+# 双端差异:
 #   rootless  — iphoneos-arm64,  prefix=/var/jb,  ElleKit/Substrate
 #   roothide  — iphoneos-arm64e, prefix=/var/jb,  roothide 官方 loader
-#   rootful   — iphoneos-arm,    prefix="",        Substrate/libhooker
 
 set -euo pipefail
 
@@ -223,7 +221,6 @@ POSTRM
 # 依赖策略说明:
 #   rootless  — ElleKit 是 iOS 15/16 rootless 的主流 hook 框架，提供 mobilesubstrate 虚拟包
 #   roothide  — roothide 官方 bootstrap 自带 loader，包 ID 以 roothide 源为准
-#   rootful   — 经典 Cydia Substrate 或 libhooker（iOS 14 及以下）
 #   共同依赖  — preferenceloader >= 2.2.6（设置面板入口）
 
 TARGETS="${1:-all}"
@@ -240,11 +237,6 @@ case "$TARGETS" in
             "ellekit (>= 1.0) | mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" \
             "iphoneos-arm64e" "arm64e"
         ;;
-    rootful)
-        build_variant "rootful" "" \
-            "mobilesubstrate (>= 0.9.5000) | libhooker, preferenceloader (>= 2.2.6)" \
-            "iphoneos-arm" "arm64"
-        ;;
     all)
         build_variant "rootless" "/var/jb" \
             "ellekit (>= 1.0) | mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" \
@@ -252,12 +244,9 @@ case "$TARGETS" in
         build_variant "roothide" "/var/jb" \
             "ellekit (>= 1.0) | mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" \
             "iphoneos-arm64e" "arm64e"
-        build_variant "rootful" "" \
-            "mobilesubstrate (>= 0.9.5000) | libhooker, preferenceloader (>= 2.2.6)" \
-            "iphoneos-arm" "arm64"
         ;;
     *)
-        error "未知目标: $TARGETS (可选: rootless / roothide / rootful / all)"
+        error "未知目标: $TARGETS (可选: rootless / roothide / all)"
         ;;
 esac
 

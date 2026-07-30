@@ -51,7 +51,7 @@ IOSDecryptHub/
 | `make mac` | macOS 原生编译（灰度自测） |
 | `make sim` | iOS 模拟器 dylib |
 | `make ipa` | 构建 TrollStore 管理器 IPA |
-| `make deb` | 构建 rootless / roothide / rootful 三端 deb |
+| `make deb` | 构建 rootless / roothide 双端 deb |
 | `make test-mcp` | MCP 集成测试（需 jq） |
 | `make clean` | 清理构建产物 |
 

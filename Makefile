@@ -259,7 +259,7 @@ ipa:
 	@chmod +x app-trollstore/build_ipa.sh
 	./app-trollstore/build_ipa.sh
 
-# ---------- 8) 越狱 deb 包 (三端: rootless / roothide / rootful) ----------
+# ---------- 8) 越狱 deb 包 (双端: rootless / roothide) ----------
 # 编译 jailbreak 变体 dylib + 加载器 + 设置面板, 打包为 deb。
 deb:
 	@chmod +x jailbreak/build_deb.sh
@@ -273,13 +273,9 @@ deb-roothide:
 	@chmod +x jailbreak/build_deb.sh
 	./jailbreak/build_deb.sh roothide
 
-deb-rootful:
-	@chmod +x jailbreak/build_deb.sh
-	./jailbreak/build_deb.sh rootful
-
 clean:
 	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib
 	rm -rf build/
 
 .PHONY: all linux mac sim test-mac test-mcp test-unit test-audit-mac test-audit-sim \
-	verify-architecture verify-fast dist clean ipa deb deb-rootless deb-roothide deb-rootful
+	verify-architecture verify-fast dist clean ipa deb deb-rootless deb-roothide

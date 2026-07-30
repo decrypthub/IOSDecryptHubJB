@@ -77,9 +77,8 @@ static NSArray<NSString *> *dh_loader_config_paths(void) {
         [paths addObject:[root stringByAppendingPathComponent:
             @"usr/lib/IOSDecryptHub/config/enabledBundles.plist"]];
     }
-    // 固定路径兜底（rootful 或 dladdr 失败时）
+    // 固定路径兜底（dladdr 失败时）
     [paths addObject:@"/var/jb/usr/lib/IOSDecryptHub/config/enabledBundles.plist"];
-    [paths addObject:@"/usr/lib/IOSDecryptHub/config/enabledBundles.plist"];
     return paths;
 }
 

@@ -5,7 +5,7 @@
 </div>
 
 > Injects the main dylib into target apps via jailbreak frameworks (Substrate / ElleKit / libhooker).
-> Supports rootless / roothide / rootful jailbreaks.
+> Supports rootless / roothide jailbreaks.
 
 ## Architecture
 
@@ -36,13 +36,12 @@
 ## Build
 
 ```bash
-# Build all three debs
+# Build both debs
 make deb
 
 # Build individually
 make deb-rootless
 make deb-roothide
-make deb-rootful
 
 # Or invoke the script directly
 ./jailbreak/build_deb.sh all
@@ -52,7 +51,6 @@ make deb-rootful
 Artifacts under `build/deb/`:
 - `com.iosdecrypthub.jailbreak_<version>_rootless.deb`
 - `com.iosdecrypthub.jailbreak_<version>_roothide.deb`
-- `com.iosdecrypthub.jailbreak_<version>_rootful.deb`
 
 ## Install Paths
 
@@ -60,7 +58,6 @@ Artifacts under `build/deb/`:
 |------|-------------|-----------------|
 | rootless | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
 | roothide | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
-| rootful | `/Library/MobileSubstrate/DynamicLibraries/` | `/usr/lib/IOSDecryptHub/` |
 
 ## Usage
 
