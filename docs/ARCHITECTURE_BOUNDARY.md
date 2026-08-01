@@ -125,7 +125,7 @@ dylib 运行在目标 App 进程中，任何异常都会直接终止宿主 App�
 | `make VARIANT=trollstore` | TrollStore | 管理器内嵌 dylib |
 | `make VARIANT=rootless` | Jailbreak | 越狱加载器加载的共享 dylib |
 | `make ipa` | TrollStore | 管理器 IPA |
-| `make deb` / `make deb-rootless` | Jailbreak | rootless deb 包 |
+| `make deb` / `make deb-rootless` / `make deb-roothide` | Jailbreak | rootless / roothide deb 包 |
 | `make mac` / `make sim` | dev | 灰度和模拟器验证 |
 
 ---

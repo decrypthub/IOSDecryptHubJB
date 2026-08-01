@@ -174,7 +174,6 @@
     .list-pane { width:auto !important; height:42%; border-bottom:1px solid #414a59; }
     .splitter { display:none; }
   }
-  .ver { color:#b0b8c4; font-size:11px; font-weight:400; margin-left:6px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
   .cap-chip { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:#f7f8fb; background:#0b0d12; border:1px solid #414a59; padding:3px 8px; border-radius:8px; cursor:pointer; user-select:none; }
   .cap-chip input { margin:0; cursor:pointer; }
   .modal-mask { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:100; align-items:center; justify-content:center; }
@@ -278,9 +277,8 @@
   header { min-height:60px; padding:9px 16px; gap:14px; background:var(--surface); border-bottom-color:var(--line); }
   .brand-lockup { display:flex; align-items:center; gap:11px; flex-shrink:0; }
   header h1 { display:flex; align-items:center; color:var(--ink); font-family:Inter,-apple-system,sans-serif; font-size:16px; letter-spacing:0; }
-  .hdr-raven { box-sizing:content-box; width:17px; height:17px; padding:6px; margin-right:9px !important; color:#06070a; background:var(--ink); border-radius:4px; }
+  .hdr-raven { box-sizing:content-box; width:20px; height:18px; padding:6px 5px; margin-right:10px !important; color:#000; background:#fff; border-radius:4px; flex-shrink:0; }
   .workspace-name { display:none; }
-  .ver { color:var(--blue); }
   header .stats { gap:7px; padding:0; color:var(--green); background:transparent; border:0; border-radius:0; white-space:nowrap; }
   header .stats b { color:var(--ink); }
   .header-process { position:relative; min-width:0; margin-left:auto; }
@@ -507,7 +505,7 @@
     <path d="M88,53L100,60L104,66L103,70L99,64L101,77L99,80L97,76L97,72L95,68L95,79L90,94L89,101L87,98L87,83L82,93L81,98L82,113L81,116L76,107L75,102L76,86L70,96L69,92L71,88L71,84L68,85L68,83L73,79L74,73L76,69L78,72L78,78L80,71L79,67L80,64L84,70L84,77L84,64L83,59L86,62L89,68L89,71L89,67L87,62L89,59L92,62L87,55Z"/>
     <path d="M28,38L34,38L42,36L59,36L66,37L69,41Z"/>
     <path d="M10,40L16,33L24,27L40,22L47,23L43,26L47,26L50,28L49,30L57,30L65,32L71,35L73,37L70,38L65,36L57,35L43,35L21,38L13,41Z"/>
-    <path d="M89,20L92,23L92,28L89,31L84,32L80,29L79,27L87,28L89,25L85,24L85,22L87,20Z"/></g></svg>IOSDecryptHub<span class='ver' id='ver'></span></h1><span class='workspace-name'>Runtime Console</span></div>
+    <path d="M89,20L92,23L92,28L89,31L84,32L80,29L79,27L87,28L89,25L85,24L85,22L87,20Z"/></g></svg>IOSDecryptHub</h1><span class='workspace-name'>Runtime Console</span></div>
   <div class='stats' id='stats'>加载中…</div>
   <div class='header-process'>
     <button type='button' class='process-trigger' id='processBtn' aria-expanded='false' aria-controls='processPopover' title='查看当前进程信息'>
@@ -1110,7 +1108,6 @@
       const iNet = CAT_CLS.indexOf('net'), iKc = CAT_CLS.indexOf('keychain');
       $('n-net').textContent = (bc[iNet]||0) ? (bc[iNet]||0) : '';
       $('n-keychain').textContent = (bc[iKc]||0) ? (bc[iKc]||0) : '';
-      $('ver').textContent = stats.version ? ('v'+stats.version) : '';
       const p = stats.process || {}; const pd = [];
       $('procPrimary').textContent = p.appName || p.processName || p.bundleId || '进程信息不可用';
       $('procSecondary').textContent = p.bundleId || '';

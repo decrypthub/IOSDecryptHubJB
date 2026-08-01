@@ -139,7 +139,7 @@ echo ""
 # 1. 编译 dylib
 # ================================================================
 echo "==> [1/5] 编译 dylib (VARIANT=trollstore, $ARCH)..."
-make -C "$ROOT" VARIANT=trollstore
+make -C "$ROOT" -B VARIANT=trollstore all
 DYLIB="$ROOT/decrypt_helper.dylib"
 if [ ! -f "$DYLIB" ]; then
     echo "❌ dylib 编译失败"; exit 1

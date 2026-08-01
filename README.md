@@ -84,14 +84,15 @@ idh mcp
 | trollstore | `make VARIANT=trollstore` | 巨魔注入器 / 管理器 IPA |
 | rootless | `make VARIANT=rootless` | 越狱 deb 包 |
 
-### 越狱 deb 包（rootless）
+### 越狱 deb 包（rootless / roothide）
 
 ```bash
-make deb              # 构建 rootless 包（Dopamine / palera1n 等）
-make deb-rootless     # 与 make deb 等价
+make deb              # 同时构建普通 rootless 与 roothide 包
+make deb-rootless     # 普通 rootless（arm64）
+make deb-roothide     # roothide（arm64e）
 ```
 
-产物在 `build/deb/`，通过 Sileo / Zebra 安装后在「设置 → IOSDecryptHub」中选择要注入的 App。
+产物在 `build/deb/`。必须安装与设备环境对应的包；roothide 不可安装普通 rootless 包，否则设置面板会因 `arm64` / `arm64e` 不兼容而无法加载。
 
 ## 注意事项
 

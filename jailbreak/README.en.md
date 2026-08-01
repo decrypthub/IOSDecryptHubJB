@@ -5,7 +5,7 @@
 </div>
 
 > Injects the main dylib into target apps through ElleKit on rootless jailbreaks.
-> Supports rootless jailbreaks such as Dopamine and palera1n.
+> Supports standard rootless environments such as Dopamine and palera1n, plus roothide.
 
 ## Architecture
 
@@ -36,24 +36,28 @@
 ## Build
 
 ```bash
-# Build the rootless deb
+# Build both standard rootless and roothide debs
 make deb
 
-# Equivalent alias
+# Build one target
 make deb-rootless
+make deb-roothide
 
 # Or invoke the script directly
-./jailbreak/build_deb.sh
+./jailbreak/build_deb.sh all
+./jailbreak/build_deb.sh roothide
 ```
 
 Artifacts under `build/deb/`:
 - `com.iosdecrypthub_<version>_rootless.deb`
+- `com.iosdecrypthub_<version>_roothide.deb`
 
 ## Install Paths
 
-| Root | Loader path | Main dylib path |
-|------|-------------|-----------------|
-| rootless | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
+| Environment | Debian architecture | Mach-O architecture | Loader path | Main dylib path |
+|-------------|---------------------|---------------------|-------------|-----------------|
+| rootless | `iphoneos-arm64` | `arm64` | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
+| roothide | `iphoneos-arm64e` | `arm64 + arm64e` | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
 
 ## Usage
 
@@ -78,7 +82,8 @@ rootless `/var/jb` alias differences. The legacy preference domain remains a com
 - `preferenceloader` — loads the IOSDecryptHub pane in Settings
 - The settings panel includes its own app selector and does not depend on AppList
 - The package does not explicitly depend on the `firmware` virtual package; compatibility is
-  constrained by arm64, rootless, and the Mach-O minimum deployment target of iOS 14.0
+  constrained by the target architecture, rootless environment, and the Mach-O minimum deployment
+  target of iOS 14.0
 
 ## Design Constraints
 

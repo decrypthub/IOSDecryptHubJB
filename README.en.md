@@ -83,14 +83,17 @@ idh mcp
 | trollstore | `make VARIANT=trollstore` | TrollStore injector / manager IPA |
 | rootless | `make VARIANT=rootless` | Jailbreak deb package |
 
-### Jailbreak deb Package (Rootless)
+### Jailbreak deb Package (Rootless / roothide)
 
 ```bash
-make deb              # Build the rootless package (Dopamine / palera1n, etc.)
-make deb-rootless     # Alias for make deb
+make deb              # Build both standard rootless and roothide packages
+make deb-rootless     # Standard rootless (arm64)
+make deb-roothide     # roothide (arm64e)
 ```
 
-Artifacts land in `build/deb/`. Install them via Sileo / Zebra, then choose the apps to inject under Settings → IOSDecryptHub.
+Artifacts land in `build/deb/`. Install the package matching the device environment; a standard
+rootless package cannot be used on roothide because its arm64 Settings bundle cannot load into an
+arm64e process.
 
 ## Notes
 

@@ -1,22 +1,33 @@
 #!/bin/bash
-# build_deb.sh — 构建 IOSDecryptHub rootless 越狱 deb 包
+# build_deb.sh — 构建 IOSDecryptHub rootless / roothide 越狱 deb 包
 #
 # 用法:
-#   ./jailbreak/build_deb.sh
+#   ./jailbreak/build_deb.sh              # 构建全部目标
+#   ./jailbreak/build_deb.sh rootless     # 仅普通 rootless
+#   ./jailbreak/build_deb.sh roothide     # 仅 roothide
 #
 # 前提:
 #   - macOS + Xcode (xcrun)
 #   - dpkg-deb (brew install dpkg)
 #   - ldid (brew install ldid)
 #
-# 产物: build/deb/com.iosdecrypthub_<version>_rootless.deb
+# 产物: build/deb/com.iosdecrypthub_<version>_<目标>.deb
 
 set -euo pipefail
 
-if [ "$#" -ne 0 ]; then
-    echo "[x] 此脚本仅构建 rootless 包，不接受目标参数" >&2
+if [ "$#" -gt 1 ]; then
+    echo "[x] 用法: $0 [all|rootless|roothide]" >&2
     exit 1
 fi
+
+TARGET="${1:-all}"
+case "$TARGET" in
+    all|rootless|roothide) ;;
+    *)
+        echo "[x] 未知目标: $TARGET (可选: all / rootless / roothide)" >&2
+        exit 1
+        ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -39,21 +50,22 @@ command -v dpkg-deb >/dev/null 2>&1 || error "需要 dpkg-deb (brew install dpkg
 command -v xcrun >/dev/null 2>&1 || error "需要 Xcode (xcrun)"
 command -v ldid >/dev/null 2>&1 || error "需要 ldid (brew install ldid)"
 
-# ---------- 编译主 dylib (jailbreak 变体) ----------
-info "编译主 dylib (VARIANT=rootless)..."
-make -C "$PROJECT_DIR" VARIANT=rootless clean all
-
 # ---------- 编译加载器 ----------
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 CC=$(xcrun --find clang)
 LOADER_SRC="$SCRIPT_DIR/src/loader.m"
 
 compile_loader() {
-    local ARCH="$1"
+    local ARCHS="$1"
     local OUT="$2"
-    info "编译越狱加载器 (arch=$ARCH)..."
+    local ARCH_FLAGS=()
+    local ARCH
+    for ARCH in $ARCHS; do
+        ARCH_FLAGS+=( -arch "$ARCH" )
+    done
+    info "编译越狱加载器 (archs=$ARCHS)..."
     mkdir -p "$(dirname "$OUT")"
-    $CC -arch "$ARCH" -isysroot "$SDK" -miphoneos-version-min=14.0 \
+    $CC "${ARCH_FLAGS[@]}" -isysroot "$SDK" -miphoneos-version-min=14.0 \
         -dynamiclib -install_name /usr/lib/IOSDecryptHub/IOSDecryptHubLoader.dylib \
         -ObjC -fobjc-arc -Wall -O2 \
         -framework Foundation \
@@ -66,11 +78,16 @@ PREFS_SRC="$SCRIPT_DIR/prefs/IOSDecryptHubPrefsListController.m"
 PREFS_ICON="$SCRIPT_DIR/prefs/icon.png"
 
 compile_prefs() {
-    local ARCH="$1"
+    local ARCHS="$1"
     local BUNDLE_DIR="$2"
-    info "编译设置面板 (arch=$ARCH)..."
+    local ARCH_FLAGS=()
+    local ARCH
+    for ARCH in $ARCHS; do
+        ARCH_FLAGS+=( -arch "$ARCH" )
+    done
+    info "编译设置面板 (archs=$ARCHS)..."
     mkdir -p "$BUNDLE_DIR"
-    $CC -arch "$ARCH" -isysroot "$SDK" -miphoneos-version-min=14.0 \
+    $CC "${ARCH_FLAGS[@]}" -isysroot "$SDK" -miphoneos-version-min=14.0 \
         -bundle \
         -ObjC -fobjc-arc -Wall -O2 \
         -framework Foundation -framework UIKit \
@@ -81,21 +98,34 @@ compile_prefs() {
     cp "$PREFS_ICON" "$BUNDLE_DIR/icon.png"
 }
 
+verify_macho_arch() {
+    local PATH_TO_VERIFY="$1"
+    local EXPECTED_ARCH="$2"
+    local LABEL="$3"
+    local ACTUAL_ARCHS
+
+    ACTUAL_ARCHS=$(xcrun lipo -archs "$PATH_TO_VERIFY")
+    [ "$ACTUAL_ARCHS" = "$EXPECTED_ARCH" ] \
+        || error "$LABEL 架构错误: 期望 $EXPECTED_ARCH, 实际 $ACTUAL_ARCHS"
+}
+
 # ---------- 打包函数 ----------
 build_variant() {
     local VARIANT="$1"
     local PREFIX="$2"
     local ARCHITECTURE="$3"
-    local LOADER_ARCH="$4"
+    local MACHO_ARCHS="$4"
 
     local STAGE="$BUILD_DIR/stage-$VARIANT"
     local DEB_OUT="$BUILD_DIR/${PKG_NAME}_${VERSION}_${VARIANT}.deb"
     local LOADER_OUT="$BUILD_DIR/_loader-${VARIANT}/IOSDecryptHubLoader.dylib"
     local PREFS_BUNDLE="$BUILD_DIR/_prefs-${VARIANT}/IOSDecryptHubPrefs.bundle"
 
-    # 每变体独立编译加载器和设置面板
-    compile_loader "$LOADER_ARCH" "$LOADER_OUT"
-    compile_prefs "$LOADER_ARCH" "$PREFS_BUNDLE"
+    # roothide 的系统进程需要 arm64e，普通 App 仍可能是 arm64；动态组件必须覆盖两者。
+    info "编译主 dylib (VARIANT=rootless, archs=$MACHO_ARCHS)..."
+    make -C "$PROJECT_DIR" -B VARIANT=rootless ARCHS="$MACHO_ARCHS" all
+    compile_loader "$MACHO_ARCHS" "$LOADER_OUT"
+    compile_prefs "$MACHO_ARCHS" "$PREFS_BUNDLE"
 
     info "打包 $VARIANT (arch=$ARCHITECTURE, prefix=${PREFIX:-/})..."
     rm -rf "$STAGE"
@@ -168,6 +198,16 @@ POSTRM
     cp -R "$PREFS_BUNDLE" "$STAGE/${PREFIX}/Library/PreferenceBundles/"
     cp "$SCRIPT_DIR/prefs/entry.plist" "$STAGE/${PREFIX}/Library/PreferenceLoader/Preferences/IOSDecryptHubPrefs.plist"
 
+    verify_macho_arch \
+        "$STAGE/${PREFIX}/Library/MobileSubstrate/DynamicLibraries/IOSDecryptHubLoader.dylib" \
+        "$MACHO_ARCHS" "$VARIANT 加载器"
+    verify_macho_arch \
+        "$STAGE/${PREFIX}/usr/lib/IOSDecryptHub/decrypt_helper.dylib" \
+        "$MACHO_ARCHS" "$VARIANT 主 dylib"
+    verify_macho_arch \
+        "$STAGE/${PREFIX}/Library/PreferenceBundles/IOSDecryptHubPrefs.bundle/IOSDecryptHubPrefs" \
+        "$MACHO_ARCHS" "$VARIANT 设置面板"
+
     # 越狱环境仍要求可加载 Mach-O 具备 ad-hoc 签名。
     ldid -S "$STAGE/${PREFIX}/Library/MobileSubstrate/DynamicLibraries/IOSDecryptHubLoader.dylib"
     ldid -S "$STAGE/${PREFIX}/usr/lib/IOSDecryptHub/decrypt_helper.dylib"
@@ -219,11 +259,26 @@ POSTRM
     info "✅ $DEB_OUT ($(du -h "$DEB_OUT" | cut -f1))"
 }
 
-# ---------- 构建 rootless 目标 ----------
+# ---------- 构建目标 ----------
+# 每个目标都用 make -B 强制重编译，不执行全局 clean，避免删除同轮发布的 IPA/dylib。
 mkdir -p "$BUILD_DIR"
 
-build_variant "rootless" "/var/jb" \
-    "iphoneos-arm64" "arm64"
+case "$TARGET" in
+    all)
+        build_variant "rootless" "/var/jb" \
+            "iphoneos-arm64" "arm64"
+        build_variant "roothide" "/var/jb" \
+            "iphoneos-arm64e" "arm64 arm64e"
+        ;;
+    rootless)
+        build_variant "rootless" "/var/jb" \
+            "iphoneos-arm64" "arm64"
+        ;;
+    roothide)
+        build_variant "roothide" "/var/jb" \
+            "iphoneos-arm64e" "arm64 arm64e"
+        ;;
+esac
 
 info "全部完成! 产物在: $BUILD_DIR/"
 ls -lh "$BUILD_DIR"/*.deb 2>/dev/null || true

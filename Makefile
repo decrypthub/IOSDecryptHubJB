@@ -98,10 +98,12 @@ endif
 # ---------- 1) iOS 真机 dylib (默认 target) ----------
 SDK     := $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
 CC      := $(shell xcrun --find clang)
+ARCHS   ?= $(ARCH)
+ARCH_FLAGS := $(foreach A,$(ARCHS),-arch $(A))
 INCLUDES := -Isrc/core -Isrc/core/capstone/include -Isrc/hooks/crypto -Isrc/hooks/behavior -Isrc/server -Isrc/ui
 WEB_HEADER := src/server/web_index_html.h
 
-CFLAGS  := -arch $(ARCH) \
+CFLAGS  := $(ARCH_FLAGS) \
            -isysroot $(SDK) \
            -miphoneos-version-min=$(MIN_IOS) \
            -dynamiclib \
@@ -121,7 +123,7 @@ $(WEB_HEADER): web/index.html tools/gen_web.py
 
 $(TARGET): $(WEB_HEADER) $(SRC)
 	@if [ -z "$(SDK)" ]; then echo "❌ 没找到 iPhoneOS SDK (xcrun --sdk iphoneos)"; exit 1; fi
-	@echo "[*] 编译 iOS dylib (VARIANT=$(VARIANT), arch=$(ARCH), min=$(MIN_IOS))..."
+	@echo "[*] 编译 iOS dylib (VARIANT=$(VARIANT), archs=$(ARCHS), min=$(MIN_IOS))..."
 	$(CC) $(CFLAGS) $(SRC) -o $(TARGET)
 	@echo "✅ $(TARGET)"
 
@@ -131,7 +133,7 @@ linux:
 		echo "❌ 需设置 IOS_SDK 和 CROSS_CC, 参考 scripts/wsl_setup_toolchain.sh"; exit 1; fi
 	@echo "[*] Linux 交叉编译 (VARIANT=$(VARIANT))..."
 	python3 tools/gen_web.py web/index.html $(WEB_HEADER)
-	$(CROSS_CC) -arch $(ARCH) -isysroot $(IOS_SDK) -miphoneos-version-min=$(MIN_IOS) \
+	$(CROSS_CC) $(ARCH_FLAGS) -isysroot $(IOS_SDK) -miphoneos-version-min=$(MIN_IOS) \
 		-dynamiclib -install_name @executable_path/$(TARGET) \
 		-ObjC -fobjc-arc -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
 		-O2 $(INCLUDES) $(CAPSTONE_DEF) -DDH_VARIANT=$(DH_VARIANT_NUM) $(FRAMEWORKS) \
@@ -259,19 +261,23 @@ ipa:
 	@chmod +x app-trollstore/build_ipa.sh
 	./app-trollstore/build_ipa.sh
 
-# ---------- 8) 越狱 deb 包 (rootless) ----------
-# 编译 rootless 变体 dylib + 加载器 + 设置面板, 打包为 deb。
+# ---------- 8) 越狱 deb 包 (rootless / roothide) ----------
+# 共享同一 rootless 变体源码，按环境分别产出 arm64 / arm64e 包。
 deb:
 	@chmod +x jailbreak/build_deb.sh
-	./jailbreak/build_deb.sh
+	./jailbreak/build_deb.sh all
 
 deb-rootless:
 	@chmod +x jailbreak/build_deb.sh
-	./jailbreak/build_deb.sh
+	./jailbreak/build_deb.sh rootless
+
+deb-roothide:
+	@chmod +x jailbreak/build_deb.sh
+	./jailbreak/build_deb.sh roothide
 
 clean:
 	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib
 	rm -rf build/
 
 .PHONY: all linux mac sim test-mac test-mcp test-unit test-audit-mac test-audit-sim \
-	verify-architecture verify-fast dist clean ipa deb deb-rootless
+	verify-architecture verify-fast dist clean ipa deb deb-rootless deb-roothide
