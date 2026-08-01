@@ -81,14 +81,13 @@ idh mcp
 |---------|---------|---------|
 | dev (default) | `make` | Manual injection / local debugging for developers |
 | trollstore | `make VARIANT=trollstore` | TrollStore injector / manager IPA |
-| jailbreak | `make VARIANT=jailbreak` | Jailbreak deb packages |
+| rootless | `make VARIANT=rootless` | Jailbreak deb package |
 
-### Jailbreak deb Packages (Two Roots)
+### Jailbreak deb Package (Rootless)
 
 ```bash
-make deb              # Build both: rootless + roothide
-make deb-rootless     # rootless only (Dopamine, etc.)
-make deb-roothide     # roothide only
+make deb              # Build the rootless package (Dopamine / palera1n, etc.)
+make deb-rootless     # Alias for make deb
 ```
 
 Artifacts land in `build/deb/`. Install them via Sileo / Zebra, then choose the apps to inject under Settings → IOSDecryptHub.

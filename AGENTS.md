@@ -47,11 +47,11 @@ IOSDecryptHub/
 |------|------|
 | `make` | 编译 iOS 真机 dylib（dev 变体，默认） |
 | `make VARIANT=trollstore` | 编译巨魔变体 dylib |
-| `make VARIANT=jailbreak` | 编译越狱加载器使用的共享 dylib |
+| `make VARIANT=rootless` | 编译越狱加载器使用的共享 dylib |
 | `make mac` | macOS 原生编译（灰度自测） |
 | `make sim` | iOS 模拟器 dylib |
 | `make ipa` | 构建 TrollStore 管理器 IPA |
-| `make deb` | 构建 rootless / roothide 双端 deb |
+| `make deb` | 构建 rootless deb |
 | `make test-mcp` | MCP 集成测试（需 jq） |
 | `make clean` | 清理构建产物 |
 

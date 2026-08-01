@@ -163,6 +163,18 @@ static void perform_rebinding_with_section(struct rebindings_entry *rebindings,
 // 新路径: LC_DYLD_CHAINED_FIXUPS (iOS 15+ / arm64e)
 // ---------------------------------------------------------------------------
 
+static bool safe_read_memory(const void *address, void *output, size_t size) {
+  if (!address || !output || size == 0) return false;
+  vm_size_t bytes_read = 0;
+  kern_return_t result = vm_read_overwrite(
+      mach_task_self(),
+      (vm_address_t)(uintptr_t)address,
+      (vm_size_t)size,
+      (vm_address_t)(uintptr_t)output,
+      &bytes_read);
+  return result == KERN_SUCCESS && bytes_read == size;
+}
+
 // 从 imports 表中获取第 ordinal 个符号名
 static const char *chained_import_symbol_name(
     const struct dyld_chained_fixups_header *hdr,
@@ -239,9 +251,14 @@ static void rebind_chained_segment(
     const struct dyld_chained_fixups_header *hdr,
     const struct dyld_chained_starts_in_segment *seg_starts,
     uintptr_t segment_vm_addr,
-    intptr_t slide) {
+    size_t segment_vm_size) {
 
   uint16_t pointer_format = seg_starts->pointer_format;
+  uintptr_t segment_vm_end = 0;
+  if (segment_vm_size < sizeof(uint64_t) ||
+      __builtin_add_overflow(segment_vm_addr, segment_vm_size, &segment_vm_end)) {
+    return;
+  }
 
   for (uint16_t page_idx = 0; page_idx < seg_starts->page_count; page_idx++) {
     uint16_t page_start_offset = seg_starts->page_start[page_idx];
@@ -257,11 +274,18 @@ static void rebind_chained_segment(
     uintptr_t chain_addr = segment_vm_addr
                          + (uintptr_t)page_idx * seg_starts->page_size
                          + page_start_offset;
+    if (chain_addr < segment_vm_addr ||
+        chain_addr > segment_vm_end - sizeof(uint64_t)) {
+      continue;
+    }
 
     // 沿链遍历
     bool chain_end = false;
     while (!chain_end) {
-      uint64_t raw = *(uint64_t *)chain_addr;
+      uint64_t raw = 0;
+      if (!safe_read_memory((const void *)chain_addr, &raw, sizeof(raw))) {
+        return;
+      }
 
       // 根据 pointer_format 解析 bind/rebase 和 next
       uint32_t ordinal = 0;
@@ -390,7 +414,13 @@ static void rebind_chained_segment(
       if (next_stride == 0) {
         chain_end = true;
       } else {
-        chain_addr += next_stride;
+        uintptr_t next_addr = 0;
+        if (__builtin_add_overflow(chain_addr, (uintptr_t)next_stride, &next_addr) ||
+            next_addr < segment_vm_addr ||
+            next_addr > segment_vm_end - sizeof(uint64_t)) {
+          return;
+        }
+        chain_addr = next_addr;
       }
     }
   }
@@ -461,9 +491,11 @@ static bool rebind_symbols_with_chained_fixups(
         (const struct dyld_chained_starts_in_segment *)
         ((const uint8_t *)starts + seg_info_off);
 
-    uintptr_t segment_vm_addr = (uintptr_t)slide + seg_starts->segment_offset;
+    const segment_command_t *segment = segments[seg_idx];
+    uintptr_t segment_vm_addr = (uintptr_t)slide + segment->vmaddr;
 
-    rebind_chained_segment(rebindings, hdr, seg_starts, segment_vm_addr, slide);
+    rebind_chained_segment(rebindings, hdr, seg_starts,
+                           segment_vm_addr, (size_t)segment->vmsize);
   }
 
   return true;

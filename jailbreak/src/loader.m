@@ -1,10 +1,10 @@
 // loader.m — IOSDecryptHub 越狱注入加载器
 //
-// 由 Substrate/ElleKit/libhooker 加载到 UIKit App（Filter: com.apple.UIKit）。
+// 由 rootless 环境的 ElleKit 加载到 UIKit App（Filter: com.apple.UIKit）。
 // 唯一职责：读取偏好设置 → 判断当前 App 是否启用 → dlopen 主 dylib。
 // 不包含任何 hook 逻辑。hook 全部由主 dylib 的 constructor 完成。
 //
-// 双端路径（rootless / roothide）：
+// rootless 路径：
 //   /var/jb/usr/lib/IOSDecryptHub/decrypt_helper.dylib
 
 #import <Foundation/Foundation.h>

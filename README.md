@@ -82,14 +82,13 @@ idh mcp
 |------|------|------|
 | dev（默认） | `make` | 开发者手动注入 / 本地调试 |
 | trollstore | `make VARIANT=trollstore` | 巨魔注入器 / 管理器 IPA |
-| jailbreak | `make VARIANT=jailbreak` | 越狱 deb 包 |
+| rootless | `make VARIANT=rootless` | 越狱 deb 包 |
 
-### 越狱 deb 包（双端）
+### 越狱 deb 包（rootless）
 
 ```bash
-make deb              # 构建 rootless + roothide 双端
-make deb-rootless     # 仅 rootless (Dopamine 等)
-make deb-roothide     # 仅 roothide
+make deb              # 构建 rootless 包（Dopamine / palera1n 等）
+make deb-rootless     # 与 make deb 等价
 ```
 
 产物在 `build/deb/`，通过 Sileo / Zebra 安装后在「设置 → IOSDecryptHub」中选择要注入的 App。

@@ -87,12 +87,12 @@ else ifeq ($(VARIANT),trollstore)
     DH_VARIANT_NUM := 1
     ARCH    := arm64
     MIN_IOS := 14.0
-else ifeq ($(VARIANT),jailbreak)
+else ifeq ($(VARIANT),rootless)
     DH_VARIANT_NUM := 2
     ARCH    := arm64
     MIN_IOS := 14.0
 else
-    $(error 未知 VARIANT=$(VARIANT); 可选: dev / trollstore / jailbreak)
+    $(error 未知 VARIANT=$(VARIANT); 可选: dev / trollstore / rootless)
 endif
 
 # ---------- 1) iOS 真机 dylib (默认 target) ----------
@@ -259,23 +259,19 @@ ipa:
 	@chmod +x app-trollstore/build_ipa.sh
 	./app-trollstore/build_ipa.sh
 
-# ---------- 8) 越狱 deb 包 (双端: rootless / roothide) ----------
-# 编译 jailbreak 变体 dylib + 加载器 + 设置面板, 打包为 deb。
+# ---------- 8) 越狱 deb 包 (rootless) ----------
+# 编译 rootless 变体 dylib + 加载器 + 设置面板, 打包为 deb。
 deb:
 	@chmod +x jailbreak/build_deb.sh
-	./jailbreak/build_deb.sh all
+	./jailbreak/build_deb.sh
 
 deb-rootless:
 	@chmod +x jailbreak/build_deb.sh
-	./jailbreak/build_deb.sh rootless
-
-deb-roothide:
-	@chmod +x jailbreak/build_deb.sh
-	./jailbreak/build_deb.sh roothide
+	./jailbreak/build_deb.sh
 
 clean:
 	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib
 	rm -rf build/
 
 .PHONY: all linux mac sim test-mac test-mcp test-unit test-audit-mac test-audit-sim \
-	verify-architecture verify-fast dist clean ipa deb deb-rootless deb-roothide
+	verify-architecture verify-fast dist clean ipa deb deb-rootless

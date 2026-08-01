@@ -5,14 +5,14 @@
 </div>
 
 
-> 通过越狱框架（Substrate/ElleKit/libhooker）将主 dylib 注入目标 App。
-> 支持 rootless / roothide 双端越狱。
+> 通过 rootless 环境的 ElleKit 将主 dylib 注入目标 App。
+> 支持 Dopamine、palera1n 等 rootless 越狱。
 
 ## 架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Substrate / ElleKit / libhooker                            │
+│  ElleKit                                                    │
 │  加载 IOSDecryptHubLoader.dylib 到 UIKit App                 │
 └──────────────────────────┬──────────────────────────────────┘
                            │ %ctor / constructor
@@ -35,28 +35,24 @@
 ## 构建
 
 ```bash
-# 构建全部双端 deb
+# 构建 rootless deb
 make deb
 
-# 单独构建
+# 等价别名
 make deb-rootless
-make deb-roothide
 
 # 或直接调用脚本
-./jailbreak/build_deb.sh all
-./jailbreak/build_deb.sh rootless
+./jailbreak/build_deb.sh
 ```
 
 产物在 `build/deb/` 下：
-- `com.iosdecrypthub.jailbreak_<version>_rootless.deb`
-- `com.iosdecrypthub.jailbreak_<version>_roothide.deb`
+- `com.iosdecrypthub_<version>_rootless.deb`
 
 ## 安装路径
 
-| 端 | 加载器路径 | 主 dylib 路径 |
-|----|-----------|--------------|
+| 环境 | 加载器路径 | 主 dylib 路径 |
+|------|-----------|--------------|
 | rootless | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
-| roothide | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
 
 ## 使用
 
@@ -76,9 +72,10 @@ make deb-roothide
 
 ## 依赖
 
-- `mobilesubstrate` (>= 0.9.5000) 或 `ellekit` — dylib 加载机制
-- `preferenceloader` (>= 2.2.6) — 在系统设置中加载 IOSDecryptHub 配置入口
+- `ellekit` — dylib 加载机制
+- `preferenceloader` — 在系统设置中加载 IOSDecryptHub 配置入口
 - 应用选择器由设置面板内置，不依赖 AppList
+- 不显式依赖 `firmware` 伪包；支持范围由 arm64、rootless 和 Mach-O 最低 iOS 14.0 共同约束
 
 ## 设计约束
 

@@ -24,7 +24,7 @@
 |------|----------|------|------|
 | `dev` (`DH_VARIANT=0`) | 开发者手动注入 | 手动注入即明确意图 | 裸 dylib |
 | `trollstore` (`DH_VARIANT=1`) | 管理器 App patch Mach-O | 管理器内 per-app Toggle | 管理器 IPA + dylib |
-| `jailbreak` (`DH_VARIANT=2`) | Substrate / ElleKit / libhooker 加载器 | Settings + 内置应用选择器 | rootless / roothide deb |
+| `rootless` (`DH_VARIANT=2`) | ElleKit 加载器 | Settings + 内置应用选择器 | rootless deb |
 
 ### 2.1 TrollStore 路线
 
@@ -35,9 +35,9 @@
 
 ### 2.2 越狱路线
 
-- 允许 Substrate / ElleKit / libhooker 作为 dylib 加载机制。
-- 允许双端 deb 打包和 plist 偏好门控。
-- 允许加载器依赖 `/var/jb`、`/Library/MobileSubstrate` 等越狱路径。
+- 允许 ElleKit 作为 dylib 加载机制。
+- 允许 rootless deb 打包和 plist 偏好门控。
+- 允许加载器依赖 `/var/jb` 下的 rootless 越狱路径。
 - `jailbreak/` 必须保持为独立薄层，仅做：读偏好 -> 判断目标进程 -> `dlopen` 主 dylib。
 - 不得使用 `MSHookFunction`、`%hook` 或其他越狱框架 hook API。
 - 不得引用 daemon / `dh_server` 的代码或接口。
@@ -123,9 +123,9 @@ dylib 运行在目标 App 进程中，任何异常都会直接终止宿主 App�
 | `jailbreak/` | Jailbreak | 薄加载器、设置面板、deb 打包 |
 | `make` | dev | 默认开发 dylib |
 | `make VARIANT=trollstore` | TrollStore | 管理器内嵌 dylib |
-| `make VARIANT=jailbreak` | Jailbreak | 越狱加载器加载的共享 dylib |
+| `make VARIANT=rootless` | Jailbreak | 越狱加载器加载的共享 dylib |
 | `make ipa` | TrollStore | 管理器 IPA |
-| `make deb*` | Jailbreak | 双端 deb 包 |
+| `make deb` / `make deb-rootless` | Jailbreak | rootless deb 包 |
 | `make mac` / `make sim` | dev | 灰度和模拟器验证 |
 
 ---

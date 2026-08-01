@@ -4,14 +4,14 @@
   <a href="./README.md">中文</a> | <b>English</b>
 </div>
 
-> Injects the main dylib into target apps via jailbreak frameworks (Substrate / ElleKit / libhooker).
-> Supports rootless / roothide jailbreaks.
+> Injects the main dylib into target apps through ElleKit on rootless jailbreaks.
+> Supports rootless jailbreaks such as Dopamine and palera1n.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Substrate / ElleKit / libhooker                            │
+│  ElleKit                                                    │
 │  Loads IOSDecryptHubLoader.dylib into UIKit apps            │
 └──────────────────────────┬──────────────────────────────────┘
                            │ %ctor / constructor
@@ -36,28 +36,24 @@
 ## Build
 
 ```bash
-# Build both debs
+# Build the rootless deb
 make deb
 
-# Build individually
+# Equivalent alias
 make deb-rootless
-make deb-roothide
 
 # Or invoke the script directly
-./jailbreak/build_deb.sh all
-./jailbreak/build_deb.sh rootless
+./jailbreak/build_deb.sh
 ```
 
 Artifacts under `build/deb/`:
-- `com.iosdecrypthub.jailbreak_<version>_rootless.deb`
-- `com.iosdecrypthub.jailbreak_<version>_roothide.deb`
+- `com.iosdecrypthub_<version>_rootless.deb`
 
 ## Install Paths
 
 | Root | Loader path | Main dylib path |
 |------|-------------|-----------------|
 | rootless | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
-| roothide | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
 
 ## Usage
 
@@ -78,9 +74,11 @@ rootless `/var/jb` alias differences. The legacy preference domain remains a com
 
 ## Dependencies
 
-- `mobilesubstrate` (>= 0.9.5000) or `ellekit` — dylib loading mechanism
-- `preferenceloader` (>= 2.2.6) — loads the IOSDecryptHub pane in Settings
+- `ellekit` — dylib loading mechanism
+- `preferenceloader` — loads the IOSDecryptHub pane in Settings
 - The settings panel includes its own app selector and does not depend on AppList
+- The package does not explicitly depend on the `firmware` virtual package; compatibility is
+  constrained by arm64, rootless, and the Mach-O minimum deployment target of iOS 14.0
 
 ## Design Constraints
 

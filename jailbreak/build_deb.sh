@@ -1,29 +1,28 @@
 #!/bin/bash
-# build_deb.sh — 构建 IOSDecryptHub 越狱 deb 包（双端）
+# build_deb.sh — 构建 IOSDecryptHub rootless 越狱 deb 包
 #
 # 用法:
-#   ./jailbreak/build_deb.sh              # 构建全部双端
-#   ./jailbreak/build_deb.sh rootless     # 仅 rootless
-#   ./jailbreak/build_deb.sh roothide     # 仅 roothide
+#   ./jailbreak/build_deb.sh
 #
 # 前提:
 #   - macOS + Xcode (xcrun)
 #   - dpkg-deb (brew install dpkg)
 #   - ldid (brew install ldid)
 #
-# 产物: build/deb/ 下两个 .deb 文件
-#
-# 双端差异:
-#   rootless  — iphoneos-arm64,  prefix=/var/jb,  ElleKit/Substrate
-#   roothide  — iphoneos-arm64e, prefix=/var/jb,  roothide 官方 loader
+# 产物: build/deb/com.iosdecrypthub_<version>_rootless.deb
 
 set -euo pipefail
+
+if [ "$#" -ne 0 ]; then
+    echo "[x] 此脚本仅构建 rootless 包，不接受目标参数" >&2
+    exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build/deb"
 VERSION=$(grep '^VERSION' "$PROJECT_DIR/Makefile" | head -1 | sed 's/.*:= *//')
-PKG_NAME="com.iosdecrypthub.jailbreak"
+PKG_NAME="com.iosdecrypthub"
 
 # 颜色
 RED='\033[0;31m'
@@ -41,8 +40,8 @@ command -v xcrun >/dev/null 2>&1 || error "需要 Xcode (xcrun)"
 command -v ldid >/dev/null 2>&1 || error "需要 ldid (brew install ldid)"
 
 # ---------- 编译主 dylib (jailbreak 变体) ----------
-info "编译主 dylib (VARIANT=jailbreak)..."
-make -C "$PROJECT_DIR" VARIANT=jailbreak clean all
+info "编译主 dylib (VARIANT=rootless)..."
+make -C "$PROJECT_DIR" VARIANT=rootless clean all
 
 # ---------- 编译加载器 ----------
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -63,6 +62,8 @@ compile_loader() {
 
 # ---------- 编译 PreferenceBundle ----------
 PREFS_SRC="$SCRIPT_DIR/prefs/IOSDecryptHubPrefsListController.m"
+# 由官网仓库 public/favicon.svg 转为 Settings 使用的 PNG。
+PREFS_ICON="$SCRIPT_DIR/prefs/icon.png"
 
 compile_prefs() {
     local ARCH="$1"
@@ -77,15 +78,15 @@ compile_prefs() {
         "$PREFS_SRC" -o "$BUNDLE_DIR/IOSDecryptHubPrefs"
     cp "$SCRIPT_DIR/prefs/Info.plist" "$BUNDLE_DIR/"
     cp "$SCRIPT_DIR/prefs/Root.plist" "$BUNDLE_DIR/"
+    cp "$PREFS_ICON" "$BUNDLE_DIR/icon.png"
 }
 
 # ---------- 打包函数 ----------
 build_variant() {
     local VARIANT="$1"
     local PREFIX="$2"
-    local DEPENDS="$3"
-    local ARCHITECTURE="$4"
-    local LOADER_ARCH="$5"
+    local ARCHITECTURE="$3"
+    local LOADER_ARCH="$4"
 
     local STAGE="$BUILD_DIR/stage-$VARIANT"
     local DEB_OUT="$BUILD_DIR/${PKG_NAME}_${VERSION}_${VARIANT}.deb"
@@ -114,7 +115,7 @@ Description: iOS runtime security analysis tool (dylib injection via jailbreak)
 Maintainer: IOSDecryptHub
 Author: IOSDecryptHub
 Section: Tweaks
-Depends: firmware (>= 14.0), ${DEPENDS}
+Depends: ellekit, preferenceloader
 Conflicts: com.iosdecrypthub.trollstore
 CTRL
 
@@ -183,14 +184,17 @@ POSTRM
 
     [ "$ACTUAL_ARCH" = "$ARCHITECTURE" ] || error "$VARIANT 架构错误: 期望 $ARCHITECTURE, 实际 $ACTUAL_ARCH"
 
-    case "$ACTUAL_DEPENDS" in
-        *"preferenceloader (>= 2.2.6)"*) ;;
-        *) error "$VARIANT 缺少 PreferenceLoader 运行时依赖" ;;
-    esac
+    [ "$ACTUAL_DEPENDS" = "ellekit, preferenceloader" ] \
+        || error "$VARIANT 依赖集合错误: $ACTUAL_DEPENDS"
 
     case "$PACKAGE_CONTENTS" in
         *"/PreferenceLoader/Preferences/IOSDecryptHubPrefs.plist"*) ;;
         *) error "$VARIANT 缺少设置入口" ;;
+    esac
+
+    case "$PACKAGE_CONTENTS" in
+        *"/PreferenceBundles/IOSDecryptHubPrefs.bundle/icon.png"*) ;;
+        *) error "$VARIANT 缺少设置图标" ;;
     esac
 
     case "$PACKAGE_CONTENTS" in
@@ -215,40 +219,11 @@ POSTRM
     info "✅ $DEB_OUT ($(du -h "$DEB_OUT" | cut -f1))"
 }
 
-# ---------- 构建目标 ----------
-# 每变体独立定义: dpkg architecture / bootstrap prefix / loader 依赖 / 编译架构
-#
-# 依赖策略说明:
-#   rootless  — ElleKit 是 iOS 15/16 rootless 的主流 hook 框架，提供 mobilesubstrate 虚拟包
-#   roothide  — roothide 官方 bootstrap 自带 loader，包 ID 以 roothide 源为准
-#   共同依赖  — preferenceloader >= 2.2.6（设置面板入口）
-
-TARGETS="${1:-all}"
+# ---------- 构建 rootless 目标 ----------
 mkdir -p "$BUILD_DIR"
 
-case "$TARGETS" in
-    rootless)
-        build_variant "rootless" "/var/jb" \
-            "ellekit (>= 1.0) | mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" \
-            "iphoneos-arm64" "arm64"
-        ;;
-    roothide)
-        build_variant "roothide" "/var/jb" \
-            "ellekit (>= 1.0) | mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" \
-            "iphoneos-arm64e" "arm64e"
-        ;;
-    all)
-        build_variant "rootless" "/var/jb" \
-            "ellekit (>= 1.0) | mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" \
-            "iphoneos-arm64" "arm64"
-        build_variant "roothide" "/var/jb" \
-            "ellekit (>= 1.0) | mobilesubstrate (>= 0.9.5000), preferenceloader (>= 2.2.6)" \
-            "iphoneos-arm64e" "arm64e"
-        ;;
-    *)
-        error "未知目标: $TARGETS (可选: rootless / roothide / all)"
-        ;;
-esac
+build_variant "rootless" "/var/jb" \
+    "iphoneos-arm64" "arm64"
 
 info "全部完成! 产物在: $BUILD_DIR/"
 ls -lh "$BUILD_DIR"/*.deb 2>/dev/null || true
