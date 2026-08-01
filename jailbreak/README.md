@@ -56,7 +56,9 @@ make deb-roothide
 | 环境 | Debian 架构 | Mach-O 架构 | 加载器路径 | 主 dylib 路径 |
 |------|-------------|-------------|------------|---------------|
 | rootless | `iphoneos-arm64` | `arm64` | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
-| roothide | `iphoneos-arm64e` | `arm64 + arm64e` | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
+| roothide | `iphoneos-arm64e` | `arm64 + arm64e` | `<jbroot>/Library/MobileSubstrate/DynamicLibraries/` | `<jbroot>/usr/lib/IOSDecryptHub/` |
+
+roothide 包内路径从 `/Library`、`/usr` 开始，由 roothide 在安装和运行时映射到随机 jbroot；不得打入固定 `/var/jb` 前缀。
 
 ## 使用
 

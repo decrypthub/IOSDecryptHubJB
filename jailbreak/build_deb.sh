@@ -227,6 +227,21 @@ POSTRM
     [ "$ACTUAL_DEPENDS" = "ellekit, preferenceloader" ] \
         || error "$VARIANT 依赖集合错误: $ACTUAL_DEPENDS"
 
+    if [ "$VARIANT" = "roothide" ]; then
+        case "$PACKAGE_CONTENTS" in
+            *"./var/jb/"*) error "roothide 包不得包含固定 /var/jb 前缀" ;;
+        esac
+        case "$PACKAGE_CONTENTS" in
+            *"./Library/PreferenceLoader/Preferences/IOSDecryptHubPrefs.plist"*) ;;
+            *) error "roothide 设置入口未安装到 jbroot 根路径" ;;
+        esac
+    else
+        case "$PACKAGE_CONTENTS" in
+            *"./var/jb/Library/PreferenceLoader/Preferences/IOSDecryptHubPrefs.plist"*) ;;
+            *) error "rootless 设置入口缺少 /var/jb 前缀" ;;
+        esac
+    fi
+
     case "$PACKAGE_CONTENTS" in
         *"/PreferenceLoader/Preferences/IOSDecryptHubPrefs.plist"*) ;;
         *) error "$VARIANT 缺少设置入口" ;;
@@ -267,7 +282,7 @@ case "$TARGET" in
     all)
         build_variant "rootless" "/var/jb" \
             "iphoneos-arm64" "arm64"
-        build_variant "roothide" "/var/jb" \
+        build_variant "roothide" "" \
             "iphoneos-arm64e" "arm64 arm64e"
         ;;
     rootless)
@@ -275,7 +290,7 @@ case "$TARGET" in
             "iphoneos-arm64" "arm64"
         ;;
     roothide)
-        build_variant "roothide" "/var/jb" \
+        build_variant "roothide" "" \
             "iphoneos-arm64e" "arm64 arm64e"
         ;;
 esac

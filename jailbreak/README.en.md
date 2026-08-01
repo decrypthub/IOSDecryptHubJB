@@ -57,7 +57,10 @@ Artifacts under `build/deb/`:
 | Environment | Debian architecture | Mach-O architecture | Loader path | Main dylib path |
 |-------------|---------------------|---------------------|-------------|-----------------|
 | rootless | `iphoneos-arm64` | `arm64` | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
-| roothide | `iphoneos-arm64e` | `arm64 + arm64e` | `/var/jb/Library/MobileSubstrate/DynamicLibraries/` | `/var/jb/usr/lib/IOSDecryptHub/` |
+| roothide | `iphoneos-arm64e` | `arm64 + arm64e` | `<jbroot>/Library/MobileSubstrate/DynamicLibraries/` | `<jbroot>/usr/lib/IOSDecryptHub/` |
+
+The roothide package stores paths from `/Library` and `/usr`; roothide maps them into its randomized
+jbroot during installation and at runtime. A fixed `/var/jb` package prefix is invalid on roothide.
 
 ## Usage
 
