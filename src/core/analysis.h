@@ -55,7 +55,8 @@ int analysis_resolve_symbol(const char *name, uint64_t *out_addr,
 // 地址 -> 最近符号名 + 偏移 (dladdr)。找到返回 0, 填 out_sym / *out_offset / out_image;
 // 该地址无符号信息返回 -1。out_sym 已去前导下划线。
 int analysis_symbolicate(uint64_t addr, char *out_sym, size_t sym_len,
-                         uint64_t *out_offset, char *out_image, size_t image_len);
+                         uint64_t *out_offset, char *out_image, size_t image_len,
+                         uint64_t *out_normalized);
 
 // 安全读内存到 out_buf。返回实际读到的字节数, -2 不可读, -1 参数错误。
 // size 截断到 min(buf_cap, 64KB)。
@@ -83,6 +84,49 @@ typedef struct {
 // 枚举主 App bundle 内已加载的 64 位镜像 (主程序 + 内嵌 Frameworks/.dylib)。
 // 返回镜像数, 或 -1 表示参数错误。
 int analysis_list_macho_images(AnalysisMachoImage *out, int max_count);
+
+// 完整 dyld 镜像地图。与 list_images 的 fishhook/import 索引语义不同，这里不会因
+// imports==0 过滤镜像，供地址归属、插件检测和扫描目标选择使用。
+typedef struct {
+    int      dyld_index;
+    int      is_main;
+    char     scope[16];        // "app" | "system" | "external"
+    char     name[256];
+    char     path[1024];
+    char     uuid[37];
+    uint64_t load_address;
+    int64_t  slide;
+    uint64_t text_start;
+    uint64_t text_end;
+    uint32_t filetype;
+    uint32_t cryptid;
+    uint64_t cryptsize;
+} AnalysisLoadedImage;
+
+int analysis_list_loaded_images(const char *query, int include_system,
+                                int offset, int limit,
+                                AnalysisLoadedImage *out, int max_out,
+                                int *out_total);
+
+// scan_offset/scan_size 相对所选镜像的 __text。单次最多扫描 48MB；超大镜像通过
+// next_scan_offset 继续，避免设备端一次性重负载。
+typedef struct {
+    uint64_t text_start;
+    uint64_t text_end;
+    uint64_t scan_start;
+    uint64_t scan_end;
+    uint64_t scan_offset;
+    uint64_t next_scan_offset;
+    uint64_t bytes_requested;
+    uint64_t bytes_read;
+    uint64_t scanned_insns;
+    uint32_t unreadable_pages;
+    uint32_t partial_pages;
+    uint32_t warmup_bytes;
+    int      has_more;
+    int      result_limit_reached;
+    int      scan_size_capped;
+} AnalysisScanInfo;
 
 // ============================================================
 // 交叉引用 (xref) —— tier-1: 仅「直接 BL 调用」
@@ -112,14 +156,15 @@ typedef struct {
 //   out/max_results:  命中记录缓冲(按 max_results 截断)
 //   out_query_addr:   回填目标运行时地址(dlsym 结果或 target_addr)
 //   out_image:        回填实际扫描的镜像短名
-//   out_scanned:      回填扫描到的指令总数
-//   out_truncated:    因命中数达 max_results 或指令安全上限而截断时置 1
-// 返回命中数; -1 参数错误, -2 找不到镜像/__text, -3 符号无法解析。
+//   out_scan:         回填实际覆盖范围、可读页和下一页 offset
+// 返回命中数; -1 参数错误, -2 找不到镜像/__text, -3 符号无法解析,
+// -4 scan_offset 越界, -5 无法分配有界快照。
 int analysis_find_xrefs(const char *image_query,
                         const char *sym_name, uint64_t target_addr,
+                        uint64_t scan_offset, uint64_t scan_size,
                         AnalysisXref *out, int max_results,
                         uint64_t *out_query_addr, char *out_image, size_t image_len,
-                        uint64_t *out_scanned, int *out_truncated);
+                        AnalysisScanInfo *out_scan);
 
 // ============================================================
 // 字符串引用 (string ref) —— tier-2A
@@ -149,9 +194,10 @@ typedef struct {
 // 返回命中数; -1 参数错误, -2 找不到镜像/__text。out_* 语义同 find_xrefs。
 int analysis_find_string_refs(const char *image_query,
                               const char *query_str, uint64_t query_addr,
+                              uint64_t scan_offset, uint64_t scan_size,
                               AnalysisStringRef *out, int max_results,
                               char *out_image, size_t image_len,
-                              uint64_t *out_scanned, int *out_truncated);
+                              AnalysisScanInfo *out_scan);
 
 // ============================================================
 // selector 引用 (selector ref) —— tier-2B
@@ -184,9 +230,10 @@ typedef struct {
 // 返回命中数; -1 参数错误, -2 找不到镜像/__text。out_* 语义同 find_xrefs。
 int analysis_find_selector_refs(const char *image_query,
                                 const char *selector_q, int match_mode,
+                                uint64_t scan_offset, uint64_t scan_size,
                                 AnalysisSelectorRef *out, int max_results,
                                 char *out_image, size_t image_len,
-                                uint64_t *out_scanned, int *out_truncated);
+                                AnalysisScanInfo *out_scan);
 
 // ============================================================
 // 内部函数调用图 (internal call xref) —— tier-3A
@@ -218,10 +265,11 @@ typedef struct {
 // out_query_start 回填查询函数的入口运行时地址。
 int analysis_find_function_refs(const char *image_query,
                                 uint64_t target_addr, int direction,
+                                uint64_t scan_offset, uint64_t scan_size,
                                 AnalysisFuncRef *out, int max_results,
                                 char *out_image, size_t image_len,
                                 uint64_t *out_query_start,
-                                uint64_t *out_scanned, int *out_truncated);
+                                AnalysisScanInfo *out_scan);
 
 // ============================================================
 // 函数清单 (function inventory) —— tier-3B

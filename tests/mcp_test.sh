@@ -89,13 +89,21 @@ eq "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$U/api/mcp" -d '{"jsonrpc"
 echo ""; echo "== MCP 协议 + 反汇编 (analysis) =="
 mc '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' > "$RESULT_DIR/tools.json"
 eq "$(jq -r '[.result.tools[].name] as $names |
-    ["get_capabilities","disassemble","objc_resolve_imp","find_xrefs","find_string_refs",
+    ["get_capabilities","disassemble","objc_resolve_imp","find_objc_methods","list_loaded_images","find_xrefs","find_string_refs",
      "find_selector_refs","find_function_refs","list_functions","get_stats","query_events",
      "correlate_request","get_event","get_diag","hook_import","hook_method","unhook"] |
     all(. as $name | $names | index($name) != null)' "$RESULT_DIR/tools.json")" \
     "true" "tools/list 包含关键兼容工具集合"
 eq "$(mc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"fd7bbfa9","arch":"arm64"}}}' | jq -r '.result.structuredContent.instructions[0].mnemonic')" "stp" "disassemble fd7bbfa9 → stp"
 eq "$(mc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"c0 03 5f d6","arch":"arm64"}}}' | jq -r '.result.structuredContent.instructions[0].mnemonic')" "ret" "disassemble 带空格 hex → ret (DHDataFromHex 容错)"
+
+echo ""; echo "== 完整 dyld 镜像地图 =="
+mc '{"jsonrpc":"2.0","id":38,"method":"tools/call","params":{"name":"list_loaded_images","arguments":{"query":"decrypt_helper.mac","include_system":false}}}' > "$RESULT_DIR/dh_images.json"
+ge "$(jq '.result.structuredContent.total' "$RESULT_DIR/dh_images.json")" 1 "完整镜像地图可找到注入 dylib"
+eq "$(jq -r '.result.structuredContent.images[0].scope!="system"' "$RESULT_DIR/dh_images.json")" "true" "注入 dylib 不误标为 system"
+eq "$(jq -r '.result.structuredContent.images[0].load_address|test("^0x")' "$RESULT_DIR/dh_images.json")" "true" "镜像带 load_address"
+eq "$(jq -r '.result.structuredContent.images[0].text_size>0' "$RESULT_DIR/dh_images.json")" "true" "镜像带可执行范围"
+eq "$(mc '{"jsonrpc":"2.0","id":39,"method":"tools/call","params":{"name":"list_loaded_images","arguments":{"offset":-1}}}' | jq -r '.result.isError')" "true" "镜像分页拒绝负 offset"
 
 echo ""; echo "== 取证查询 =="
 mc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_stats","arguments":{}}}' > "$RESULT_DIR/dh_stats.json"
@@ -130,6 +138,9 @@ mc '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"find_xrefs"
 ge "$(jq '.result.structuredContent.count' "$RESULT_DIR/dh_xref.json")" 1 "find_xrefs printf ≥1 调用点"
 eq "$(jq -r '.result.structuredContent.results[0].kind' "$RESULT_DIR/dh_xref.json")" "call_import_stub" "printf 归类 call_import_stub"
 eq "$(jq -r '.result.structuredContent.results[0].resolved_name' "$RESULT_DIR/dh_xref.json")" "printf" "stub 还原出 printf"
+eq "$(jq -r '.result.structuredContent.scan.scan_offset' "$RESULT_DIR/dh_xref.json")" "0" "xref 返回扫描 offset"
+eq "$(jq -r '.result.structuredContent.scan.bytes_read>0' "$RESULT_DIR/dh_xref.json")" "true" "xref 返回实际读取字节数"
+eq "$(jq -r '.result.structuredContent.scan.unreadable_pages' "$RESULT_DIR/dh_xref.json")" "0" "测试镜像无不可读页"
 # tier-1.5 归属: 有符号 → main+off, 并带 from_func_start / vmaddr
 eq "$(jq -r '.result.structuredContent.results[0].from_func|test("^main\\+0x")' "$RESULT_DIR/dh_xref.json")" "true" "printf 调用点归属到 main+off"
 eq "$(jq -r '.result.structuredContent.results[0].from_func_start|test("^0x")' "$RESULT_DIR/dh_xref.json")" "true" "带 from_func_start"
@@ -140,12 +151,22 @@ ge "$(jq '.result.structuredContent.count' "$RESULT_DIR/dh_xref2.json")" 1 "find
 eq "$(jq -r 'any(.result.structuredContent.results[]; .kind=="call_objc_stub")' "$RESULT_DIR/dh_xref2.json")" "true" "含 call_objc_stub"
 # 缺参防御
 eq "$(mc '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"find_xrefs","arguments":{}}}' | jq -r '.result.isError')" "true" "无 symbol/address → isError"
+# 显式小窗口验证分页诊断；命中数不作为断言，避免依赖 printf 在 __text 的具体位置。
+mc '{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"find_xrefs","arguments":{"symbol":"printf","scan_size":64}}}' > "$RESULT_DIR/dh_xref_page.json"
+eq "$(jq -r '.result.structuredContent.scan.scan_size' "$RESULT_DIR/dh_xref_page.json")" "64" "scan_size 控制单页字节数"
+eq "$(jq -r '.result.structuredContent.scan.has_more' "$RESULT_DIR/dh_xref_page.json")" "true" "小窗口提示 has_more"
+eq "$(jq -r '.result.structuredContent.scan.next_scan_offset' "$RESULT_DIR/dh_xref_page.json")" "64" "返回下一页 scan_offset"
+eq "$(jq -r '.result.structuredContent.truncated' "$RESULT_DIR/dh_xref_page.json")" "true" "未覆盖完整 __text 时 truncated=true"
+eq "$(mc '{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"find_xrefs","arguments":{"symbol":"printf","scan_offset":999999999}}}' | jq -r '.result.isError')" "true" "越界 scan_offset → isError"
 
-echo ""; echo "== objc_resolve_imp (selector -> 运行时真实 IMP) =="
+echo ""; echo "== objc_resolve_imp (selector -> 当前运行时 IMP) =="
 # 类名路径: 实例方法 -> IMP + dladdr 符号
 mc '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"objc_resolve_imp","arguments":{"class":"NSObject","selector":"description"}}}' > "$RESULT_DIR/dh_imp.json"
 eq "$(jq -r '.result.structuredContent.found' "$RESULT_DIR/dh_imp.json")" "true" "resolve NSObject -description found"
 eq "$(jq -r '.result.structuredContent.imp|test("^0x")' "$RESULT_DIR/dh_imp.json")" "true" "返回 imp 地址"
+eq "$(jq -r '.result.structuredContent.current_imp==.result.structuredContent.imp' "$RESULT_DIR/dh_imp.json")" "true" "兼容 imp 与 current_imp 一致"
+eq "$(jq -r '.result.structuredContent.imp_semantics' "$RESULT_DIR/dh_imp.json")" "current_runtime_implementation" "IMP 语义明确为当前实现"
+eq "$(jq -r '.result.structuredContent.original_imp_known' "$RESULT_DIR/dh_imp.json")" "false" "不宣称恢复第三方 swizzle 前 IMP"
 eq "$(jq -r '.result.structuredContent.symbol|test("description")' "$RESULT_DIR/dh_imp.json")" "true" "dladdr 符号含 description"
 # 交叉验证: imp 喂 symbolicate 应还原同名符号
 RIMP=$(jq -r '.result.structuredContent.imp' "$RESULT_DIR/dh_imp.json")
@@ -162,6 +183,17 @@ eq "$(mc '{"jsonrpc":"2.0","id":35,"method":"tools/call","params":{"name":"objc_
 # 缺参防御
 eq "$(mc '{"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"objc_resolve_imp","arguments":{"class":"NSObject"}}}' | jq -r '.result.isError')" "true" "无 selector → isError"
 eq "$(mc '{"jsonrpc":"2.0","id":37,"method":"tools/call","params":{"name":"objc_resolve_imp","arguments":{"selector":"length"}}}' | jq -r '.result.isError')" "true" "无 class/object → isError"
+
+echo ""; echo "== find_objc_methods (运行时 ObjC 实体查询) =="
+mc '{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"find_objc_methods","arguments":{"class":"NSObject","selector":"description","match":"exact","method_type":"instance"}}}' > "$RESULT_DIR/dh_methods.json"
+ge "$(jq '.result.structuredContent.total' "$RESULT_DIR/dh_methods.json")" 1 "NSObject 声明 description"
+eq "$(jq -r '.result.structuredContent.methods[0].selector' "$RESULT_DIR/dh_methods.json")" "description" "方法实体返回 selector"
+eq "$(jq -r '.result.structuredContent.methods[0].current_imp|test("^0x")' "$RESULT_DIR/dh_methods.json")" "true" "方法实体返回 current_imp"
+eq "$(jq -r '.result.structuredContent.methods[0].declared' "$RESULT_DIR/dh_methods.json")" "true" "明确只列自身声明方法"
+eq "$(jq -r '.result.structuredContent.methods[0]|has("class_image") and has("imp_image")' "$RESULT_DIR/dh_methods.json")" "true" "同时返回 class/IMP 镜像"
+eq "$(mc '{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"find_objc_methods","arguments":{"class":"NSObject","offset":1,"limit":1}}}' | jq '.result.structuredContent.shown')" "1" "ObjC 方法查询支持分页"
+eq "$(mc '{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"find_objc_methods","arguments":{}}}' | jq -r '.result.isError')" "true" "ObjC 方法查询拒绝无过滤全扫"
+eq "$(mc '{"jsonrpc":"2.0","id":45,"method":"tools/call","params":{"name":"find_objc_methods","arguments":{"class":"MCPServer","selector":"handleMessage:","match":"exact","method_type":"class"}}}' | jq -r '.result.structuredContent.methods[0].imp_image|test("decrypt_helper\\.mac\\.dylib")')" "true" "隐藏策略下仍恢复 DecryptHub IMP 真实镜像名"
 
 echo ""; echo "== find_xrefs tier-1.5: strip 目标归属到 sub_xxx =="
 # strip 掉本地符号后 dladdr 失效, 应经 LC_FUNCTION_STARTS 归属到 sub_<runtime>+off。

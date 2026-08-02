@@ -168,6 +168,52 @@ static NSDictionary *tool_list_images(NSDictionary *args) {
     return tool_ok(@{@"count": @(arr.count), @"images": arr});
 }
 
+// list_loaded_images —— 完整 dyld 镜像地图，不按 imports 过滤。
+static NSDictionary *tool_list_loaded_images(NSDictionary *args) {
+    NSString *query = [args[@"query"] isKindOfClass:NSString.class] ? args[@"query"] : nil;
+    BOOL includeSystem = ![args[@"include_system"] isKindOfClass:NSNumber.class] ||
+                         [args[@"include_system"] boolValue];
+    int offset = [args[@"offset"] isKindOfClass:NSNumber.class] ? [args[@"offset"] intValue] : 0;
+    int limit = [args[@"limit"] isKindOfClass:NSNumber.class] ? [args[@"limit"] intValue] : 200;
+    if (offset < 0) return tool_err(@"offset must be >= 0");
+    if (limit <= 0 || limit > 500) limit = 200;
+
+    AnalysisLoadedImage *rows = calloc((size_t)limit, sizeof(AnalysisLoadedImage));
+    if (!rows) return tool_err(@"out of memory");
+    int total = 0;
+    int n = analysis_list_loaded_images(query.length ? query.UTF8String : NULL,
+                                        includeSystem ? 1 : 0, offset, limit,
+                                        rows, limit, &total);
+    if (n < 0) { free(rows); return tool_err(@"failed to enumerate loaded images"); }
+
+    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
+    for (int i = 0; i < n; i++) {
+        AnalysisLoadedImage *r = &rows[i];
+        [arr addObject:@{
+            @"dyld_index": @(r->dyld_index),
+            @"name": @(r->name),
+            @"path": @(r->path),
+            @"scope": @(r->scope),
+            @"main": r->is_main ? @YES : @NO,
+            @"uuid": r->uuid[0] ? (id)@(r->uuid) : (id)[NSNull null],
+            @"load_address": [NSString stringWithFormat:@"0x%llx", r->load_address],
+            @"slide": [NSString stringWithFormat:@"%lld", r->slide],
+            @"text_start": r->text_start ? (id)[NSString stringWithFormat:@"0x%llx", r->text_start] : (id)[NSNull null],
+            @"text_end": r->text_end ? (id)[NSString stringWithFormat:@"0x%llx", r->text_end] : (id)[NSNull null],
+            @"text_size": @(r->text_end > r->text_start ? r->text_end - r->text_start : 0),
+            @"filetype": @(r->filetype),
+            @"encrypted": r->cryptid ? @YES : @NO,
+            @"cryptid": @(r->cryptid),
+            @"cryptsize": @(r->cryptsize),
+        }];
+    }
+    free(rows);
+    return tool_ok(@{
+        @"total": @(total), @"offset": @(offset), @"shown": @(n),
+        @"include_system": includeSystem ? @YES : @NO, @"images": arr,
+    });
+}
+
 // list_imports —— 真正遍历某镜像的导入符号
 static NSDictionary *tool_list_imports(NSDictionary *args) {
     NSNumber *idxNum = args[@"image_index"];
@@ -240,11 +286,13 @@ static NSDictionary *tool_symbolicate(NSDictionary *args) {
     NSString *addrStr = args[@"address"];
     if (![addrStr isKindOfClass:NSString.class]) return tool_err(@"missing 'address'");
     uint64_t addr = strtoull(addrStr.UTF8String, NULL, 0);
-    char sym[512] = {0}, img[256] = {0}; uint64_t off = 0;
-    if (analysis_symbolicate(addr, sym, sizeof(sym), &off, img, sizeof(img)) != 0)
+    char sym[512] = {0}, img[256] = {0}; uint64_t off = 0, normalized = 0;
+    if (analysis_symbolicate(addr, sym, sizeof(sym), &off, img, sizeof(img), &normalized) != 0)
         return tool_ok(@{@"address": [NSString stringWithFormat:@"0x%llx", addr], @"found": @NO});
     return tool_ok(@{
         @"address": [NSString stringWithFormat:@"0x%llx", addr],
+        @"normalized_address": [NSString stringWithFormat:@"0x%llx", normalized],
+        @"pointer_normalized": (normalized != addr) ? @YES : @NO,
         @"found": @YES,
         @"symbol": @(sym),
         @"offset": @(off),
@@ -272,9 +320,9 @@ static Class dh_class_from_isa(uint64_t isa) {
     return found;
 }
 
-// objc_resolve_imp —— selector(+class 名 或 object 地址) -> 运行时真实 IMP。
+// objc_resolve_imp —— selector(+class 名 或 object 地址) -> 当前运行时 IMP。
 // 破 ObjC 动态派发死结: setRawT: 静态反汇编只到 objc_msgSend 的 `br x16` 就断,
-// 注入进程可直接问 runtime 拿真实 IMP,再喂 disassemble_function 反汇编真正执行的代码。
+// 注入进程可直接问 runtime 拿当前 IMP,再喂 disassemble_function 反汇编当前执行入口。
 static NSDictionary *tool_objc_resolve_imp(NSDictionary *args) {
     NSString *sel = [args[@"selector"] isKindOfClass:NSString.class] ? args[@"selector"] : nil;
     if (sel.length == 0) return tool_err(@"missing 'selector'");
@@ -325,6 +373,8 @@ static NSDictionary *tool_objc_resolve_imp(NSDictionary *args) {
     });
 
     IMP imp = method_getImplementation(m);
+    uint64_t rawImp = (uint64_t)(uintptr_t)imp;
+    uint64_t normalizedImp = rawImp;
     const char *typeEnc = method_getTypeEncoding(m);
 
     // 3) 声明类(方法可能继承自父类)
@@ -334,12 +384,15 @@ static NSDictionary *tool_objc_resolve_imp(NSDictionary *args) {
         declaring = sup; sup = class_getSuperclass(declaring);
     }
 
-    // 4) dladdr 符号 + image
+    // 4) 当前 IMP 的符号与归属。先做 PAC 归一化，避免带签名指针被 dladdr 误判。
+    char symbuf[512] = {0}, imgbuf[256] = {0}; uint64_t off = 0;
+    analysis_symbolicate(rawImp, symbuf, sizeof(symbuf), &off,
+                         imgbuf, sizeof(imgbuf), &normalizedImp);
     Dl_info info; memset(&info, 0, sizeof(info));
-    NSString *symbol = nil, *image = nil; uint64_t off = 0;
-    if (dladdr((const void *)imp, &info) && info.dli_fname) {
-        image = @(info.dli_fname);
-        if (info.dli_sname) { symbol = @(info.dli_sname); off = (uint64_t)imp - (uint64_t)info.dli_saddr; }
+    NSString *symbol = nil, *image = nil;
+    if (dladdr((const void *)(uintptr_t)normalizedImp, &info) && info.dli_fname) {
+        image = imgbuf[0] ? @(imgbuf) : @(info.dli_fname);
+        if (symbuf[0]) symbol = @(symbuf);
     }
 
     NSMutableDictionary *out = [@{
@@ -348,16 +401,146 @@ static NSDictionary *tool_objc_resolve_imp(NSDictionary *args) {
         @"class_source": classSource,
         @"method_type": resolvedType,
         @"resolving_class": @(class_getName(declaring)),
-        @"imp": [NSString stringWithFormat:@"0x%llx", (uint64_t)imp],
+        @"imp": [NSString stringWithFormat:@"0x%llx", normalizedImp],
+        @"current_imp": [NSString stringWithFormat:@"0x%llx", normalizedImp],
+        @"raw_imp": [NSString stringWithFormat:@"0x%llx", rawImp],
+        @"pointer_normalized": (normalizedImp != rawImp) ? @YES : @NO,
+        @"imp_semantics": @"current_runtime_implementation",
+        @"original_imp_known": @NO,
         @"type_encoding": typeEnc ? @(typeEnc) : @"",
         @"found": @YES,
     } mutableCopy];
-    if (image)  out[@"image"] = image;
+    if (image)  { out[@"image"] = image; out[@"owner_image"] = image; }
     if (symbol) {
         out[@"symbol"] = symbol;
         out[@"symbol_display"] = [NSString stringWithFormat:@"%@+0x%llx", symbol, off];
     }
+    out[@"note"] = @"current_imp may already be swizzled by another plugin; this tool does not claim to recover the pre-swizzle implementation";
     return tool_ok(out);
+}
+
+static BOOL objc_name_matches(NSString *value, NSString *query, NSString *mode) {
+    if (!query.length) return YES;
+    if ([mode isEqualToString:@"exact"]) return [value isEqualToString:query];
+    if ([mode isEqualToString:@"prefix"]) return [value hasPrefix:query];
+    return [value rangeOfString:query].location != NSNotFound;
+}
+
+// find_objc_methods —— 基于 ObjC runtime 的实体查询，只列类自身声明的方法。
+static NSDictionary *tool_find_objc_methods(NSDictionary *args) {
+    NSString *exactClass = [args[@"class"] isKindOfClass:NSString.class] ? args[@"class"] : nil;
+    NSString *classQuery = [args[@"class_query"] isKindOfClass:NSString.class] ? args[@"class_query"] : nil;
+    NSString *selector = [args[@"selector"] isKindOfClass:NSString.class] ? args[@"selector"] : nil;
+    NSString *imageQuery = [args[@"image"] isKindOfClass:NSString.class] ? args[@"image"] : nil;
+    NSString *impImageQuery = [args[@"imp_image"] isKindOfClass:NSString.class] ? args[@"imp_image"] : nil;
+    NSString *match = [args[@"match"] isKindOfClass:NSString.class] ? args[@"match"] : @"contains";
+    NSString *methodType = [args[@"method_type"] isKindOfClass:NSString.class] ? args[@"method_type"] : @"both";
+    if (!exactClass.length && !classQuery.length && !selector.length &&
+        !imageQuery.length && !impImageQuery.length)
+        return tool_err(@"provide at least one filter: class, class_query, selector, image, or imp_image");
+    if (![@[@"exact", @"contains", @"prefix"] containsObject:match])
+        return tool_err(@"match must be exact, contains, or prefix");
+    if (![@[@"instance", @"class", @"both"] containsObject:methodType])
+        return tool_err(@"method_type must be instance, class, or both");
+
+    int offset = [args[@"offset"] isKindOfClass:NSNumber.class] ? [args[@"offset"] intValue] : 0;
+    int limit = [args[@"limit"] isKindOfClass:NSNumber.class] ? [args[@"limit"] intValue] : 200;
+    if (offset < 0) return tool_err(@"offset must be >= 0");
+    if (limit <= 0 || limit > 500) limit = 200;
+
+    Class singleClass = Nil;
+    Class *classes = NULL;
+    unsigned int classCount = 0;
+    BOOL ownsClasses = NO;
+    if (exactClass.length) {
+        singleClass = objc_getClass(exactClass.UTF8String);
+        if (!singleClass) return tool_ok(@{
+            @"total": @0, @"shown": @0, @"offset": @(offset), @"methods": @[],
+        });
+        classes = &singleClass; classCount = 1;
+    } else {
+        classes = objc_copyClassList(&classCount);
+        ownsClasses = YES;
+        if (!classes) return tool_err(@"unable to copy Objective-C class list");
+    }
+
+    NSString *classNeedle = classQuery.lowercaseString;
+    NSString *imageNeedle = imageQuery.lowercaseString;
+    NSString *impNeedle = impImageQuery.lowercaseString;
+    NSMutableArray *rows = [NSMutableArray arrayWithCapacity:(NSUInteger)limit];
+    NSInteger total = 0;
+    NSUInteger scannedClasses = 0;
+
+    for (unsigned int ci = 0; ci < classCount; ci++) {
+        Class cls = classes[ci];
+        const char *cn = class_getName(cls);
+        if (!cls || !cn) continue;
+        NSString *className = @(cn);
+        if (classNeedle.length &&
+            [className.lowercaseString rangeOfString:classNeedle].location == NSNotFound) continue;
+        const char *cip = class_getImageName(cls);
+        NSString *classImage = cip ? @(cip) : @"";
+        if (imageNeedle.length &&
+            [classImage.lowercaseString rangeOfString:imageNeedle].location == NSNotFound) continue;
+        scannedClasses++;
+
+        for (int kind = 0; kind < 2; kind++) {
+            BOOL classMethod = (kind == 1);
+            if (classMethod && [methodType isEqualToString:@"instance"]) continue;
+            if (!classMethod && [methodType isEqualToString:@"class"]) continue;
+            Class holder = classMethod ? object_getClass((id)cls) : cls;
+            unsigned int methodCount = 0;
+            Method *methods = class_copyMethodList(holder, &methodCount);
+            if (!methods) continue;
+            for (unsigned int mi = 0; mi < methodCount; mi++) {
+                Method method = methods[mi];
+                SEL sel = method_getName(method);
+                NSString *selName = sel ? NSStringFromSelector(sel) : @"";
+                if (!objc_name_matches(selName, selector, match)) continue;
+
+                IMP imp = method_getImplementation(method);
+                uint64_t rawImp = (uint64_t)(uintptr_t)imp, normalizedImp = rawImp, symoff = 0;
+                char sym[512] = {0}, impImage[256] = {0};
+                analysis_symbolicate(rawImp, sym, sizeof(sym), &symoff,
+                                     impImage, sizeof(impImage), &normalizedImp);
+                NSString *impImageName = impImage[0] ? @(impImage) : @"";
+                if (impNeedle.length &&
+                    [impImageName.lowercaseString rangeOfString:impNeedle].location == NSNotFound) continue;
+
+                NSInteger idx = total++;
+                if (idx < offset || rows.count >= (NSUInteger)limit) continue;
+                const char *enc = method_getTypeEncoding(method);
+                NSString *classBase = classImage.lastPathComponent ?: @"";
+                BOOL outside = classBase.length && impImageName.length &&
+                               ![classBase isEqualToString:impImageName];
+                NSMutableDictionary *row = [@{
+                    @"class": className,
+                    @"selector": selName,
+                    @"method_type": classMethod ? @"class" : @"instance",
+                    @"type_encoding": enc ? @(enc) : @"",
+                    @"current_imp": [NSString stringWithFormat:@"0x%llx", normalizedImp],
+                    @"raw_imp": [NSString stringWithFormat:@"0x%llx", rawImp],
+                    @"pointer_normalized": normalizedImp != rawImp ? @YES : @NO,
+                    @"class_image": classImage.length ? (id)classImage : (id)[NSNull null],
+                    @"imp_image": impImageName.length ? (id)impImageName : (id)[NSNull null],
+                    @"imp_outside_class_image": outside ? @YES : @NO,
+                    @"declared": @YES,
+                } mutableCopy];
+                if (sym[0]) {
+                    row[@"symbol"] = @(sym);
+                    row[@"symbol_display"] = [NSString stringWithFormat:@"%s+0x%llx", sym, symoff];
+                }
+                [rows addObject:row];
+            }
+            free(methods);
+        }
+    }
+    if (ownsClasses) free(classes);
+    return tool_ok(@{
+        @"total": @(total), @"offset": @(offset), @"shown": @(rows.count),
+        @"scanned_classes": @(scannedClasses), @"methods": rows,
+        @"note": @"runtime-declared methods only; imp_outside_class_image is an observation, not proof of swizzling",
+    });
 }
 
 // 经典 hexdump 格式 (地址 / 16 字节 hex / ASCII)
@@ -455,6 +638,52 @@ static NSDictionary *tool_get_macho_info(NSDictionary *args) {
     return tool_ok(@{@"count": @(n), @"encrypted_count": @(encrypted), @"images": arr});
 }
 
+static NSString *parse_scan_window(NSDictionary *args, uint64_t *offset, uint64_t *size) {
+    NSNumber *off = [args[@"scan_offset"] isKindOfClass:NSNumber.class] ? args[@"scan_offset"] : nil;
+    NSNumber *sz = [args[@"scan_size"] isKindOfClass:NSNumber.class] ? args[@"scan_size"] : nil;
+    if ((off && off.longLongValue < 0) || (sz && sz.longLongValue < 0))
+        return @"scan_offset and scan_size must be >= 0";
+    *offset = off ? off.unsignedLongLongValue : 0;
+    *size = sz ? sz.unsignedLongLongValue : 0;
+    return nil;
+}
+
+static NSDictionary *scan_info_dict(const AnalysisScanInfo *s) {
+    NSMutableArray *reasons = [NSMutableArray array];
+    if (s->has_more) [reasons addObject:@"scan_range_incomplete"];
+    if (s->result_limit_reached) [reasons addObject:@"max_results"];
+    if (s->scan_size_capped) [reasons addObject:@"scan_size_capped"];
+    if (s->unreadable_pages) [reasons addObject:@"unreadable_pages"];
+    if (s->partial_pages) [reasons addObject:@"partial_pages"];
+    BOOL complete = !s->has_more && !s->result_limit_reached &&
+                    s->unreadable_pages == 0 && s->partial_pages == 0;
+    return @{
+        @"text_start": [NSString stringWithFormat:@"0x%llx", s->text_start],
+        @"text_end": [NSString stringWithFormat:@"0x%llx", s->text_end],
+        @"text_size": @(s->text_end > s->text_start ? s->text_end - s->text_start : 0),
+        @"scan_start": [NSString stringWithFormat:@"0x%llx", s->scan_start],
+        @"scan_end": [NSString stringWithFormat:@"0x%llx", s->scan_end],
+        @"scan_offset": @(s->scan_offset),
+        @"scan_size": @(s->scan_end > s->scan_start ? s->scan_end - s->scan_start : 0),
+        @"next_scan_offset": s->has_more ? (id)@(s->next_scan_offset) : (id)[NSNull null],
+        @"bytes_requested": @(s->bytes_requested),
+        @"bytes_read": @(s->bytes_read),
+        @"scanned_insns": @(s->scanned_insns),
+        @"unreadable_pages": @(s->unreadable_pages),
+        @"partial_pages": @(s->partial_pages),
+        @"warmup_bytes": @(s->warmup_bytes),
+        @"has_more": s->has_more ? @YES : @NO,
+        @"result_limit_reached": s->result_limit_reached ? @YES : @NO,
+        @"scan_size_capped": s->scan_size_capped ? @YES : @NO,
+        @"coverage_complete": complete ? @YES : @NO,
+        @"incomplete_reasons": reasons,
+    };
+}
+
+static BOOL scan_is_truncated(const AnalysisScanInfo *s) {
+    return s->has_more || s->result_limit_reached || s->unreadable_pages || s->partial_pages;
+}
+
 // find_xrefs —— tier-1: 扫某镜像 __text 里所有直接 BL 到目标符号/地址的调用点
 static NSDictionary *tool_find_xrefs(NSDictionary *args) {
     NSString *sym     = [args[@"symbol"] isKindOfClass:NSString.class] ? args[@"symbol"] : nil;
@@ -462,6 +691,9 @@ static NSDictionary *tool_find_xrefs(NSDictionary *args) {
     NSString *image   = [args[@"image"] isKindOfClass:NSString.class] ? args[@"image"] : nil;
     if (sym.length == 0 && addrStr.length == 0)
         return tool_err(@"need 'symbol' or 'address' to locate the xref target");
+    uint64_t scanOffset = 0, scanSize = 0;
+    NSString *scanErr = parse_scan_window(args, &scanOffset, &scanSize);
+    if (scanErr) return tool_err(scanErr);
 
     uint64_t targetAddr = addrStr.length ? strtoull(addrStr.UTF8String, NULL, 0) : 0;
     int maxR = [args[@"max_results"] isKindOfClass:NSNumber.class] ? [args[@"max_results"] intValue] : 256;
@@ -470,13 +702,16 @@ static NSDictionary *tool_find_xrefs(NSDictionary *args) {
     AnalysisXref *rows = calloc((size_t)maxR, sizeof(AnalysisXref));
     if (!rows) return tool_err(@"out of memory");
 
-    uint64_t qaddr = 0, scanned = 0; char imgNm[256] = {0}; int truncated = 0;
+    uint64_t qaddr = 0; char imgNm[256] = {0}; AnalysisScanInfo scan;
     int n = analysis_find_xrefs(image.length ? image.UTF8String : NULL,
                                 sym.length ? sym.UTF8String : NULL, targetAddr,
-                                rows, maxR, &qaddr, imgNm, sizeof(imgNm), &scanned, &truncated);
+                                scanOffset, scanSize, rows, maxR,
+                                &qaddr, imgNm, sizeof(imgNm), &scan);
     if (n == -1) { free(rows); return tool_err(@"invalid arguments"); }
     if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
     if (n == -3) { free(rows); return tool_err([NSString stringWithFormat:@"symbol not resolvable via dlsym: %@ (try passing 'address' instead)", sym]); }
+    if (n == -4) { free(rows); return tool_err(@"scan_offset is outside the selected image's __text"); }
+    if (n == -5) { free(rows); return tool_err(@"unable to allocate bounded __text snapshot"); }
 
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
     for (int i = 0; i < n; i++) {
@@ -508,9 +743,10 @@ static NSDictionary *tool_find_xrefs(NSDictionary *args) {
     NSMutableDictionary *out = [@{
         @"query":         sym ?: addrStr,
         @"image":         @(imgNm),
-        @"scanned_insns": @(scanned),
+        @"scanned_insns": @(scan.scanned_insns),
         @"count":         @(n),
-        @"truncated":     truncated ? @YES : @NO,
+        @"truncated":     scan_is_truncated(&scan) ? @YES : @NO,
+        @"scan":          scan_info_dict(&scan),
         @"results":       arr,
     } mutableCopy];
     if (qaddr) out[@"query_address"] = [NSString stringWithFormat:@"0x%llx", qaddr];
@@ -524,6 +760,9 @@ static NSDictionary *tool_find_string_refs(NSDictionary *args) {
     NSString *image   = [args[@"image"] isKindOfClass:NSString.class] ? args[@"image"] : nil;
     if (str.length == 0 && addrStr.length == 0)
         return tool_err(@"need 'string' (substring) or 'address' (exact string address)");
+    uint64_t scanOffset = 0, scanSize = 0;
+    NSString *scanErr = parse_scan_window(args, &scanOffset, &scanSize);
+    if (scanErr) return tool_err(scanErr);
 
     uint64_t queryAddr = addrStr.length ? strtoull(addrStr.UTF8String, NULL, 0) : 0;
     int maxR = [args[@"max_results"] isKindOfClass:NSNumber.class] ? [args[@"max_results"] intValue] : 256;
@@ -532,12 +771,15 @@ static NSDictionary *tool_find_string_refs(NSDictionary *args) {
     AnalysisStringRef *rows = calloc((size_t)maxR, sizeof(AnalysisStringRef));
     if (!rows) return tool_err(@"out of memory");
 
-    uint64_t scanned = 0; char imgNm[256] = {0}; int truncated = 0;
+    char imgNm[256] = {0}; AnalysisScanInfo scan;
     int n = analysis_find_string_refs(image.length ? image.UTF8String : NULL,
                                       str.length ? str.UTF8String : NULL, queryAddr,
-                                      rows, maxR, imgNm, sizeof(imgNm), &scanned, &truncated);
+                                      scanOffset, scanSize, rows, maxR,
+                                      imgNm, sizeof(imgNm), &scan);
     if (n == -1) { free(rows); return tool_err(@"invalid arguments"); }
     if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
+    if (n == -4) { free(rows); return tool_err(@"scan_offset is outside the selected image's __text"); }
+    if (n == -5) { free(rows); return tool_err(@"unable to allocate bounded __text snapshot"); }
 
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
     for (int i = 0; i < n; i++) {
@@ -569,9 +811,10 @@ static NSDictionary *tool_find_string_refs(NSDictionary *args) {
     NSMutableDictionary *out = [@{
         @"query":         str ?: addrStr,
         @"image":         @(imgNm),
-        @"scanned_insns": @(scanned),
+        @"scanned_insns": @(scan.scanned_insns),
         @"count":         @(n),
-        @"truncated":     truncated ? @YES : @NO,
+        @"truncated":     scan_is_truncated(&scan) ? @YES : @NO,
+        @"scan":          scan_info_dict(&scan),
         @"results":       arr,
     } mutableCopy];
     return tool_ok(out);
@@ -583,6 +826,9 @@ static NSDictionary *tool_find_selector_refs(NSDictionary *args) {
     NSString *image = [args[@"image"] isKindOfClass:NSString.class] ? args[@"image"] : nil;
     NSString *m     = [args[@"match"] isKindOfClass:NSString.class] ? args[@"match"] : @"exact";
     if (sel.length == 0) return tool_err(@"need 'selector'");
+    uint64_t scanOffset = 0, scanSize = 0;
+    NSString *scanErr = parse_scan_window(args, &scanOffset, &scanSize);
+    if (scanErr) return tool_err(scanErr);
     int match_mode = [m isEqualToString:@"contains"] ? 1 : ([m isEqualToString:@"prefix"] ? 2 : 0);
     int maxR = [args[@"max_results"] isKindOfClass:NSNumber.class] ? [args[@"max_results"] intValue] : 256;
     if (maxR <= 0 || maxR > 2000) maxR = 256;
@@ -590,12 +836,15 @@ static NSDictionary *tool_find_selector_refs(NSDictionary *args) {
     AnalysisSelectorRef *rows = calloc((size_t)maxR, sizeof(AnalysisSelectorRef));
     if (!rows) return tool_err(@"out of memory");
 
-    uint64_t scanned = 0; char imgNm[256] = {0}; int truncated = 0;
+    char imgNm[256] = {0}; AnalysisScanInfo scan;
     int n = analysis_find_selector_refs(image.length ? image.UTF8String : NULL,
                                         sel.UTF8String, match_mode,
-                                        rows, maxR, imgNm, sizeof(imgNm), &scanned, &truncated);
+                                        scanOffset, scanSize, rows, maxR,
+                                        imgNm, sizeof(imgNm), &scan);
     if (n == -1) { free(rows); return tool_err(@"invalid arguments"); }
     if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
+    if (n == -4) { free(rows); return tool_err(@"scan_offset is outside the selected image's __text"); }
+    if (n == -5) { free(rows); return tool_err(@"unable to allocate bounded __text snapshot"); }
 
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
     for (int i = 0; i < n; i++) {
@@ -629,9 +878,10 @@ static NSDictionary *tool_find_selector_refs(NSDictionary *args) {
         @"query":         sel,
         @"match":         m,
         @"image":         @(imgNm),
-        @"scanned_insns": @(scanned),
+        @"scanned_insns": @(scan.scanned_insns),
         @"count":         @(n),
-        @"truncated":     truncated ? @YES : @NO,
+        @"truncated":     scan_is_truncated(&scan) ? @YES : @NO,
+        @"scan":          scan_info_dict(&scan),
         @"results":       arr,
     } mutableCopy];
     return tool_ok(out);
@@ -643,6 +893,9 @@ static NSDictionary *tool_find_function_refs(NSDictionary *args) {
     NSString *image   = [args[@"image"] isKindOfClass:NSString.class] ? args[@"image"] : nil;
     NSString *dir     = [args[@"direction"] isKindOfClass:NSString.class] ? args[@"direction"] : @"callers";
     if (addrStr.length == 0) return tool_err(@"need 'target' (function address, e.g. \"0x100012340\")");
+    uint64_t scanOffset = 0, scanSize = 0;
+    NSString *scanErr = parse_scan_window(args, &scanOffset, &scanSize);
+    if (scanErr) return tool_err(scanErr);
     int direction = [dir isEqualToString:@"callees"] ? 1 : ([dir isEqualToString:@"both"] ? 2 : 0);
     uint64_t targetAddr = strtoull(addrStr.UTF8String, NULL, 0);
     int maxR = [args[@"max_results"] isKindOfClass:NSNumber.class] ? [args[@"max_results"] intValue] : 256;
@@ -651,13 +904,15 @@ static NSDictionary *tool_find_function_refs(NSDictionary *args) {
     AnalysisFuncRef *rows = calloc((size_t)maxR, sizeof(AnalysisFuncRef));
     if (!rows) return tool_err(@"out of memory");
 
-    uint64_t qstart = 0, scanned = 0; char imgNm[256] = {0}; int truncated = 0;
+    uint64_t qstart = 0; char imgNm[256] = {0}; AnalysisScanInfo scan;
     int n = analysis_find_function_refs(image.length ? image.UTF8String : NULL,
-                                        targetAddr, direction, rows, maxR,
-                                        imgNm, sizeof(imgNm), &qstart, &scanned, &truncated);
+                                        targetAddr, direction, scanOffset, scanSize,
+                                        rows, maxR, imgNm, sizeof(imgNm), &qstart, &scan);
     if (n == -1) { free(rows); return tool_err(@"invalid arguments"); }
     if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
     if (n == -3) { free(rows); return tool_err([NSString stringWithFormat:@"target 0x%llx not attributable to a function (no symbol / LC_FUNCTION_STARTS)", targetAddr]); }
+    if (n == -4) { free(rows); return tool_err(@"scan_offset is outside the selected image's __text"); }
+    if (n == -5) { free(rows); return tool_err(@"unable to allocate bounded __text snapshot"); }
 
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
     for (int i = 0; i < n; i++) {
@@ -684,9 +939,10 @@ static NSDictionary *tool_find_function_refs(NSDictionary *args) {
         @"query":         addrStr,
         @"direction":     dir,
         @"image":         @(imgNm),
-        @"scanned_insns": @(scanned),
+        @"scanned_insns": @(scan.scanned_insns),
         @"count":         @(n),
-        @"truncated":     truncated ? @YES : @NO,
+        @"truncated":     scan_is_truncated(&scan) ? @YES : @NO,
+        @"scan":          scan_info_dict(&scan),
         @"results":       arr,
     } mutableCopy];
     if (qstart) out[@"query_func_start"] = [NSString stringWithFormat:@"0x%llx", qstart];
@@ -1332,7 +1588,7 @@ static NSArray *tool_definitions(void) {
         },
         @{
             @"name": @"objc_resolve_imp",
-            @"description": @"Resolve an ObjC selector to its runtime IMP address — breaks the dynamic-dispatch wall that static disassembly can't cross (a message send is just `br x16` statically). Give a class name OR a live object address plus the selector; returns the real IMP, its declaring class, image, and dladdr symbol. Feed `imp` straight into disassemble_function to read the code that actually runs.",
+            @"description": @"Resolve an ObjC selector to its current runtime IMP address. The current IMP may already be swizzled by another plugin; this tool does not claim to recover the pre-swizzle implementation. Returns declaring class, owner image, symbol, type encoding, and PAC-normalized address.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
@@ -1342,6 +1598,24 @@ static NSArray *tool_definitions(void) {
                     @"method_type": @{@"type": @"string", @"description": @"\"instance\" (default), \"class\" (+ method, resolved on the metaclass), or \"auto\" (try instance then class)."},
                 },
                 @"required": @[@"selector"],
+            },
+        },
+        @{
+            @"name": @"find_objc_methods",
+            @"description": @"Query Objective-C runtime method entities. Lists methods declared directly by matching classes and returns selector, type encoding, current IMP, class image, and current IMP image. Requires at least one filter and is paged. An IMP outside the class image is reported as an observation, not proof of swizzling.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"class": @{@"type": @"string", @"description": @"Exact class name; avoids scanning the full class list"},
+                    @"class_query": @{@"type": @"string", @"description": @"Case-insensitive substring filter on class name"},
+                    @"selector": @{@"type": @"string", @"description": @"Selector filter"},
+                    @"match": @{@"type": @"string", @"enum": @[@"exact", @"contains", @"prefix"], @"description": @"Selector match mode (default contains)"},
+                    @"image": @{@"type": @"string", @"description": @"Case-insensitive substring filter on declaring class image"},
+                    @"imp_image": @{@"type": @"string", @"description": @"Case-insensitive substring filter on current IMP owner image"},
+                    @"method_type": @{@"type": @"string", @"enum": @[@"instance", @"class", @"both"], @"description": @"Method kind (default both)"},
+                    @"offset": @{@"type": @"number", @"description": @"Paging offset (default 0)"},
+                    @"limit": @{@"type": @"number", @"description": @"Max methods returned (default 200, max 500)"},
+                },
             },
         },
         @{
@@ -1372,11 +1646,24 @@ static NSArray *tool_definitions(void) {
         },
         @{
             @"name": @"list_images",
-            @"description": @"List loaded images (with imports) and their index — call this FIRST to get a valid image_index for list_imports. Main executable listed first.",
+            @"description": @"List loaded images that have imports and their dyld index — use this only to get a valid image_index for list_imports. Images with no imports are intentionally omitted; use list_loaded_images for the complete process map.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
                     @"query": @{@"type": @"string", @"description": @"Optional substring filter on image name"},
+                },
+            },
+        },
+        @{
+            @"name": @"list_loaded_images",
+            @"description": @"Complete dyld image map without import-table filtering. Returns path, UUID, scope (app/system/external), load address, slide, executable range, and FairPlay metadata. Use this to find injected dylibs and choose an analysis image.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"query": @{@"type": @"string", @"description": @"Optional case-insensitive substring filter on image name or full path"},
+                    @"include_system": @{@"type": @"boolean", @"description": @"Include system/shared-cache images (default true)"},
+                    @"offset": @{@"type": @"number", @"description": @"Paging offset (default 0)"},
+                    @"limit": @{@"type": @"number", @"description": @"Max images returned (default 200, max 500)"},
                 },
             },
         },
@@ -1408,6 +1695,8 @@ static NSArray *tool_definitions(void) {
                     @"address": @{@"type": @"string", @"description": @"Target runtime address (alternative to symbol), e.g. \"0x1a2345678\""},
                     @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
                     @"max_results": @{@"type": @"number", @"description": @"Max call sites returned (default 256, max 2000)"},
+                    @"scan_offset": @{@"type": @"number", @"description": @"Byte offset into __text (default 0; use scan.next_scan_offset to continue large images)"},
+                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default/max 48MB)"},
                 },
             },
         },
@@ -1421,6 +1710,8 @@ static NSArray *tool_definitions(void) {
                     @"address": @{@"type": @"string", @"description": @"Exact string runtime address (alternative to string)"},
                     @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
                     @"max_results": @{@"type": @"number", @"description": @"Max ref sites returned (default 256, max 2000)"},
+                    @"scan_offset": @{@"type": @"number", @"description": @"Byte offset into __text (default 0; use scan.next_scan_offset to continue)"},
+                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default/max 48MB)"},
                 },
             },
         },
@@ -1434,6 +1725,8 @@ static NSArray *tool_definitions(void) {
                     @"match": @{@"type": @"string", @"enum": @[@"exact", @"contains", @"prefix"], @"description": @"Match mode (default exact)"},
                     @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
                     @"max_results": @{@"type": @"number", @"description": @"Max call sites returned (default 256, max 2000)"},
+                    @"scan_offset": @{@"type": @"number", @"description": @"Byte offset into __text (default 0; use scan.next_scan_offset to continue)"},
+                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default/max 48MB)"},
                 },
                 @"required": @[@"selector"],
             },
@@ -1448,6 +1741,8 @@ static NSArray *tool_definitions(void) {
                     @"direction": @{@"type": @"string", @"enum": @[@"callers", @"callees", @"both"], @"description": @"callers (default) / callees / both"},
                     @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
                     @"max_results": @{@"type": @"number", @"description": @"Max edges returned (default 256, max 2000)"},
+                    @"scan_offset": @{@"type": @"number", @"description": @"Byte offset into __text (default 0; use scan.next_scan_offset to continue)"},
+                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default/max 48MB)"},
                 },
                 @"required": @[@"target"],
             },
@@ -1722,9 +2017,11 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"resolve_symbol"])        return tool_resolve_symbol(args);
     if ([name isEqualToString:@"symbolicate"])           return tool_symbolicate(args);
     if ([name isEqualToString:@"objc_resolve_imp"])      return tool_objc_resolve_imp(args);
+    if ([name isEqualToString:@"find_objc_methods"])     return tool_find_objc_methods(args);
     if ([name isEqualToString:@"read_memory"])           return tool_read_memory(args);
     if ([name isEqualToString:@"search_memory"])         return tool_search_memory(args);
     if ([name isEqualToString:@"list_images"])           return tool_list_images(args);
+    if ([name isEqualToString:@"list_loaded_images"])    return tool_list_loaded_images(args);
     if ([name isEqualToString:@"list_imports"])          return tool_list_imports(args);
     if ([name isEqualToString:@"get_macho_info"])        return tool_get_macho_info(args);
     if ([name isEqualToString:@"find_xrefs"])            return tool_find_xrefs(args);

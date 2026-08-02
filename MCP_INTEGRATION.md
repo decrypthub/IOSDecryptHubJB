@@ -21,14 +21,18 @@
 | `analyze_function` | 安全读取进程内存 `address..+size` 并反汇编（`vm_read_overwrite` 防护，不可读地址返回 isError 而非崩溃） | `address`, `size` |
 | `list_imports` | 列举某镜像的导入（undefined）符号 —— fishhook 可 rebind 的候选 | `image_index` |
 | `get_macho_info` | 列举 App bundle 内已加载镜像：load_address、cryptid、加密状态 | 无 |
+| `list_loaded_images` | 完整 dyld 镜像地图：UUID、path、scope、slide、可执行范围和加密信息；不按 imports 过滤 | 可选 `query`/`include_system`/`offset`/`limit` |
 | `find_xrefs` | 「谁调用了它」：扫某镜像 `__TEXT,__text` 里所有直接 `bl` 到目标符号/地址的调用点，经运行时已绑定的 GOT + dladdr 把 import stub 还原成真实符号 | `symbol` 或 `address` |
 | `find_string_refs` | 「谁引用了这个字符串」：扫 `__text` 的 `ADRP+ADD`（直接）/ `ADRP+LDR`（间接指针槽）恢复的数据地址，落在字符串 section 则记引用点 | `string` 或 `address` |
 | `find_selector_refs` | 「谁把这个 selector 用在了 objc 调用上」：扫 `__text` 的 objc_msgSend 调用点（经典 selref+`blr` 或现代 `__objc_stubs`），只报真实调用不报裸 selref 加载 | `selector` |
 | `find_function_refs` | 内部调用图：本镜像 `__text` 内 `BL` 的 `from_func → to_func` 边，`direction` 取 callers/callees/both；import stub 与 objc_stub 天然排除 | `target` |
 | `list_functions` | 函数清单（`LC_FUNCTION_STARTS`）：name（符号或 `sub_<addr>`）、start、vmaddr、size≈到下一入口；支持 `query` 子串过滤与 offset/limit 分页 | 无 |
-| `objc_resolve_imp` | selector → 运行时真实 IMP：破 objc 动态派发（消息发送静态只到 `br x16`）。给 `class` 名或 `object` 地址 + `selector`，返回 IMP、声明类、image、dladdr 符号；`imp` 直接喂 `disassemble_function` | `selector` + (`class` 或 `object`) |
+| `objc_resolve_imp` | selector → 当前运行时 IMP；明确不宣称恢复第三方 swizzle 前实现 | `selector` + (`class` 或 `object`) |
+| `find_objc_methods` | 查询 runtime 中类自身声明的方法：selector、type encoding、当前 IMP、class image 与 IMP image；支持过滤和分页 | 至少一个过滤条件 |
 
-可选参数：`disassemble`/`analyze_function` 的 `arch`（`arm64`/`arm`/`thumb`，默认 arm64）；`list_imports` 的 `query`（子串过滤）、`limit`；`find_xrefs` 的 `image`（镜像名子串，默认主程序）、`max_results`（默认 256）。
+可选参数：`disassemble`/`analyze_function` 的 `arch`（`arm64`/`arm`/`thumb`，默认 arm64）；`list_imports` 的 `query`（子串过滤）、`limit`；四个 xref 工具均支持 `image`（镜像名子串，默认主程序）、`max_results`（默认 256）、`scan_offset` 和 `scan_size`。
+
+**大镜像分页与诊断**：`find_xrefs`、`find_string_refs`、`find_selector_refs`、`find_function_refs` 单次最多扫描 48MB `__text`。响应中的 `scan` 给出完整 `text_start/text_end`、本次 `scan_start/scan_end`、实际读取字节、不可读/部分可读页、`coverage_complete` 和 `incomplete_reasons`。若 `scan.has_more=true`，把 `scan.next_scan_offset` 原样传给下一次调用。字符串和 selector 扫描会额外读取前 4KB 作为状态预热，但不会返回本页起点之前的命中。
 
 `find_xrefs` 仅 tier-1：只认直接 `bl`（不含 `blr`/`br` 间接调用、无 string/selector 引用、无 CFG）。三种 `kind`：`call_direct`（本镜像内部函数）/`call_import_stub`（经 `__stubs`/`__auth_stubs` 的导入 API）/`call_objc_stub`（经 `__objc_stubs` 的 `objc_msgSend$sel` 降级 stub）。lazy slot 尚未绑定时目标记为未知但仍保留调用点。`resolved_name` 反映**运行时真正到达的目标**——若该导入被 fishhook 改写，会如实显示 hook 符号。
 
@@ -42,7 +46,9 @@
 
 **`list_functions`（tier-3B）**：把内部依赖的 `LC_FUNCTION_STARTS` 对外暴露成函数清单——其余 xref 工具的归属底座。可选 `image`（默认主程序）、`query`（名字子串）、`offset`/`limit`（分页，默认 limit 200）。每条含 `name`（dladdr 符号或 `sub_<runtime>`）、`start`（运行时入口）、`vmaddr`（去 slide，稳定 ID）、`size`（≈ 下一个入口 − 本入口，非精确边界）、`has_symbol`。strip 后仍列出（`LC_FUNCTION_STARTS` 不随 strip 丢失），名字退化为 `sub_<runtime>`。
 
-**`objc_resolve_imp`**：把一个 selector 解析到运行时真正执行的 IMP——静态反汇编到消息发送就是一条 `br x16`（objc_msgSend 间接跳转），跟不下去；注入进程可直接问 ObjC runtime 拿真实 IMP，再喂 `disassemble_function` 反汇编真正跑的代码。给 `selector` + 二选一：`class`（类名，走 `objc_getClass`）或 `object`（活对象地址，安全读 isa 后与类表比对，**绝不解引用不可信指针**——坏对象/tagged pointer 干净报错不崩宿主）。`method_type` 取 `instance`（默认）/`class`（+ 方法，查元类）/`auto`（先实例后类）。输出 `imp`、`resolving_class`（方法可能继承自父类，回溯到声明类）、`image`、`symbol`/`symbol_display`（dladdr）、`type_encoding`；未实现该 selector 时 `found:false`。用途示例：`objc_resolve_imp(class=WBValidatorModel, selector="setRawT:")` → 拿 IMP → `disassemble_function` 看内部到底调哪个 HMAC/key。
+**`objc_resolve_imp`**：把 selector 解析到**当前运行时 IMP**。静态反汇编到消息发送就是一条 `br x16`（objc_msgSend 间接跳转），注入进程可直接问 ObjC runtime 当前会执行哪个入口。给 `selector` + 二选一：`class` 或 `object`；对象地址仍使用安全 isa 读取。输出兼容字段 `imp` 以及语义更明确的 `current_imp`、`raw_imp`、`pointer_normalized`、声明类、image、symbol 和 type encoding。`imp_semantics=current_runtime_implementation`；若其他插件已先行 swizzle，这个地址就是插件入口，工具不会宣称恢复 swizzle 前实现，`original_imp_known` 固定诚实返回 false。
+
+**`find_objc_methods`**：通过 Objective-C runtime 查询方法实体，至少传一个过滤条件：精确 `class`、模糊 `class_query`、`selector`、声明类 `image` 或当前实现 `imp_image`。`match` 控制 selector 的 exact/contains/prefix，`method_type` 控制 instance/class/both，`offset/limit` 分页。结果只列类自身当前声明的方法，不展开继承链；同时返回 `class_image` 与 `imp_image`。`imp_outside_class_image=true` 只表示当前实现落在另一镜像，可能来自 swizzle、category、共享实现或转发，不能单独当作 hook 定论。
 
 工具执行错误走 MCP 的 `isError:true` content 信封（非 JSON-RPC 协议错误）；返回同时含 `structuredContent`（机器可读）与 `content[].text`（JSON 文本）。
 
@@ -110,6 +116,7 @@ Capstone 以源码方式嵌入，**必须**定义以下宏（在 `Makefile` 的 
 ## 边界
 
 - **`get_macho_info` 作用域**：仅列 App bundle 内已加载镜像（不含系统库；`PlugIns/*.appex` 等独立进程也不在内）。在非 `.app` 宿主（如 mac 灰度测试的裸可执行）下会返回空列表——这是 `dh_dump_list_images` 的既有行为，非缺陷。
+- **镜像工具不要混用**：`list_images` 是 `list_imports` 的索引来源，只列 imports 非空的 fishhook 候选；`list_loaded_images` 才是完整进程镜像地图；`get_macho_info` 仍只服务 App bundle 脱壳范围。
 - **`analyze_function` 读的是本进程内存**：地址须是目标进程内已映射的地址；不可读时安全返回 `isError`。
 - 无 `resources/prompts` 能力，`initialize` 只声明 `tools`。
 

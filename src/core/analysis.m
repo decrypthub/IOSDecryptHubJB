@@ -17,6 +17,7 @@
 
 #define ANALYSIS_MAX_READ   (64 * 1024)          // 单次读内存上限
 #define ANALYSIS_MAX_SEARCH (256 * 1024 * 1024)  // search_memory 范围上限
+#define ANALYSIS_MAX_XREF_SCAN (48ULL * 1024 * 1024)
 
 // ============================================================
 // Capstone 反汇编
@@ -157,6 +158,8 @@ static void copy_basename(const char *path, char *buf, size_t buflen) {
     buf[buflen - 1] = '\0';
 }
 
+static int real_image_basename_for_address(uint64_t addr, char *out, size_t len);
+
 int analysis_resolve_symbol(const char *name, uint64_t *out_addr,
                             char *out_image, size_t image_len) {
     if (!name || !out_addr) return -1;
@@ -172,17 +175,29 @@ int analysis_resolve_symbol(const char *name, uint64_t *out_addr,
 }
 
 int analysis_symbolicate(uint64_t addr, char *out_sym, size_t sym_len,
-                         uint64_t *out_offset, char *out_image, size_t image_len) {
+                         uint64_t *out_offset, char *out_image, size_t image_len,
+                         uint64_t *out_normalized) {
     Dl_info info;
-    if (!dladdr((void *)(uintptr_t)addr, &info) || !info.dli_saddr) return -1;
+    memset(&info, 0, sizeof(info));
+    uint64_t normalized = addr;
+    uint64_t stripped = addr & 0x0000FFFFFFFFFFFFULL;
+    if (stripped != addr && dladdr((void *)(uintptr_t)stripped, &info) && info.dli_saddr) {
+        normalized = stripped;
+    } else {
+        memset(&info, 0, sizeof(info));
+        if (!dladdr((void *)(uintptr_t)addr, &info) || !info.dli_saddr) return -1;
+    }
+    if (out_normalized) *out_normalized = normalized;
     if (out_sym && sym_len) {
         const char *s = info.dli_sname ?: "";
         if (s[0] == '_') s++;   // 去前导下划线, 与 dh_symtab 一致
         strncpy(out_sym, s, sym_len - 1);
         out_sym[sym_len - 1] = '\0';
     }
-    if (out_offset) *out_offset = addr - (uint64_t)(uintptr_t)info.dli_saddr;
-    if (out_image && image_len) copy_basename(info.dli_fname, out_image, image_len);
+    if (out_offset) *out_offset = normalized - (uint64_t)(uintptr_t)info.dli_saddr;
+    if (out_image && image_len &&
+        !real_image_basename_for_address(normalized, out_image, image_len))
+        copy_basename(info.dli_fname, out_image, image_len);
     return 0;
 }
 
@@ -267,6 +282,155 @@ int analysis_list_macho_images(AnalysisMachoImage *out, int max_count) {
         count++;
     }
     return count;
+}
+
+static void loaded_image_uuid(const struct mach_header_64 *mh, char out[37]) {
+    out[0] = '\0';
+    const uint8_t *cur = (const uint8_t *)mh + sizeof(*mh);
+    for (uint32_t i = 0; i < mh->ncmds; i++) {
+        const struct load_command *lc = (const struct load_command *)cur;
+        if (lc->cmdsize < sizeof(*lc)) return;
+        if (lc->cmd == LC_UUID && lc->cmdsize >= sizeof(struct uuid_command)) {
+            const uint8_t *u = ((const struct uuid_command *)lc)->uuid;
+            snprintf(out, 37,
+                     "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+                     u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7],
+                     u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15]);
+            return;
+        }
+        cur += lc->cmdsize;
+    }
+}
+
+static void loaded_image_install_name(const struct mach_header_64 *mh,
+                                      char *out, size_t len) {
+    if (!out || len == 0) return;
+    out[0] = '\0';
+    const uint8_t *cur = (const uint8_t *)mh + sizeof(*mh);
+    for (uint32_t i = 0; i < mh->ncmds; i++) {
+        const struct load_command *lc = (const struct load_command *)cur;
+        if (lc->cmdsize < sizeof(*lc)) return;
+        if (lc->cmd == LC_ID_DYLIB && lc->cmdsize >= sizeof(struct dylib_command)) {
+            const struct dylib_command *dc = (const struct dylib_command *)lc;
+            if (dc->dylib.name.offset < dc->cmdsize) {
+                const char *name = (const char *)dc + dc->dylib.name.offset;
+                size_t avail = dc->cmdsize - dc->dylib.name.offset;
+                size_t n = strnlen(name, avail);
+                if (n < avail) {
+                    size_t copy = n < len - 1 ? n : len - 1;
+                    memcpy(out, name, copy); out[copy] = '\0';
+                }
+            }
+            return;
+        }
+        cur += lc->cmdsize;
+    }
+}
+
+static NSString *loaded_image_real_path(const struct mach_header_64 *mh,
+                                        const char *dyldPath) {
+    NSString *path = dyldPath ? @(dyldPath) : @"";
+    // hook_dyld 对隐藏镜像只改名不改 header/index。LC_ID_DYLIB 仍保留真实 install name，
+    // 当 dyld 名被统一伪装成 libSystem 时用它恢复工具内部的镜像身份。
+    if ([path isEqualToString:@"/usr/lib/libSystem.B.dylib"] && mh->filetype == MH_DYLIB) {
+        char installName[1024] = {0};
+        loaded_image_install_name(mh, installName, sizeof(installName));
+        if (installName[0] && strcmp(installName, "/usr/lib/libSystem.B.dylib") != 0)
+            path = @(installName);
+    }
+    return path;
+}
+
+static void loaded_image_metadata(const struct mach_header_64 *mh, intptr_t slide,
+                                  AnalysisLoadedImage *o) {
+    const uint8_t *cur = (const uint8_t *)mh + sizeof(*mh);
+    for (uint32_t i = 0; i < mh->ncmds; i++) {
+        const struct load_command *lc = (const struct load_command *)cur;
+        if (lc->cmdsize < sizeof(*lc)) return;
+        if (lc->cmd == LC_SEGMENT_64 && lc->cmdsize >= sizeof(struct segment_command_64)) {
+            const struct segment_command_64 *sg = (const struct segment_command_64 *)lc;
+            BOOL executableSegment = strncmp(sg->segname, "__TEXT", sizeof(sg->segname)) == 0 ||
+                                     strncmp(sg->segname, "__TEXT_EXEC", sizeof(sg->segname)) == 0;
+            if (executableSegment && sg->vmsize > 0) {
+                uint64_t lo = (uint64_t)((intptr_t)sg->vmaddr + slide);
+                uint64_t hi = lo + sg->vmsize;
+                if (!o->text_start || lo < o->text_start) o->text_start = lo;
+                if (hi > o->text_end) o->text_end = hi;
+            }
+        } else if (lc->cmd == LC_ENCRYPTION_INFO_64 &&
+                   lc->cmdsize >= sizeof(struct encryption_info_command_64)) {
+            const struct encryption_info_command_64 *ei =
+                (const struct encryption_info_command_64 *)lc;
+            o->cryptid = ei->cryptid;
+            o->cryptsize = ei->cryptsize;
+        }
+        cur += lc->cmdsize;
+    }
+}
+
+int analysis_list_loaded_images(const char *query, int include_system,
+                                int offset, int limit,
+                                AnalysisLoadedImage *out, int max_out,
+                                int *out_total) {
+    if (out_total) *out_total = 0;
+    if (!out || max_out <= 0) return -1;
+    if (offset < 0) offset = 0;
+    if (limit <= 0 || limit > max_out) limit = max_out;
+
+    NSString *bundlePath = NSBundle.mainBundle.bundlePath ?: @"";
+    NSString *q = query && query[0] ? [@(query) lowercaseString] : nil;
+    uint32_t count = _dyld_image_count();
+    int total = 0, added = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        const struct mach_header_64 *mh =
+            (const struct mach_header_64 *)_dyld_get_image_header(i);
+        const char *cpath = _dyld_get_image_name(i);
+        if (!mh || mh->magic != MH_MAGIC_64 || !cpath) continue;
+        NSString *path = loaded_image_real_path(mh, cpath);
+        NSString *name = path.lastPathComponent ?: path;
+        BOOL app = (bundlePath.length && [path hasPrefix:bundlePath]) ||
+                   [path hasPrefix:@"@executable_path/"] || [path hasPrefix:@"@rpath/"];
+        BOOL system = [path hasPrefix:@"/System/"] || [path hasPrefix:@"/usr/lib/"];
+        if (!include_system && system) continue;
+        if (q && [path.lowercaseString rangeOfString:q].location == NSNotFound &&
+            [name.lowercaseString rangeOfString:q].location == NSNotFound) continue;
+        if (total++ < offset) continue;
+        if (added >= limit || added >= max_out) continue;
+
+        AnalysisLoadedImage *o = &out[added++];
+        memset(o, 0, sizeof(*o));
+        o->dyld_index = (int)i;
+        o->is_main = (mh->filetype == MH_EXECUTE);
+        o->load_address = (uint64_t)(uintptr_t)mh;
+        o->slide = (int64_t)_dyld_get_image_vmaddr_slide(i);
+        o->filetype = mh->filetype;
+        strncpy(o->scope, app ? "app" : (system ? "system" : "external"), sizeof(o->scope) - 1);
+        strncpy(o->name, name.UTF8String ?: "?", sizeof(o->name) - 1);
+        strncpy(o->path, path.UTF8String ?: "?", sizeof(o->path) - 1);
+        loaded_image_uuid(mh, o->uuid);
+        loaded_image_metadata(mh, (intptr_t)o->slide, o);
+    }
+    if (out_total) *out_total = total;
+    return added;
+}
+
+
+static int real_image_basename_for_address(uint64_t addr, char *out, size_t len) {
+    if (!out || len == 0) return 0;
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const struct mach_header_64 *mh =
+            (const struct mach_header_64 *)_dyld_get_image_header(i);
+        if (!mh || mh->magic != MH_MAGIC_64) continue;
+        AnalysisLoadedImage meta; memset(&meta, 0, sizeof(meta));
+        intptr_t slide = _dyld_get_image_vmaddr_slide(i);
+        loaded_image_metadata(mh, slide, &meta);
+        if (addr < meta.text_start || addr >= meta.text_end) continue;
+        NSString *path = loaded_image_real_path(mh, _dyld_get_image_name(i));
+        copy_basename(path.UTF8String, out, len);
+        return 1;
+    }
+    return 0;
 }
 
 // ============================================================
@@ -490,40 +654,68 @@ static void attribute_call_site(FuncStartsCache *fc, intptr_t slide, AnalysisXre
                    &r->from_offset, &r->from_func_start, &r->from_func_vmaddr);
 }
 
-#define XREF_MAX_SCAN_INSNS  (12 * 1000 * 1000)   // 指令安全上限(~48MB 代码), 超过标记 truncated
-
-// 把 [lo, hi) 按 16KB 页块 vm_read_overwrite 快照到堆缓冲(不可读页保持 0), 上限 cap 字节。
+// 把 [lo, hi) 按 16KB 页块 vm_read_overwrite 快照到堆缓冲(不可读页保持 0)。
 // 关键安全措施: xref 扫描不能直接解引用 __text 裸指针 —— 扫描要数秒, 期间目标镜像被并发
 // dlclose/unmap 就会 SIGSEGV 崩宿主(TOCTOU)。快照后只碰副本, 源被 unmap 也无妨; 不可读页
-// 填 0(capstone 反汇编 0 是无害的 udf/andeq, 不产生 BL/取址)。返回缓冲(调用者 free),
-// *out_len 实际长度, *out_capped 是否因 cap 截断。calloc 失败返回 NULL。
-static uint8_t *snapshot_text(uint64_t lo, uint64_t hi, size_t cap, size_t *out_len, int *out_capped) {
+// 填 0(capstone 反汇编 0 是无害的 udf/andeq, 不产生 BL/取址)。calloc 失败返回 NULL。
+static uint8_t *snapshot_text(uint64_t lo, uint64_t hi, size_t *out_len,
+                              AnalysisScanInfo *scan) {
     if (out_len) *out_len = 0;
-    if (out_capped) *out_capped = 0;
     if (hi <= lo) return NULL;
-    uint64_t full = hi - lo;
-    size_t len = (full > (uint64_t)cap) ? cap : (size_t)full;
-    if (out_capped) *out_capped = (len < full);
+    size_t len = (size_t)(hi - lo);
     uint8_t *buf = calloc(1, len);
     if (!buf) return NULL;
     const size_t PG = 16 * 1024;   // iOS 页 16KB; 某页不可读只丢这一页, 其余照读
     for (size_t off = 0; off < len; off += PG) {
         size_t want = (len - off < PG) ? (len - off) : PG;
         vm_size_t got = 0;
-        vm_read_overwrite(mach_task_self(), (vm_address_t)(lo + off), (vm_size_t)want,
-                          (vm_address_t)(buf + off), &got);   // 失败: 该页保持 calloc 的 0
+        kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)(lo + off),
+                                             (vm_size_t)want,
+                                             (vm_address_t)(buf + off), &got);
+        if (kr != KERN_SUCCESS || got == 0) {
+            if (scan) scan->unreadable_pages++;
+        } else {
+            if (scan) scan->bytes_read += got;
+            if ((size_t)got < want && scan) scan->partial_pages++;
+        }
     }
     if (out_len) *out_len = len;
     return buf;
 }
 
+// 计算一次有界扫描窗口。scan_size=0 使用 48MB 默认上限；显式更大值仍截到 48MB。
+// 返回 -4 表示 offset 已越过 __text。
+static int prepare_scan(uint64_t text_lo, uint64_t text_hi,
+                        uint64_t scan_offset, uint64_t scan_size,
+                        AnalysisScanInfo *scan) {
+    if (!scan || text_hi <= text_lo) return -1;
+    memset(scan, 0, sizeof(*scan));
+    uint64_t total = text_hi - text_lo;
+    if (scan_offset >= total) return -4;
+    uint64_t size = scan_size ? scan_size : ANALYSIS_MAX_XREF_SCAN;
+    if (size > ANALYSIS_MAX_XREF_SCAN) {
+        size = ANALYSIS_MAX_XREF_SCAN;
+        scan->scan_size_capped = 1;
+    }
+    if (size > total - scan_offset) size = total - scan_offset;
+    scan->text_start = text_lo;
+    scan->text_end = text_hi;
+    scan->scan_offset = scan_offset;
+    scan->scan_start = text_lo + scan_offset;
+    scan->scan_end = scan->scan_start + size;
+    scan->bytes_requested = size;
+    scan->has_more = scan->scan_end < text_hi;
+    scan->next_scan_offset = scan->has_more ? scan->scan_end - text_lo : 0;
+    return 0;
+}
+
 int analysis_find_xrefs(const char *image_query,
                         const char *sym_name, uint64_t target_addr,
+                        uint64_t scan_offset, uint64_t scan_size,
                         AnalysisXref *out, int max_results,
                         uint64_t *out_query_addr, char *out_image, size_t image_len,
-                        uint64_t *out_scanned, int *out_truncated) {
-    if (out_scanned) *out_scanned = 0;
-    if (out_truncated) *out_truncated = 0;
+                        AnalysisScanInfo *out_scan) {
+    if (out_scan) memset(out_scan, 0, sizeof(*out_scan));
     if (!out || max_results <= 0) return -1;
     if ((!sym_name || !sym_name[0]) && target_addr == 0) return -1;
 
@@ -548,6 +740,10 @@ int analysis_find_xrefs(const char *image_query,
     uint64_t text_lo = 0, text_hi = 0;
     if (!xref_sect_range(mh, slide, "__TEXT", "__text", &text_lo, &text_hi) &&
         !xref_sect_range(mh, slide, "__TEXT_EXEC", "__text", &text_lo, &text_hi)) return -2;
+
+    AnalysisScanInfo scan;
+    int prep = prepare_scan(text_lo, text_hi, scan_offset, scan_size, &scan);
+    if (prep != 0) return prep;
 
     // tier-1.5: 函数归属表(缺 LC_FUNCTION_STARTS 时 count==0, attribute_call_site 退回 dladdr/空)。
     FuncStartsCache *fc = func_starts_for(mh, slide, text_hi);
@@ -574,17 +770,20 @@ int analysis_find_xrefs(const char *image_query,
     }
 
     // __text 在本进程已映射(FairPlay 段运行时已解密), 直接按运行时地址反汇编, 不额外拷贝。
-    size_t snap_len = 0; int snap_capped = 0;
-    uint8_t *snap = snapshot_text(text_lo, text_hi, (size_t)XREF_MAX_SCAN_INSNS * 4, &snap_len, &snap_capped);
-    const uint8_t *code = snap;                 // NULL(OOM) 时 remaining=0, 主循环不执行
-    size_t remaining = snap ? snap_len : 0;
-    uint64_t cur = text_lo;
+    size_t snap_len = 0;
+    uint8_t *snap = snapshot_text(scan.scan_start, scan.scan_end, &snap_len, &scan);
+    if (!snap) {
+        cs_free(insn, 1); cs_free(sinsn, 1); cs_close(&h); cs_close(&hs);
+        return -5;
+    }
+    const uint8_t *code = snap;
+    size_t remaining = snap_len;
+    uint64_t cur = scan.scan_start;
     uint64_t scanned = 0;
-    int found = 0, truncated = 0;
+    int found = 0;
 
     while (cs_disasm_iter(h, &code, &remaining, &cur, insn)) {
         scanned++;
-        if (scanned >= XREF_MAX_SCAN_INSNS) { truncated = 1; break; }
         if (insn->id != ARM64_INS_BL) continue;
 
         cs_arm64 *a = &insn->detail->arm64;
@@ -628,7 +827,7 @@ int analysis_find_xrefs(const char *image_query,
         }
         if (!addr_match && !name_match) continue;
 
-        if (found >= max_results) { truncated = 1; break; }
+        if (found >= max_results) { scan.result_limit_reached = 1; break; }
         AnalysisXref *r = &out[found++];
         r->call_site = insn->address;
         r->target = tgt;
@@ -645,10 +844,9 @@ int analysis_find_xrefs(const char *image_query,
     cs_free(sinsn, 1);
     cs_close(&h);
     cs_close(&hs);
-    if (snap_capped) truncated = 1;
     free(snap);
-    if (out_scanned) *out_scanned = scanned;
-    if (out_truncated) *out_truncated = truncated;
+    scan.scanned_insns = scanned;
+    if (out_scan) *out_scan = scan;
     return found;
 }
 
@@ -721,11 +919,11 @@ static int string_sec_global(uint64_t addr, char *out_label, size_t len, uint64_
 
 int analysis_find_string_refs(const char *image_query,
                               const char *query_str, uint64_t query_addr,
+                              uint64_t scan_offset, uint64_t scan_size,
                               AnalysisStringRef *out, int max_results,
                               char *out_image, size_t image_len,
-                              uint64_t *out_scanned, int *out_truncated) {
-    if (out_scanned) *out_scanned = 0;
-    if (out_truncated) *out_truncated = 0;
+                              AnalysisScanInfo *out_scan) {
+    if (out_scan) memset(out_scan, 0, sizeof(*out_scan));
     if (!out || max_results <= 0) return -1;
     if ((!query_str || !query_str[0]) && query_addr == 0) return -1;
 
@@ -737,6 +935,10 @@ int analysis_find_string_refs(const char *image_query,
     uint64_t text_lo = 0, text_hi = 0;
     if (!xref_sect_range(mh, slide, "__TEXT", "__text", &text_lo, &text_hi) &&
         !xref_sect_range(mh, slide, "__TEXT_EXEC", "__text", &text_lo, &text_hi)) return -2;
+
+    AnalysisScanInfo scan;
+    int prep = prepare_scan(text_lo, text_hi, scan_offset, scan_size, &scan);
+    if (prep != 0) return prep;
 
     // 字符串 section(存字符本身)。label 用静态串, 免每次调用 strdup 泄漏。
     SecRange strsec[4]; int nstr = 0;
@@ -755,7 +957,7 @@ int analysis_find_string_refs(const char *image_query,
             nstr++;
         }
     }
-    if (nstr == 0) return 0;   // 无字符串 section, 无从谈起
+    if (nstr == 0) { if (out_scan) *out_scan = scan; return 0; }   // 无字符串 section
 
     // 指针 section(slot 存指向字符串的指针) — 间接引用 ADRP+LDR 用, 白名单防误报
     SecRange ptrsec[16]; int nptr = 0;
@@ -781,13 +983,17 @@ int analysis_find_string_refs(const char *image_query,
     cs_insn *insn = cs_malloc(h);
     if (!insn) { cs_close(&h); return -1; }
 
-    size_t snap_len = 0; int snap_capped = 0;
-    uint8_t *snap = snapshot_text(text_lo, text_hi, (size_t)XREF_MAX_SCAN_INSNS * 4, &snap_len, &snap_capped);
-    const uint8_t *code = snap;                 // NULL(OOM) 时 remaining=0, 主循环不执行
-    size_t remaining = snap ? snap_len : 0;
-    uint64_t cur = text_lo;
+    uint64_t warm_lo = scan.scan_start > text_lo + 4096 ? scan.scan_start - 4096 : text_lo;
+    scan.warmup_bytes = (uint32_t)(scan.scan_start - warm_lo);
+    scan.bytes_requested += scan.warmup_bytes;
+    size_t snap_len = 0;
+    uint8_t *snap = snapshot_text(warm_lo, scan.scan_end, &snap_len, &scan);
+    if (!snap) { cs_free(insn, 1); cs_close(&h); return -5; }
+    const uint8_t *code = snap;
+    size_t remaining = snap_len;
+    uint64_t cur = warm_lo;
     uint64_t scanned = 0;
-    int found = 0, truncated = 0;
+    int found = 0;
 
     // 每寄存器缓存最近 ADRP 页; 被写即失效(局部窗口回溯的等价实现)。
     uint64_t reg_page[31]; uint8_t reg_valid[31];
@@ -795,7 +1001,6 @@ int analysis_find_string_refs(const char *image_query,
 
     while (cs_disasm_iter(h, &code, &remaining, &cur, insn)) {
         scanned++;
-        if (scanned >= XREF_MAX_SCAN_INSNS) { truncated = 1; break; }
         cs_arm64 *a = &insn->detail->arm64;
 
         if (insn->id == ARM64_INS_ADRP && a->op_count >= 2 &&
@@ -838,8 +1043,8 @@ int analysis_find_string_refs(const char *image_query,
                 if (query_addr) match = (str_addr == query_addr);
                 else if (query_str && query_str[0]) match = (strstr(sbuf, query_str) != NULL);
             }
-            if (match) {
-                if (found >= max_results) { truncated = 1; break; }
+            if (match && insn->address >= scan.scan_start) {
+                if (found >= max_results) { scan.result_limit_reached = 1; break; }
                 AnalysisStringRef *r = &out[found++];
                 r->ref_site = insn->address;
                 r->string_addr = str_addr;
@@ -868,10 +1073,9 @@ int analysis_find_string_refs(const char *image_query,
 
     cs_free(insn, 1);
     cs_close(&h);
-    if (snap_capped) truncated = 1;
     free(snap);
-    if (out_scanned) *out_scanned = scanned;
-    if (out_truncated) *out_truncated = truncated;
+    scan.scanned_insns = scanned;
+    if (out_scan) *out_scan = scan;
     return found;
 }
 
@@ -957,11 +1161,11 @@ typedef struct { int valid; uint64_t slot, load_site, sel_addr; char sel[256]; }
 
 int analysis_find_selector_refs(const char *image_query,
                                 const char *selector_q, int match_mode,
+                                uint64_t scan_offset, uint64_t scan_size,
                                 AnalysisSelectorRef *out, int max_results,
                                 char *out_image, size_t image_len,
-                                uint64_t *out_scanned, int *out_truncated) {
-    if (out_scanned) *out_scanned = 0;
-    if (out_truncated) *out_truncated = 0;
+                                AnalysisScanInfo *out_scan) {
+    if (out_scan) memset(out_scan, 0, sizeof(*out_scan));
     if (!out || max_results <= 0) return -1;
     if (!selector_q || !selector_q[0]) return -1;
 
@@ -973,6 +1177,10 @@ int analysis_find_selector_refs(const char *image_query,
     uint64_t text_lo = 0, text_hi = 0;
     if (!xref_sect_range(mh, slide, "__TEXT", "__text", &text_lo, &text_hi) &&
         !xref_sect_range(mh, slide, "__TEXT_EXEC", "__text", &text_lo, &text_hi)) return -2;
+
+    AnalysisScanInfo scan;
+    int prep = prepare_scan(text_lo, text_hi, scan_offset, scan_size, &scan);
+    if (prep != 0) return prep;
 
     uint64_t st_lo=0, st_hi=0, au_lo=0, au_hi=0, oc_lo=0, oc_hi=0;
     uint64_t sr_lo=0, sr_hi=0, got_lo=0, got_hi=0, agot_lo=0, agot_hi=0;
@@ -998,13 +1206,20 @@ int analysis_find_selector_refs(const char *image_query,
         cs_close(&h); cs_close(&hs); return -1;
     }
 
-    size_t snap_len = 0; int snap_capped = 0;
-    uint8_t *snap = snapshot_text(text_lo, text_hi, (size_t)XREF_MAX_SCAN_INSNS * 4, &snap_len, &snap_capped);
-    const uint8_t *code = snap;                 // NULL(OOM) 时 remaining=0, 主循环不执行
-    size_t remaining = snap ? snap_len : 0;
-    uint64_t cur = text_lo;
+    uint64_t warm_lo = scan.scan_start > text_lo + 4096 ? scan.scan_start - 4096 : text_lo;
+    scan.warmup_bytes = (uint32_t)(scan.scan_start - warm_lo);
+    scan.bytes_requested += scan.warmup_bytes;
+    size_t snap_len = 0;
+    uint8_t *snap = snapshot_text(warm_lo, scan.scan_end, &snap_len, &scan);
+    if (!snap) {
+        cs_free(insn, 1); cs_free(sinsn, 1); cs_close(&h); cs_close(&hs);
+        return -5;
+    }
+    const uint8_t *code = snap;
+    size_t remaining = snap_len;
+    uint64_t cur = warm_lo;
     uint64_t scanned = 0;
-    int found = 0, truncated = 0;
+    int found = 0;
 
     uint64_t reg_page[31]; uint8_t reg_valid[31];       // ADRP 页缓存
     SelReg   sel_state[31];                             // 各寄存器是否持 selector(来自 selref)
@@ -1015,7 +1230,6 @@ int analysis_find_selector_refs(const char *image_query,
 
     while (cs_disasm_iter(h, &code, &remaining, &cur, insn)) {
         scanned++;
-        if (scanned >= XREF_MAX_SCAN_INSNS) { truncated = 1; break; }
         cs_arm64 *a = &insn->detail->arm64;
 
         // ADRP: 设页缓存, 清该寄存器的 selector/msgSend 状态
@@ -1036,8 +1250,8 @@ int analysis_find_selector_refs(const char *image_query,
             uint64_t stubt = (uint64_t)a->operands[0].imm;
             char sel[256]; uint64_t sslot = 0;
             if (objc_stub_selector(hs, sinsn, stubt, sr_lo, sr_hi, sel, sizeof(sel), &sslot) &&
-                sel_match(sel, selector_q, match_mode)) {
-                if (found >= max_results) { truncated = 1; break; }
+                sel_match(sel, selector_q, match_mode) && insn->address >= scan.scan_start) {
+                if (found >= max_results) { scan.result_limit_reached = 1; break; }
                 AnalysisSelectorRef *r = &out[found++];
                 memset(r, 0, sizeof(*r));
                 r->call_site = insn->address;
@@ -1066,8 +1280,9 @@ int analysis_find_selector_refs(const char *image_query,
                 int ri = xreg_idx(a->operands[0].reg);
                 if (ri >= 0 && msg_state[ri]) variant = msg_name[ri];
             }
-            if (variant && sel_match(sel_state[x1].sel, selector_q, match_mode)) {
-                if (found >= max_results) { truncated = 1; break; }
+            if (variant && sel_match(sel_state[x1].sel, selector_q, match_mode) &&
+                insn->address >= scan.scan_start) {
+                if (found >= max_results) { scan.result_limit_reached = 1; break; }
                 AnalysisSelectorRef *r = &out[found++];
                 memset(r, 0, sizeof(*r));
                 r->call_site = insn->address;
@@ -1132,10 +1347,9 @@ int analysis_find_selector_refs(const char *image_query,
 
     cs_free(insn, 1); cs_free(sinsn, 1);
     cs_close(&h); cs_close(&hs);
-    if (snap_capped) truncated = 1;
     free(snap);
-    if (out_scanned) *out_scanned = scanned;
-    if (out_truncated) *out_truncated = truncated;
+    scan.scanned_insns = scanned;
+    if (out_scan) *out_scan = scan;
     return found;
 }
 
@@ -1145,12 +1359,12 @@ int analysis_find_selector_refs(const char *image_query,
 
 int analysis_find_function_refs(const char *image_query,
                                 uint64_t target_addr, int direction,
+                                uint64_t scan_offset, uint64_t scan_size,
                                 AnalysisFuncRef *out, int max_results,
                                 char *out_image, size_t image_len,
                                 uint64_t *out_query_start,
-                                uint64_t *out_scanned, int *out_truncated) {
-    if (out_scanned) *out_scanned = 0;
-    if (out_truncated) *out_truncated = 0;
+                                AnalysisScanInfo *out_scan) {
+    if (out_scan) memset(out_scan, 0, sizeof(*out_scan));
     if (out_query_start) *out_query_start = 0;
     if (!out || max_results <= 0 || target_addr == 0) return -1;
     int want_callers = (direction == 0 || direction == 2);
@@ -1164,6 +1378,10 @@ int analysis_find_function_refs(const char *image_query,
     uint64_t text_lo = 0, text_hi = 0;
     if (!xref_sect_range(mh, slide, "__TEXT", "__text", &text_lo, &text_hi) &&
         !xref_sect_range(mh, slide, "__TEXT_EXEC", "__text", &text_lo, &text_hi)) return -2;
+
+    AnalysisScanInfo scan;
+    int prep = prepare_scan(text_lo, text_hi, scan_offset, scan_size, &scan);
+    if (prep != 0) return prep;
 
     FuncStartsCache *fc = func_starts_for(mh, slide, text_hi);
 
@@ -1179,17 +1397,17 @@ int analysis_find_function_refs(const char *image_query,
     cs_insn *insn = cs_malloc(h);
     if (!insn) { cs_close(&h); return -1; }
 
-    size_t snap_len = 0; int snap_capped = 0;
-    uint8_t *snap = snapshot_text(text_lo, text_hi, (size_t)XREF_MAX_SCAN_INSNS * 4, &snap_len, &snap_capped);
-    const uint8_t *code = snap;                 // NULL(OOM) 时 remaining=0, 主循环不执行
-    size_t remaining = snap ? snap_len : 0;
-    uint64_t cur = text_lo;
+    size_t snap_len = 0;
+    uint8_t *snap = snapshot_text(scan.scan_start, scan.scan_end, &snap_len, &scan);
+    if (!snap) { cs_free(insn, 1); cs_close(&h); return -5; }
+    const uint8_t *code = snap;
+    size_t remaining = snap_len;
+    uint64_t cur = scan.scan_start;
     uint64_t scanned = 0;
-    int found = 0, truncated = 0;
+    int found = 0;
 
     while (cs_disasm_iter(h, &code, &remaining, &cur, insn)) {
         scanned++;
-        if (scanned >= XREF_MAX_SCAN_INSNS) { truncated = 1; break; }
         if (insn->id != ARM64_INS_BL) continue;
 
         cs_arm64 *a = &insn->detail->arm64;
@@ -1212,7 +1430,7 @@ int analysis_find_function_refs(const char *image_query,
             int rel_caller = (pass == 0);
             if (rel_caller && !is_caller) continue;
             if (!rel_caller && !is_callee) continue;
-            if (found >= max_results) { truncated = 1; break; }
+            if (found >= max_results) { scan.result_limit_reached = 1; break; }
             AnalysisFuncRef *r = &out[found++];
             memset(r, 0, sizeof(*r));
             strncpy(r->relation, rel_caller ? "caller" : "callee", sizeof(r->relation) - 1);
@@ -1224,15 +1442,14 @@ int analysis_find_function_refs(const char *image_query,
             r->to_offset = toff; r->to_func_start = tstart; r->to_func_vmaddr = tvm;
             snprintf(r->insn_text, sizeof(r->insn_text), "%s %s", insn->mnemonic, insn->op_str);
         }
-        if (truncated) break;
+        if (scan.result_limit_reached) break;
     }
 
     cs_free(insn, 1);
     cs_close(&h);
-    if (snap_capped) truncated = 1;
     free(snap);
-    if (out_scanned) *out_scanned = scanned;
-    if (out_truncated) *out_truncated = truncated;
+    scan.scanned_insns = scanned;
+    if (out_scan) *out_scan = scan;
     return found;
 }
 
