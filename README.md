@@ -64,17 +64,17 @@ make ipa
 
 产物位于 `build/trollstore/`，通过 TrollStore 安装后可在 App 内直接选择目标并注入。
 
-### PC 自动发现与 MCP 网关
+### PC 端连接与 MCP 网关
 
-插件会将实际 HTTP 端口发布为 `_idh-mcp._tcp.` Bonjour 服务。安装 `idh` 后，无需复制会变化的设备 IP：
+在电脑上安装 `idh`，手动连接设备（设备 IP 从 App 面板或局域网内获取）：
 
 ```bash
 pip install ios-decrypt-hub
-idh --devices
+idh connect <设备 IP>:8088
 idh mcp
 ```
 
-`idh mcp` 将设备上的 HTTP MCP 转换为本机 stdio MCP，可作为 Codex、Claude 等客户端的固定 MCP 配置。仓库的 `inject.sh` 会自动合并 `NSLocalNetworkUsageDescription` 与 `NSBonjourServices`；使用第三方注入器时，需要由宿主 App 或注入器提供这两个 `Info.plist` 声明。
+`idh mcp` 将设备上的 HTTP MCP 转换为本机 stdio MCP，可作为 Codex、Claude 等客户端的固定 MCP 配置。`connect` 会把设备保存为持久连接，之后 `devices` / `watch` / `open` / `mcp` 直接使用；也可以临时用 `--endpoint http://<设备 IP>:8088` 指定。
 
 ## 编译变体
 

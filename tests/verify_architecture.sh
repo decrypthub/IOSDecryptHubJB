@@ -52,7 +52,6 @@ expect_present "存在 ObjC swizzle 实现" 'method_setImplementation|method_exc
 
 echo "== 服务与协议边界 =="
 expect_present "HTTP 首选端口保持 8088" '^#define DH_HTTP_PORT_FIRST[[:space:]]+8088$' src/server/http_server.m
-expect_present "UDP 信标端口保持 8089" '^#define DH_BEACON_PORT[[:space:]]+8089$' src/server/udp_beacon.h
 expect_present "MCP 路径保持 /api/mcp" '"/api/mcp"' src/server/http_server.m
 
 echo "== constructor 顺序 =="

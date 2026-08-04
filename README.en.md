@@ -63,17 +63,17 @@ make ipa
 
 The artifact is placed under `build/trollstore/`. Once installed via TrollStore, you can select the target app and inject directly from within the app.
 
-### PC Auto-Discovery & MCP Gateway
+### PC Connection & MCP Gateway
 
-The plugin publishes its actual HTTP port as a `_idh-mcp._tcp.` Bonjour service. After installing `idh`, you no longer need to copy the ever-changing device IP:
+Install `idh` on your computer and connect to the device manually (the device IP is shown in the app panel or obtained from your LAN):
 
 ```bash
 pip install ios-decrypt-hub
-idh --devices
+idh connect <device IP>:8088
 idh mcp
 ```
 
-`idh mcp` converts the device's HTTP MCP into a local stdio MCP, usable as a fixed MCP configuration for clients such as Codex and Claude. The repo's `inject.sh` automatically merges `NSLocalNetworkUsageDescription` and `NSBonjourServices`; when using a third-party injector, the host app or injector must supply these two `Info.plist` declarations.
+`idh mcp` converts the device's HTTP MCP into a local stdio MCP, usable as a fixed MCP configuration for clients such as Codex and Claude. `connect` saves the device as a persistent connection; afterwards `devices` / `watch` / `open` / `mcp` use it directly. You can also pass `--endpoint http://<device IP>:8088` for a one-off connection.
 
 ## Build Variants
 

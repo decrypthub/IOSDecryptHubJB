@@ -59,7 +59,6 @@ SRC     := src/core/fishhook.c \
            src/hooks/behavior/hook_dyld.m \
            src/hooks/behavior/hook_network.m \
            src/server/http_server.m \
-           src/server/udp_beacon.m \
            src/server/mcp_server.m \
            src/server/dh_log_json.m \
            src/ui/ui_float.m \

@@ -78,7 +78,7 @@
 ```
 src/core/       fishhook、capture、日志、配置、Capstone、脱壳
 src/hooks/      crypto 与 behavior hook
-src/server/     HTTP、MCP、UDP 信标和 Web 面板
+src/server/     HTTP、MCP 和 Web 面板
 src/ui/         iOS 悬浮窗
 ```
 
@@ -109,7 +109,7 @@ dylib 运行在目标 App 进程中，任何异常都会直接终止宿主 App�
 
 - HTTP 与 MCP 共用 `0.0.0.0:8088`。
 - MCP 端点固定为 `POST /api/mcp`，不得改成 WebSocket 或新增端口。
-- 设备发现使用 UDP 信标端口 8089，不依赖 Bonjour / mDNS。
+- 设备连接由 PC 端 idh 手动指定（`idh connect <设备 IP>:8088` / `--endpoint`），无自动发现。
 - 服务无身份认证，仅限可信网络，不得在文档中建议暴露到公网。
 
 ---

@@ -68,7 +68,7 @@ IOSDecryptHub/
 - **Hook 只用 fishhook + ObjC swizzle**。不做 inline hook，不生成可执行内存
 - **不崩溃原则**：dylib 在别人进程里跑，任何 crash 都杀死宿主 App
 - **MCP 复用 8088 端口**（`POST /api/mcp`），不额外开端口
-- **UDP 信标发现**（端口 8089），不依赖 Bonjour/mDNS
+- **手动连接**：PC 端 `idh connect <设备 IP>:8088` 指定设备，无自动发现
 
 ---
 
