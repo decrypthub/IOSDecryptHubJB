@@ -3,7 +3,7 @@
 # 用法: bash scripts/publish_release.sh <repo> <tag> <dylib_path>
 set -euo pipefail
 
-REPO="${1:-taisuii/ios-decrypt-helper}"
+REPO="${1:-taisuii/IOSDecryptHub}"
 TAG="${2:-v1.1.0}"
 DYLIB="${3:-decrypt_helper.dylib}"  # 内部构建产物名, 打包时重命名为 IOSDecryptHub.dylib
 NOTES_PATH="${4:-}"

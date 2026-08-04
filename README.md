@@ -13,7 +13,7 @@ IOSDecryptHub 是一个注入到 iOS App 进程中的运行时分析 dylib，可
 
 ## 获取 dylib
 
-从 [官网首页](https://ios.decrypthub.com/) 或 [GitHub Releases](https://github.com/taisuii/ios-decrypt-helper/releases) 下载 `decrypt_helper.dylib`，或自行编译：
+从 [官网首页](https://ios.decrypthub.com/) 或 [GitHub Releases](https://github.com/taisuii/IOSDecryptHub/releases) 下载 `decrypt_helper.dylib`，或自行编译：
 
 ```bash
 make
@@ -100,4 +100,4 @@ make deb-roothide     # roothide（arm64e）
 - 注入、重签和脱壳能力受设备环境及目标 App 保护机制影响。
 - 请勿将捕获到的 Key、口令、明文或其他敏感数据提交到公开 Issue。
 
-遇到问题可在 [GitHub Issues](https://github.com/taisuii/ios-decrypt-helper/issues/new/choose) 反馈。
+遇到问题可在 [GitHub Issues](https://github.com/taisuii/IOSDecryptHub/issues/new/choose) 反馈。

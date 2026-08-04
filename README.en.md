@@ -12,7 +12,7 @@ For the full feature set and a live demo, visit: [ios.decrypthub.com](https://io
 
 ## Getting the dylib
 
-Download `decrypt_helper.dylib` from [GitHub Releases](https://github.com/taisuii/ios-decrypt-helper/releases), or build it yourself:
+Download `decrypt_helper.dylib` from [GitHub Releases](https://github.com/taisuii/IOSDecryptHub/releases), or build it yourself:
 
 ```bash
 make
@@ -101,4 +101,4 @@ arm64e process.
 - Injection, re-signing and decryption capabilities depend on the device environment and the target app's protections.
 - Do not post captured keys, passwords, plaintext or other sensitive data to public issues.
 
-Report problems via [GitHub Issues](https://github.com/taisuii/ios-decrypt-helper/issues/new/choose).
+Report problems via [GitHub Issues](https://github.com/taisuii/IOSDecryptHub/issues/new/choose).
