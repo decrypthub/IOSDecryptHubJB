@@ -36,6 +36,158 @@ static void arch_to_cs(const char *arch, cs_arch *out_arch, cs_mode *out_mode) {
     *out_mode = m;
 }
 
+static void copy_text(char *out, size_t len, const char *value) {
+    if (!out || len == 0) return;
+    if (!value) value = "";
+    strncpy(out, value, len - 1);
+    out[len - 1] = '\0';
+}
+
+static const char *arm64_shift_name(arm64_shifter shift) {
+    switch (shift) {
+        case ARM64_SFT_LSL: return "lsl";
+        case ARM64_SFT_MSL: return "msl";
+        case ARM64_SFT_LSR: return "lsr";
+        case ARM64_SFT_ASR: return "asr";
+        case ARM64_SFT_ROR: return "ror";
+        default: return "";
+    }
+}
+
+static const char *arm64_ext_name(arm64_extender ext) {
+    switch (ext) {
+        case ARM64_EXT_UXTB: return "uxtb";
+        case ARM64_EXT_UXTH: return "uxth";
+        case ARM64_EXT_UXTW: return "uxtw";
+        case ARM64_EXT_UXTX: return "uxtx";
+        case ARM64_EXT_SXTB: return "sxtb";
+        case ARM64_EXT_SXTH: return "sxth";
+        case ARM64_EXT_SXTW: return "sxtw";
+        case ARM64_EXT_SXTX: return "sxtx";
+        default: return "";
+    }
+}
+
+static const char *arm_shift_name(arm_shifter shift) {
+    switch (shift) {
+        case ARM_SFT_ASR: return "asr";
+        case ARM_SFT_LSL: return "lsl";
+        case ARM_SFT_LSR: return "lsr";
+        case ARM_SFT_ROR: return "ror";
+        case ARM_SFT_RRX: return "rrx";
+        case ARM_SFT_ASR_REG: return "asr_reg";
+        case ARM_SFT_LSL_REG: return "lsl_reg";
+        case ARM_SFT_LSR_REG: return "lsr_reg";
+        case ARM_SFT_ROR_REG: return "ror_reg";
+        case ARM_SFT_RRX_REG: return "rrx_reg";
+        default: return "";
+    }
+}
+
+static void copy_reg_name(csh handle, unsigned int reg, char out[16]) {
+    copy_text(out, 16, reg ? cs_reg_name(handle, reg) : "");
+}
+
+static void copy_arm64_operand(csh handle, const cs_arm64_op *src, AnalysisOperand *dst) {
+    dst->raw_type = (uint16_t)src->type;
+    dst->access = src->access;
+    copy_text(dst->shift, sizeof(dst->shift), arm64_shift_name(src->shift.type));
+    dst->shift_value = (uint8_t)(src->shift.value > UINT8_MAX ? UINT8_MAX : src->shift.value);
+    copy_text(dst->extender, sizeof(dst->extender), arm64_ext_name(src->ext));
+    switch (src->type) {
+        case ARM64_OP_REG:
+            dst->type = AnalysisOperandRegister;
+            copy_reg_name(handle, src->reg, dst->reg);
+            break;
+        case ARM64_OP_IMM:
+        case ARM64_OP_CIMM:
+            dst->type = AnalysisOperandImmediate;
+            dst->immediate = src->imm;
+            break;
+        case ARM64_OP_MEM:
+            dst->type = AnalysisOperandMemory;
+            copy_reg_name(handle, src->mem.base, dst->base);
+            copy_reg_name(handle, src->mem.index, dst->index);
+            dst->displacement = src->mem.disp;
+            break;
+        case ARM64_OP_FP:
+            dst->type = AnalysisOperandFloatingPoint;
+            dst->fp = src->fp;
+            break;
+        default:
+            dst->type = AnalysisOperandOther;
+            break;
+    }
+}
+
+static void copy_arm_operand(csh handle, const cs_arm_op *src, AnalysisOperand *dst) {
+    dst->raw_type = (uint16_t)src->type;
+    dst->access = src->access;
+    copy_text(dst->shift, sizeof(dst->shift), arm_shift_name(src->shift.type));
+    dst->shift_value = (uint8_t)(src->shift.value > UINT8_MAX ? UINT8_MAX : src->shift.value);
+    switch (src->type) {
+        case ARM_OP_REG:
+            dst->type = AnalysisOperandRegister;
+            copy_reg_name(handle, (unsigned int)src->reg, dst->reg);
+            break;
+        case ARM_OP_IMM:
+        case ARM_OP_CIMM:
+        case ARM_OP_PIMM:
+            dst->type = AnalysisOperandImmediate;
+            dst->immediate = src->imm;
+            break;
+        case ARM_OP_MEM:
+            dst->type = AnalysisOperandMemory;
+            copy_reg_name(handle, (unsigned int)src->mem.base, dst->base);
+            copy_reg_name(handle, (unsigned int)src->mem.index, dst->index);
+            dst->displacement = src->mem.disp;
+            break;
+        case ARM_OP_FP:
+            dst->type = AnalysisOperandFloatingPoint;
+            dst->fp = src->fp;
+            break;
+        default:
+            dst->type = AnalysisOperandOther;
+            break;
+    }
+}
+
+static void copy_disassembled_insn(csh handle, cs_arch arch,
+                                   const cs_insn *insn, AnalysisInsn *out) {
+    memset(out, 0, sizeof(*out));
+    out->address = insn->address;
+    out->id = insn->id;
+    out->size = (uint8_t)(insn->size > UINT8_MAX ? UINT8_MAX : insn->size);
+    copy_text(out->mnemonic, sizeof(out->mnemonic), insn->mnemonic);
+    copy_text(out->op_str, sizeof(out->op_str), insn->op_str);
+    size_t nb = insn->size < sizeof(out->bytes) ? insn->size : sizeof(out->bytes);
+    memcpy(out->bytes, insn->bytes, nb);
+    if (!insn->detail) return;
+
+    out->is_jump = cs_insn_group(handle, insn, CS_GRP_JUMP) ? 1 : 0;
+    out->is_call = cs_insn_group(handle, insn, CS_GRP_CALL) ? 1 : 0;
+    out->is_return = cs_insn_group(handle, insn, CS_GRP_RET) ? 1 : 0;
+    out->writeback = insn->detail->writeback ? 1 : 0;
+
+    uint8_t source_count = 0;
+    if (arch == CS_ARCH_ARM64) {
+        const cs_arm64 *detail = &insn->detail->arm64;
+        source_count = detail->op_count;
+        out->writes_flags = detail->update_flags ? 1 : 0;
+        out->operand_count = source_count > ANALYSIS_MAX_OPERANDS ? ANALYSIS_MAX_OPERANDS : source_count;
+        for (uint8_t i = 0; i < out->operand_count; i++)
+            copy_arm64_operand(handle, &detail->operands[i], &out->operands[i]);
+    } else if (arch == CS_ARCH_ARM) {
+        const cs_arm *detail = &insn->detail->arm;
+        source_count = detail->op_count;
+        out->writes_flags = detail->update_flags ? 1 : 0;
+        out->operand_count = source_count > ANALYSIS_MAX_OPERANDS ? ANALYSIS_MAX_OPERANDS : source_count;
+        for (uint8_t i = 0; i < out->operand_count; i++)
+            copy_arm_operand(handle, &detail->operands[i], &out->operands[i]);
+    }
+    out->operands_truncated = source_count > ANALYSIS_MAX_OPERANDS ? 1 : 0;
+}
+
 int analysis_disassemble(const uint8_t *code, size_t size, uint64_t address,
                          const char *arch, AnalysisInsn *out, int max_count) {
     if (!code || size == 0 || !out || max_count <= 0) return -1;
@@ -45,6 +197,10 @@ int analysis_disassemble(const uint8_t *code, size_t size, uint64_t address,
 
     csh handle = 0;
     if (cs_open(cs_a, cs_m, &handle) != CS_ERR_OK) return -1;
+    if (cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK) {
+        cs_close(&handle);
+        return -1;
+    }
 
     cs_insn *insn = cs_malloc(handle);
     if (!insn) { cs_close(&handle); return -1; }
@@ -56,15 +212,7 @@ int analysis_disassemble(const uint8_t *code, size_t size, uint64_t address,
 
     while (count < max_count && remaining > 0 &&
            cs_disasm_iter(handle, &p, &remaining, &cur, insn)) {
-        AnalysisInsn *o = &out[count];
-        o->address = insn->address;
-        o->size = insn->size;
-        strncpy(o->mnemonic, insn->mnemonic, sizeof(o->mnemonic) - 1);
-        o->mnemonic[sizeof(o->mnemonic) - 1] = '\0';
-        strncpy(o->op_str, insn->op_str, sizeof(o->op_str) - 1);
-        o->op_str[sizeof(o->op_str) - 1] = '\0';
-        size_t nb = insn->size < sizeof(o->bytes) ? insn->size : sizeof(o->bytes);
-        memcpy(o->bytes, insn->bytes, nb);
+        copy_disassembled_insn(handle, cs_a, insn, &out[count]);
         count++;
     }
 
@@ -113,6 +261,11 @@ int analysis_disassemble_func(uint64_t address, size_t max_bytes, const char *ar
     arch_to_cs(arch, &cs_a, &cs_m);
     csh handle = 0;
     if (cs_open(cs_a, cs_m, &handle) != CS_ERR_OK) { free(buf); return -1; }
+    if (cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK) {
+        cs_close(&handle);
+        free(buf);
+        return -1;
+    }
     cs_insn *insn = cs_malloc(handle);
     if (!insn) { cs_close(&handle); free(buf); return -1; }
 
@@ -122,15 +275,7 @@ int analysis_disassemble_func(uint64_t address, size_t max_bytes, const char *ar
     uint64_t cur = address;
     while (count < max_count && remaining > 0 &&
            cs_disasm_iter(handle, &p, &remaining, &cur, insn)) {
-        AnalysisInsn *o = &out[count];
-        o->address = insn->address;
-        o->size = insn->size;
-        strncpy(o->mnemonic, insn->mnemonic, sizeof(o->mnemonic) - 1);
-        o->mnemonic[sizeof(o->mnemonic) - 1] = '\0';
-        strncpy(o->op_str, insn->op_str, sizeof(o->op_str) - 1);
-        o->op_str[sizeof(o->op_str) - 1] = '\0';
-        size_t nb = insn->size < sizeof(o->bytes) ? insn->size : sizeof(o->bytes);
-        memcpy(o->bytes, insn->bytes, nb);
+        copy_disassembled_insn(handle, cs_a, insn, &out[count]);
         count++;
         // 函数边界启发式: 遇到 ret 收尾 (arm64 函数以 ret 结束)。
         if (strcmp(insn->mnemonic, "ret") == 0) break;

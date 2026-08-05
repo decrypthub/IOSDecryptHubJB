@@ -71,19 +71,192 @@ static NSDictionary *tool_err(NSString *message) {
 
 // hex 编解码统一用 log_store 的 DHHexFromData / DHDataFromHex, 不再各处手写。
 
-static NSArray *insns_to_array(const AnalysisInsn *insns, int count) {
+static NSString *operand_access_name(uint8_t access) {
+    if ((access & 3) == 3) return @"read_write";
+    if (access & 1) return @"read";
+    if (access & 2) return @"write";
+    return @"unknown";
+}
+
+static NSDictionary *operand_to_dict(const AnalysisOperand *op) {
+    NSMutableDictionary *out = [@{
+        @"access": operand_access_name(op->access),
+        @"raw_type": @(op->raw_type),
+    } mutableCopy];
+    if (op->shift[0]) out[@"shift"] = @{ @"type": @(op->shift), @"value": @(op->shift_value) };
+    if (op->extender[0]) out[@"extender"] = @(op->extender);
+
+    switch (op->type) {
+        case AnalysisOperandRegister:
+            out[@"type"] = @"register";
+            out[@"register"] = @(op->reg);
+            break;
+        case AnalysisOperandImmediate:
+            out[@"type"] = @"immediate";
+            out[@"value"] = [NSString stringWithFormat:@"0x%llx", (uint64_t)op->immediate];
+            out[@"signed_value"] = [NSString stringWithFormat:@"%lld", op->immediate];
+            break;
+        case AnalysisOperandMemory:
+            out[@"type"] = @"memory";
+            out[@"base"] = op->base[0] ? (id)@(op->base) : (id)[NSNull null];
+            out[@"index"] = op->index[0] ? (id)@(op->index) : (id)[NSNull null];
+            out[@"displacement"] = [NSString stringWithFormat:@"%lld", op->displacement];
+            out[@"displacement_hex"] = [NSString stringWithFormat:@"0x%llx", (uint64_t)op->displacement];
+            break;
+        case AnalysisOperandFloatingPoint:
+            out[@"type"] = @"floating_point";
+            out[@"value"] = @(op->fp);
+            break;
+        default:
+            out[@"type"] = @"other";
+            break;
+    }
+    return out;
+}
+
+typedef struct {
+    uint64_t value;
+    uint64_t known_mask;
+    uint64_t sequence_start;
+    uint8_t width;
+    uint8_t parts;
+    uint8_t valid;
+} MoveWideState;
+
+// ARM64 move-wide 是固定 32 位编码。直接按编码识别，避免 Capstone 把 MOVZ 显示为 MOV 别名。
+static BOOL decode_move_wide(const AnalysisInsn *insn, uint8_t *kind, uint8_t *reg,
+                             uint8_t *width, uint16_t *imm16, uint8_t *shift) {
+    if (insn->size != 4) return NO;
+    uint32_t word = (uint32_t)insn->bytes[0] |
+                    ((uint32_t)insn->bytes[1] << 8) |
+                    ((uint32_t)insn->bytes[2] << 16) |
+                    ((uint32_t)insn->bytes[3] << 24);
+    if ((word & 0x1f800000U) != 0x12800000U) return NO;
+    uint8_t opc = (uint8_t)((word >> 29) & 3);
+    if (opc == 1) return NO;
+    uint8_t sf = (uint8_t)(word >> 31);
+    uint8_t hw = (uint8_t)((word >> 21) & 3);
+    if (!sf && hw > 1) return NO;
+    *kind = opc; // 0=MOVN, 2=MOVZ, 3=MOVK
+    *reg = (uint8_t)(word & 31);
+    *width = sf ? 64 : 32;
+    *imm16 = (uint16_t)((word >> 5) & 0xffff);
+    *shift = (uint8_t)(hw * 16);
+    return YES;
+}
+
+static int arm64_gpr_index(const char *name) {
+    if (!name || !name[0]) return -1;
+    if (strcmp(name, "fp") == 0) return 29;
+    if (strcmp(name, "lr") == 0) return 30;
+    if ((name[0] != 'x' && name[0] != 'w') || name[1] < '0' || name[1] > '9') return -1;
+    char *end = NULL;
+    long value = strtol(name + 1, &end, 10);
+    return end && *end == '\0' && value >= 0 && value <= 30 ? (int)value : -1;
+}
+
+static void add_unique_reg(NSMutableArray *array, const char *name) {
+    if (!name || !name[0]) return;
+    NSString *value = @(name);
+    if (![array containsObject:value]) [array addObject:value];
+}
+
+static NSArray *insns_to_array(const AnalysisInsn *insns, int count, NSString *arch) {
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:count];
+    MoveWideState constants[31];
+    memset(constants, 0, sizeof(constants));
+    BOOL trackMoveWide = [arch isEqualToString:@"arm64"] || [arch isEqualToString:@"aarch64"];
     for (int i = 0; i < count; i++) {
         const AnalysisInsn *n = &insns[i];
         NSMutableString *bhex = [NSMutableString stringWithCapacity:n->size * 2];
         for (int j = 0; j < n->size; j++) [bhex appendFormat:@"%02x", n->bytes[j]];
-        [arr addObject:@{
+        NSMutableArray *operands = [NSMutableArray arrayWithCapacity:n->operand_count];
+        NSMutableArray *regsRead = [NSMutableArray array];
+        NSMutableArray *regsWritten = [NSMutableArray array];
+        NSString *target = nil;
+        for (uint8_t oi = 0; oi < n->operand_count; oi++) {
+            const AnalysisOperand *op = &n->operands[oi];
+            [operands addObject:operand_to_dict(op)];
+            if (op->type == AnalysisOperandRegister) {
+                if (op->access & 1) add_unique_reg(regsRead, op->reg);
+                if (op->access & 2) add_unique_reg(regsWritten, op->reg);
+            } else if (op->type == AnalysisOperandMemory) {
+                add_unique_reg(regsRead, op->base);
+                add_unique_reg(regsRead, op->index);
+                if (n->writeback) add_unique_reg(regsWritten, op->base);
+            } else if (!target && op->type == AnalysisOperandImmediate && (n->is_jump || n->is_call)) {
+                target = [NSString stringWithFormat:@"0x%llx", (uint64_t)op->immediate];
+            }
+        }
+
+        NSMutableArray *groups = [NSMutableArray array];
+        if (n->is_jump) [groups addObject:@"jump"];
+        if (n->is_call) [groups addObject:@"call"];
+        if (n->is_return) [groups addObject:@"return"];
+        NSMutableDictionary *row = [@{
             @"address": [NSString stringWithFormat:@"0x%llx", n->address],
+            @"id": @(n->id),
             @"mnemonic": @(n->mnemonic),
             @"op_str": @(n->op_str),
             @"bytes": bhex,
             @"size": @(n->size),
-        }];
+            @"operands": operands,
+            @"operands_truncated": n->operands_truncated ? @YES : @NO,
+            @"registers_read": regsRead,
+            @"registers_written": regsWritten,
+            @"groups": groups,
+            @"writes_flags": n->writes_flags ? @YES : @NO,
+            @"writeback": n->writeback ? @YES : @NO,
+        } mutableCopy];
+        if (target) row[@"target"] = target;
+
+        uint8_t kind = 0, reg = 0, width = 0, shift = 0;
+        uint16_t imm16 = 0;
+        BOOL isMoveWide = trackMoveWide && decode_move_wide(n, &kind, &reg, &width, &imm16, &shift) && reg < 31;
+        if (isMoveWide) {
+            uint64_t widthMask = width == 64 ? UINT64_MAX : UINT32_MAX;
+            uint64_t partMask = ((uint64_t)0xffff << shift) & widthMask;
+            uint64_t part = ((uint64_t)imm16 << shift) & widthMask;
+            MoveWideState *state = &constants[reg];
+            if (kind == 0 || kind == 2) {
+                state->value = kind == 0 ? (~part & widthMask) : part;
+                state->known_mask = widthMask;
+                state->sequence_start = n->address;
+                state->width = width;
+                state->parts = 1;
+                state->valid = 1;
+            } else {
+                if (!state->valid || state->width != width) {
+                    memset(state, 0, sizeof(*state));
+                    state->sequence_start = n->address;
+                    state->width = width;
+                    state->valid = 1;
+                }
+                state->value = (state->value & ~partMask) | part;
+                state->known_mask |= partMask;
+                if (state->parts < UINT8_MAX) state->parts++;
+            }
+            char regName[8];
+            snprintf(regName, sizeof(regName), "%c%u", width == 64 ? 'x' : 'w', reg);
+            row[@"constant_build"] = @{
+                @"register": @(regName),
+                @"value": [NSString stringWithFormat:width == 64 ? @"0x%016llx" : @"0x%08llx", state->value],
+                @"known_mask": [NSString stringWithFormat:width == 64 ? @"0x%016llx" : @"0x%08llx", state->known_mask],
+                @"complete": state->known_mask == widthMask ? @YES : @NO,
+                @"width": @(width),
+                @"sequence_start": [NSString stringWithFormat:@"0x%llx", state->sequence_start],
+                @"instruction_count": @(state->parts),
+            };
+        } else if (trackMoveWide) {
+            for (NSString *written in regsWritten) {
+                int idx = arm64_gpr_index(written.UTF8String);
+                if (idx >= 0) memset(&constants[idx], 0, sizeof(constants[idx]));
+            }
+        }
+
+        [arr addObject:row];
+        // 不跨控制流传播，宁可少报也不把另一条路径的常量拼进来。
+        if (n->is_jump || n->is_call || n->is_return) memset(constants, 0, sizeof(constants));
     }
     return arr;
 }
@@ -100,16 +273,19 @@ static NSDictionary *tool_disassemble(NSDictionary *args) {
     if (code.length == 0) return tool_err(@"'bytes' has no valid hex");
 
     uint64_t addr = addrStr ? strtoull(addrStr.UTF8String, NULL, 0) : 0;
-    AnalysisInsn insns[256];
+    AnalysisInsn *insns = calloc(256, sizeof(AnalysisInsn));
+    if (!insns) return tool_err(@"out of memory");
     int n = analysis_disassemble(code.bytes, code.length, addr, arch.UTF8String, insns, 256);
-    if (n < 0) return tool_err(@"capstone init failed");
+    if (n < 0) { free(insns); return tool_err(@"capstone init failed"); }
 
     BOOL truncated = (n == 256);
+    NSArray *instructions = insns_to_array(insns, n, arch);
+    free(insns);
     return tool_ok(@{
         @"arch": arch,
         @"count": @(n),
         @"truncated": @(truncated),
-        @"instructions": insns_to_array(insns, n),
+        @"instructions": instructions,
     });
 }
 
@@ -125,17 +301,20 @@ static NSDictionary *tool_analyze_function(NSDictionary *args) {
     size_t size = (size_t)sizeNum.unsignedLongLongValue;
     if (addr == 0 || size == 0) return tool_err(@"'address' and 'size' must be non-zero");
 
-    AnalysisInsn insns[512];
+    AnalysisInsn *insns = calloc(512, sizeof(AnalysisInsn));
+    if (!insns) return tool_err(@"out of memory");
     int n = analysis_disassemble_at(addr, size, arch.UTF8String, insns, 512);
-    if (n == -2) return tool_err([NSString stringWithFormat:@"memory not readable at 0x%llx", addr]);
-    if (n < 0)  return tool_err(@"capstone init failed");
+    if (n == -2) { free(insns); return tool_err([NSString stringWithFormat:@"memory not readable at 0x%llx", addr]); }
+    if (n < 0)  { free(insns); return tool_err(@"capstone init failed"); }
+    NSArray *instructions = insns_to_array(insns, n, arch);
+    free(insns);
 
     return tool_ok(@{
         @"address": [NSString stringWithFormat:@"0x%llx", addr],
         @"arch": arch,
         @"count": @(n),
         @"truncated": (n == 512) ? @YES : @NO,
-        @"instructions": insns_to_array(insns, n),
+        @"instructions": instructions,
     });
 }
 
@@ -255,7 +434,8 @@ static NSDictionary *tool_disassemble_function(NSDictionary *args) {
     if (maxBytes == 0) maxBytes = 4096;
     if (maxBytes > 65536) maxBytes = 65536;
 
-    AnalysisInsn insns[1024];
+    AnalysisInsn *insns = calloc(1024, sizeof(AnalysisInsn));
+    if (!insns) return tool_err(@"out of memory");
     AnalysisAddressInfo info;
     BOOL haveFunction = analysis_address_info(addr, &info) == 0 && info.has_function &&
                         info.function_end > info.function_start;
@@ -267,11 +447,13 @@ static NSDictionary *tool_disassemble_function(NSDictionary *args) {
     int n = haveFunction
         ? analysis_disassemble_at(readStart, readSize, arch.UTF8String, insns, 1024)
         : analysis_disassemble_func(readStart, readSize, arch.UTF8String, insns, 1024);
-    if (n == -2) return tool_err([NSString stringWithFormat:@"memory not readable at 0x%llx", addr]);
-    if (n < 0)  return tool_err(@"capstone init failed");
+    if (n == -2) { free(insns); return tool_err([NSString stringWithFormat:@"memory not readable at 0x%llx", addr]); }
+    if (n < 0)  { free(insns); return tool_err(@"capstone init failed"); }
     BOOL endsWithRet = (n > 0 && strcmp(insns[n-1].mnemonic, "ret") == 0);
     uint64_t decodedEnd = n > 0 ? insns[n - 1].address + insns[n - 1].size : readStart;
     BOOL truncated = haveFunction ? decodedEnd < info.function_end : (!endsWithRet && readSize == maxBytes);
+    NSArray *instructions = insns_to_array(insns, n, arch);
+    free(insns);
     NSMutableDictionary *result = [@{
         @"address": [NSString stringWithFormat:@"0x%llx", addr],
         @"requested_address": [NSString stringWithFormat:@"0x%llx", addr],
@@ -286,7 +468,7 @@ static NSDictionary *tool_disassemble_function(NSDictionary *args) {
         @"boundary_complete": haveFunction ? @(decodedEnd >= info.function_end) : @(endsWithRet),
         @"truncated": @(truncated),
         @"next_address": truncated ? (id)[NSString stringWithFormat:@"0x%llx", decodedEnd] : (id)[NSNull null],
-        @"instructions": insns_to_array(insns, n),
+        @"instructions": instructions,
     } mutableCopy];
     if (haveFunction) {
         result[@"resolved_end"] = [NSString stringWithFormat:@"0x%llx", info.function_end];
@@ -1576,7 +1758,7 @@ static NSArray *tool_definitions(void) {
         },
         @{
             @"name": @"disassemble",
-            @"description": @"Disassemble a hex byte string into assembly instructions (ARM64/ARM/Thumb).",
+            @"description": @"Disassemble a hex byte string into structured instructions (ARM64/ARM/Thumb): typed operands, explicit register access, control-flow groups/targets, and bounded ARM64 MOVZ/MOVN/MOVK constant reconstruction. Constant tracking is linear and resets at control-flow boundaries; it is not CFG analysis.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
@@ -1589,7 +1771,7 @@ static NSArray *tool_definitions(void) {
         },
         @{
             @"name": @"analyze_function",
-            @"description": @"Read `size` bytes from process memory at `address` and disassemble them. Safe against unmapped addresses.",
+            @"description": @"Read `size` bytes from process memory at `address` and return structured instructions. Includes typed operands/register access and bounded ARM64 move-wide constant reconstruction. Safe against unmapped addresses.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
@@ -1602,7 +1784,7 @@ static NSArray *tool_definitions(void) {
         },
         @{
             @"name": @"disassemble_function",
-            @"description": @"Disassemble the function containing `address`. When LC_FUNCTION_STARTS is available, an interior address is normalized to the real function start and decoding stops at the next function entry instead of the first ret. The response reports resolved_start/end, requested_offset, boundary_source/confidence and truncation. Falls back to a low-confidence ret heuristic only when function metadata is unavailable.",
+            @"description": @"Disassemble the function containing `address` into structured instructions. When LC_FUNCTION_STARTS is available, an interior address is normalized to the real function start and decoding stops at the next function entry instead of the first ret. The response reports resolved_start/end, requested_offset, boundary_source/confidence and truncation. Falls back to a low-confidence ret heuristic only when function metadata is unavailable. ARM64 MOVZ/MOVN/MOVK constants are reconstructed only within the returned linear instruction stream.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{

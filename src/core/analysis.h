@@ -17,13 +17,50 @@ extern "C" {
 // 反汇编
 // ============================================================
 
+// 结构化操作数。保留常用寄存器/立即数/内存字段，避免 MCP 调用方重新解析 op_str。
+// 固定上限保证注入进程内的内存占用可预测；ARM64 当前最多 8 个操作数。
+#define ANALYSIS_MAX_OPERANDS 8
+
+typedef enum {
+    AnalysisOperandInvalid = 0,
+    AnalysisOperandRegister,
+    AnalysisOperandImmediate,
+    AnalysisOperandMemory,
+    AnalysisOperandFloatingPoint,
+    AnalysisOperandOther,
+} AnalysisOperandType;
+
+typedef struct {
+    uint8_t  type;              // AnalysisOperandType
+    uint8_t  access;            // bit 0=read, bit 1=write
+    uint16_t raw_type;          // Capstone 原始 operand type，供 unknown/other 排查
+    int64_t  immediate;
+    double   fp;
+    int64_t  displacement;
+    char     reg[16];
+    char     base[16];
+    char     index[16];
+    char     shift[8];
+    uint8_t  shift_value;
+    char     extender[8];
+} AnalysisOperand;
+
 // 单条反汇编指令
 typedef struct {
     uint64_t address;          // 指令地址
+    uint32_t id;               // Capstone instruction id
     char     mnemonic[32];     // 助记符 (如 "stp", "mov")
     char     op_str[192];      // 操作数字符串
     uint8_t  bytes[16];        // 原始机器码
     uint8_t  size;             // 指令长度 (字节)
+    uint8_t  operand_count;
+    uint8_t  operands_truncated;
+    uint8_t  is_jump;
+    uint8_t  is_call;
+    uint8_t  is_return;
+    uint8_t  writes_flags;
+    uint8_t  writeback;
+    AnalysisOperand operands[ANALYSIS_MAX_OPERANDS];
 } AnalysisInsn;
 
 // 反汇编一段字节缓冲。

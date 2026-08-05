@@ -94,8 +94,21 @@ eq "$(jq -r '[.result.tools[].name] as $names |
      "correlate_request","get_event","get_diag","hook_import","hook_method","unhook"] |
     all(. as $name | $names | index($name) != null)' "$RESULT_DIR/tools.json")" \
     "true" "tools/list 包含关键兼容工具集合"
-eq "$(mc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"fd7bbfa9","arch":"arm64"}}}' | jq -r '.result.structuredContent.instructions[0].mnemonic')" "stp" "disassemble fd7bbfa9 → stp"
-eq "$(mc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"c0 03 5f d6","arch":"arm64"}}}' | jq -r '.result.structuredContent.instructions[0].mnemonic')" "ret" "disassemble 带空格 hex → ret (DHDataFromHex 容错)"
+mc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"fd7bbfa9","arch":"arm64"}}}' > "$RESULT_DIR/dh_disasm_stp.json"
+eq "$(jq -r '.result.structuredContent.instructions[0].mnemonic' "$RESULT_DIR/dh_disasm_stp.json")" "stp" "disassemble fd7bbfa9 → stp"
+eq "$(jq -r '.result.structuredContent.instructions[0].operands[0].type' "$RESULT_DIR/dh_disasm_stp.json")" "register" "结构化 operand 标记寄存器"
+eq "$(jq -r '.result.structuredContent.instructions[0].operands[2].type' "$RESULT_DIR/dh_disasm_stp.json")" "memory" "结构化 operand 标记内存引用"
+eq "$(jq -r '.result.structuredContent.instructions[0].operands[2].base' "$RESULT_DIR/dh_disasm_stp.json")" "sp" "内存 operand 返回基址寄存器"
+
+mc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"c0 03 5f d6","arch":"arm64"}}}' > "$RESULT_DIR/dh_disasm_ret.json"
+eq "$(jq -r '.result.structuredContent.instructions[0].mnemonic' "$RESULT_DIR/dh_disasm_ret.json")" "ret" "disassemble 带空格 hex → ret (DHDataFromHex 容错)"
+eq "$(jq -r '.result.structuredContent.instructions[0].groups|index("return")!=null' "$RESULT_DIR/dh_disasm_ret.json")" "true" "结构化分组识别 return"
+
+# movz x0,#0x1234; movk x0,#0x5678,lsl#16 → 0x56781234。仅在线性流内拼接，不跨分支。
+mc '{"jsonrpc":"2.0","id":48,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"804682d200cf aaf2","arch":"arm64"}}}' > "$RESULT_DIR/dh_disasm_const.json"
+eq "$(jq -r '.result.structuredContent.instructions[1].constant_build.value' "$RESULT_DIR/dh_disasm_const.json")" "0x0000000056781234" "MOVZ/MOVK 拼接 64 位常量"
+eq "$(jq -r '.result.structuredContent.instructions[1].constant_build.complete' "$RESULT_DIR/dh_disasm_const.json")" "true" "MOVZ 起始的常量链标记完整"
+eq "$(jq -r '.result.structuredContent.instructions[1].constant_build.instruction_count' "$RESULT_DIR/dh_disasm_const.json")" "2" "常量结果保留指令链长度"
 
 # resolve_symbol 参数统一 + 中间地址自动归一到函数入口。
 MAIN_INFO=$(mc '{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"resolve_symbol","arguments":{"symbol":"main"}}}')
