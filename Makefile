@@ -71,6 +71,7 @@ FRAMEWORKS := -framework Foundation -framework UIKit -framework CoreGraphics -fr
 #   CAPSTONE_USE_SYS_DYN_MEM — 用系统 malloc/free, 否则 cs_open 返回 CS_ERR_MEMSETUP
 #   CAPSTONE_HAS_ARM / _ARM64 — 注册 ARM/AArch64 架构, 否则 cs_open 返回 CS_ERR_ARCH
 CAPSTONE_DEF := -DCAPSTONE_USE_SYS_DYN_MEM -DCAPSTONE_HAS_ARM -DCAPSTONE_HAS_ARM64
+VERSION_DEF := -DDH_VERSION_STR=\"$(VERSION)\"
 
 # ---------- 打包变体矩阵 ----------
 # 一份源码产出 2 变体, 差异仅: DH_VARIANT 编号。
@@ -112,6 +113,7 @@ CFLAGS  := $(ARCH_FLAGS) \
            -O2 \
            $(INCLUDES) \
            $(CAPSTONE_DEF) \
+           $(VERSION_DEF) \
            -DDH_VARIANT=$(DH_VARIANT_NUM) \
            $(FRAMEWORKS)
 
@@ -135,7 +137,7 @@ linux:
 	$(CROSS_CC) $(ARCH_FLAGS) -isysroot $(IOS_SDK) -miphoneos-version-min=$(MIN_IOS) \
 		-dynamiclib -install_name @executable_path/$(TARGET) \
 		-ObjC -fobjc-arc -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
-		-O2 $(INCLUDES) $(CAPSTONE_DEF) -DDH_VARIANT=$(DH_VARIANT_NUM) $(FRAMEWORKS) \
+		-O2 $(INCLUDES) $(CAPSTONE_DEF) $(VERSION_DEF) -DDH_VARIANT=$(DH_VARIANT_NUM) $(FRAMEWORKS) \
 		$(SRC) -o $(TARGET)
 	@echo "✅ $(TARGET) (linux cross)"
 
@@ -153,6 +155,7 @@ MAC_CFLAGS := -target $(MAC_ARCH)-apple-macos$(MAC_MIN) \
               -O0 -g \
               $(INCLUDES) \
               $(CAPSTONE_DEF) \
+              $(VERSION_DEF) \
               -DDH_VARIANT=0 \
               -framework Foundation -framework CoreGraphics -framework Security
 
@@ -177,6 +180,7 @@ SIM_CFLAGS := -target $(SIM_ARCH)-apple-ios$(SIM_MIN)-simulator \
               -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
               -O0 -g \
               $(INCLUDES) \
+              $(VERSION_DEF) \
               $(FRAMEWORKS)
 
 sim: $(WEB_HEADER) $(SIM_TARGET)
