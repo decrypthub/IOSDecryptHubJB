@@ -97,6 +97,17 @@ eq "$(jq -r '[.result.tools[].name] as $names |
 eq "$(mc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"fd7bbfa9","arch":"arm64"}}}' | jq -r '.result.structuredContent.instructions[0].mnemonic')" "stp" "disassemble fd7bbfa9 → stp"
 eq "$(mc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"c0 03 5f d6","arch":"arm64"}}}' | jq -r '.result.structuredContent.instructions[0].mnemonic')" "ret" "disassemble 带空格 hex → ret (DHDataFromHex 容错)"
 
+# resolve_symbol 参数统一 + 中间地址自动归一到函数入口。
+MAIN_INFO=$(mc '{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"resolve_symbol","arguments":{"symbol":"main"}}}')
+MAIN_ADDR=$(jq -r '.result.structuredContent.address' <<<"$MAIN_INFO")
+eq "$(jq -r '.result.structuredContent.symbol' <<<"$MAIN_INFO")" "main" "resolve_symbol 首选 symbol 参数"
+MAIN_INTERIOR=$(printf '0x%x' "$((MAIN_ADDR + 4))")
+mc "{\"jsonrpc\":\"2.0\",\"id\":47,\"method\":\"tools/call\",\"params\":{\"name\":\"disassemble_function\",\"arguments\":{\"address\":\"$MAIN_INTERIOR\",\"max_bytes\":256}}}" > "$RESULT_DIR/dh_disasm_func.json"
+eq "$(jq -r '.result.structuredContent.resolved_start' "$RESULT_DIR/dh_disasm_func.json")" "$MAIN_ADDR" "函数中间地址自动归一到 main 入口"
+eq "$(jq -r '.result.structuredContent.requested_offset' "$RESULT_DIR/dh_disasm_func.json")" "4" "返回调用点相对函数入口偏移"
+eq "$(jq -r '.result.structuredContent.boundary_source' "$RESULT_DIR/dh_disasm_func.json")" "lc_function_starts" "函数边界来自 LC_FUNCTION_STARTS"
+eq "$(jq -r '.result.structuredContent.instructions[0].address' "$RESULT_DIR/dh_disasm_func.json")" "$MAIN_ADDR" "反汇编从真实函数入口开始"
+
 echo ""; echo "== 完整 dyld 镜像地图 =="
 mc '{"jsonrpc":"2.0","id":38,"method":"tools/call","params":{"name":"list_loaded_images","arguments":{"query":"decrypt_helper.mac","include_system":false}}}' > "$RESULT_DIR/dh_images.json"
 ge "$(jq '.result.structuredContent.total' "$RESULT_DIR/dh_images.json")" 1 "完整镜像地图可找到注入 dylib"
@@ -222,6 +233,13 @@ curl -sf --max-time 15 -X POST "http://127.0.0.1:$P2/api/mcp" -H "Content-Type: 
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_functions","arguments":{"limit":100}}}' > "$RESULT_DIR/dh_lf_s.json"
 ge "$(jq '.result.structuredContent.total' "$RESULT_DIR/dh_lf_s.json")" 5 "strip: list_functions total ≥5"
 eq "$(jq -r '[.result.structuredContent.functions[]|select(.has_symbol==false)]|length>0' "$RESULT_DIR/dh_lf_s.json")" "true" "strip 下含 sub_xxx(has_symbol=false)"
+# strip 地址即使 dladdr 能找到远处导出符号，也必须以 FUNCTION_STARTS 的 synthetic 函数为准。
+curl -sf --max-time 15 -X POST "http://127.0.0.1:$P2/api/mcp" -H "Content-Type: application/json" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"symbolicate\",\"arguments\":{\"address\":\"$FSTART\"}}}" > "$RESULT_DIR/dh_sym_s.json"
+eq "$(jq -r '.result.structuredContent.symbol_source' "$RESULT_DIR/dh_sym_s.json")" "lc_function_starts" "strip 地址拒绝最近导出伪符号"
+eq "$(jq -r '.result.structuredContent.confidence' "$RESULT_DIR/dh_sym_s.json")" "high" "FUNCTION_STARTS 归属为高置信"
+eq "$(jq -r '.result.structuredContent.symbol|test("^sub_[0-9a-f]+$")' "$RESULT_DIR/dh_sym_s.json")" "true" "strip symbolicate 返回 synthetic sub_xxx"
+eq "$(jq -r '.result.structuredContent.function_start' "$RESULT_DIR/dh_sym_s.json")" "$FSTART" "symbolicate 返回真实函数入口"
 kill $HOST2 2>/dev/null; wait $HOST2 2>/dev/null   # 同步收尸, 免 job-control 打印 Terminated
 
 echo ""; echo "== find_string_refs (tier-2A: direct + 归属 + 无误报) =="

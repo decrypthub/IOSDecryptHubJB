@@ -47,13 +47,37 @@ int analysis_disassemble_func(uint64_t address, size_t max_bytes, const char *ar
 // 符号 / 内存
 // ============================================================
 
+// 地址归属结果。优先以 LC_FUNCTION_STARTS 确定包含函数，只有缺少函数元数据时才
+// 退回 dladdr 的“最近符号”。symbol_source/confidence 让调用方区分精确符号、
+// synthetic sub_<runtime> 与低可信 nearest dladdr，避免把超大偏移误当函数名。
+typedef struct {
+    uint64_t normalized_address;
+    uint64_t function_start;
+    uint64_t function_end;
+    uint64_t function_vmaddr;
+    uint64_t function_offset;
+    uint64_t symbol_offset;
+    char     image[256];
+    char     symbol[512];
+    char     symbol_source[32];   // "dladdr_exact" | "lc_function_starts" | "dladdr_nearest" | "image"
+    char     confidence[16];      // "high" | "low" | "none"
+    int      address_mapped;
+    int      has_function;
+    int      has_symbol;          // 真实符号名；synthetic sub_ 为 0
+} AnalysisAddressInfo;
+
+// 解析运行时地址的镜像、包含函数与可信符号。PAC 地址会先规范化。
+// 找到镜像或 dladdr 归属返回 0，完全无法归属返回 -1。
+int analysis_address_info(uint64_t addr, AnalysisAddressInfo *out);
+
 // 解析符号名到运行时地址 (dlsym RTLD_DEFAULT)。
 // 找到返回 0 并填 *out_addr 与 out_image(所属镜像短名); 未找到返回 -1。
 int analysis_resolve_symbol(const char *name, uint64_t *out_addr,
                             char *out_image, size_t image_len);
 
-// 地址 -> 最近符号名 + 偏移 (dladdr)。找到返回 0, 填 out_sym / *out_offset / out_image;
-// 该地址无符号信息返回 -1。out_sym 已去前导下划线。
+// 地址 -> 可信函数标签 + 偏移。优先 LC_FUNCTION_STARTS 确定包含函数，再接受入口处
+// 的精确 dladdr 符号；strip 镜像返回 synthetic sub_<runtime>。完全无法归属返回 -1。
+// out_sym 已去前导下划线。
 int analysis_symbolicate(uint64_t addr, char *out_sym, size_t sym_len,
                          uint64_t *out_offset, char *out_image, size_t image_len,
                          uint64_t *out_normalized);

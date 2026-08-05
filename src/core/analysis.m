@@ -158,8 +158,6 @@ static void copy_basename(const char *path, char *buf, size_t buflen) {
     buf[buflen - 1] = '\0';
 }
 
-static int real_image_basename_for_address(uint64_t addr, char *out, size_t len);
-
 int analysis_resolve_symbol(const char *name, uint64_t *out_addr,
                             char *out_image, size_t image_len) {
     if (!name || !out_addr) return -1;
@@ -177,27 +175,18 @@ int analysis_resolve_symbol(const char *name, uint64_t *out_addr,
 int analysis_symbolicate(uint64_t addr, char *out_sym, size_t sym_len,
                          uint64_t *out_offset, char *out_image, size_t image_len,
                          uint64_t *out_normalized) {
-    Dl_info info;
-    memset(&info, 0, sizeof(info));
-    uint64_t normalized = addr;
-    uint64_t stripped = addr & 0x0000FFFFFFFFFFFFULL;
-    if (stripped != addr && dladdr((void *)(uintptr_t)stripped, &info) && info.dli_saddr) {
-        normalized = stripped;
-    } else {
-        memset(&info, 0, sizeof(info));
-        if (!dladdr((void *)(uintptr_t)addr, &info) || !info.dli_saddr) return -1;
-    }
-    if (out_normalized) *out_normalized = normalized;
+    AnalysisAddressInfo info;
+    if (analysis_address_info(addr, &info) != 0 || !info.symbol[0]) return -1;
+    if (out_normalized) *out_normalized = info.normalized_address;
     if (out_sym && sym_len) {
-        const char *s = info.dli_sname ?: "";
-        if (s[0] == '_') s++;   // 去前导下划线, 与 dh_symtab 一致
-        strncpy(out_sym, s, sym_len - 1);
+        strncpy(out_sym, info.symbol, sym_len - 1);
         out_sym[sym_len - 1] = '\0';
     }
-    if (out_offset) *out_offset = normalized - (uint64_t)(uintptr_t)info.dli_saddr;
-    if (out_image && image_len &&
-        !real_image_basename_for_address(normalized, out_image, image_len))
-        copy_basename(info.dli_fname, out_image, image_len);
+    if (out_offset) *out_offset = info.symbol_offset;
+    if (out_image && image_len) {
+        strncpy(out_image, info.image, image_len - 1);
+        out_image[image_len - 1] = '\0';
+    }
     return 0;
 }
 
@@ -415,24 +404,6 @@ int analysis_list_loaded_images(const char *query, int include_system,
 }
 
 
-static int real_image_basename_for_address(uint64_t addr, char *out, size_t len) {
-    if (!out || len == 0) return 0;
-    uint32_t count = _dyld_image_count();
-    for (uint32_t i = 0; i < count; i++) {
-        const struct mach_header_64 *mh =
-            (const struct mach_header_64 *)_dyld_get_image_header(i);
-        if (!mh || mh->magic != MH_MAGIC_64) continue;
-        AnalysisLoadedImage meta; memset(&meta, 0, sizeof(meta));
-        intptr_t slide = _dyld_get_image_vmaddr_slide(i);
-        loaded_image_metadata(mh, slide, &meta);
-        if (addr < meta.text_start || addr >= meta.text_end) continue;
-        NSString *path = loaded_image_real_path(mh, _dyld_get_image_name(i));
-        copy_basename(path.UTF8String, out, len);
-        return 1;
-    }
-    return 0;
-}
-
 // ============================================================
 // 交叉引用 (xref) —— tier-1: 直接 BL 调用
 // ============================================================
@@ -484,6 +455,37 @@ static int xref_sect_range(const struct mach_header_64 *mh, intptr_t slide,
     *start = (uint64_t)((uintptr_t)s->addr + (uintptr_t)slide);
     *end   = *start + s->size;
     return 1;
+}
+
+// 以真实 dyld header + 可执行段范围定位地址所属镜像。不能只信 dladdr 的最近符号，
+// stripped 大镜像里它可能指向数 MB 之外的导出符号。
+static const struct mach_header_64 *image_containing_address(uint64_t addr,
+                                                              intptr_t *slide_out,
+                                                              char *name_out, size_t name_len,
+                                                              uint64_t *text_lo, uint64_t *text_hi) {
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const struct mach_header_64 *mh =
+            (const struct mach_header_64 *)_dyld_get_image_header(i);
+        if (!mh || mh->magic != MH_MAGIC_64) continue;
+        intptr_t slide = _dyld_get_image_vmaddr_slide(i);
+        AnalysisLoadedImage meta; memset(&meta, 0, sizeof(meta));
+        loaded_image_metadata(mh, slide, &meta);
+        if (addr < meta.text_start || addr >= meta.text_end) continue;
+
+        if (slide_out) *slide_out = slide;
+        if (name_out && name_len) {
+            NSString *path = loaded_image_real_path(mh, _dyld_get_image_name(i));
+            copy_basename(path.UTF8String, name_out, name_len);
+        }
+        if (text_lo && text_hi) {
+            *text_lo = 0; *text_hi = 0;
+            if (!xref_sect_range(mh, slide, "__TEXT", "__text", text_lo, text_hi))
+                xref_sect_range(mh, slide, "__TEXT_EXEC", "__text", text_lo, text_hi);
+        }
+        return mh;
+    }
+    return NULL;
 }
 
 static inline int in_range(uint64_t a, uint64_t lo, uint64_t hi) { return lo && a >= lo && a < hi; }
@@ -617,8 +619,9 @@ static FuncStartsCache *func_starts_for(const struct mach_header_64 *mh, intptr_
 
 // 二分: addr 归属到 <= addr 的最大函数入口; end 用下一个入口(末个用 text_hi)近似。
 // 落在函数间隙外(>= 近似 end)不强行归属。命中返回 1。
-static int resolve_func(FuncStartsCache *c, uint64_t addr,
-                        uint64_t *start_rt, uint64_t *start_vm, uint64_t *off) {
+static int resolve_func_bounds(FuncStartsCache *c, uint64_t addr,
+                               uint64_t *start_rt, uint64_t *end_rt,
+                               uint64_t *start_vm, uint64_t *off) {
     if (!c || c->count == 0 || addr < c->arr[0].runtime) return 0;
     size_t lo = 0, hi = c->count;
     while (lo < hi) { size_t mid = lo + (hi - lo) / 2; if (c->arr[mid].runtime <= addr) lo = mid + 1; else hi = mid; }
@@ -626,26 +629,109 @@ static int resolve_func(FuncStartsCache *c, uint64_t addr,
     uint64_t fend = (idx + 1 < c->count) ? c->arr[idx + 1].runtime : c->text_hi;
     if (fend && addr >= fend) return 0;
     *start_rt = c->arr[idx].runtime;
+    if (end_rt) *end_rt = fend;
     *start_vm = c->arr[idx].vmaddr;
     *off = addr - c->arr[idx].runtime;
     return 1;
 }
 
-// 把 site 归属到函数: 优先 dladdr 符号(name+off); 否则 FUNCTION_STARTS(sub_<runtime>+off); 都无留空。
+static int resolve_func(FuncStartsCache *c, uint64_t addr,
+                        uint64_t *start_rt, uint64_t *start_vm, uint64_t *off) {
+    return resolve_func_bounds(c, addr, start_rt, NULL, start_vm, off);
+}
+
+int analysis_address_info(uint64_t addr, AnalysisAddressInfo *out) {
+    if (!addr || !out) return -1;
+    memset(out, 0, sizeof(*out));
+    strncpy(out->confidence, "none", sizeof(out->confidence) - 1);
+
+    uint64_t normalized = addr;
+    intptr_t slide = 0;
+    uint64_t text_lo = 0, text_hi = 0;
+    const struct mach_header_64 *mh = image_containing_address(
+        normalized, &slide, out->image, sizeof(out->image), &text_lo, &text_hi);
+    uint64_t stripped = strip_pac(addr);
+    if (!mh && stripped != addr) {
+        normalized = stripped;
+        mh = image_containing_address(normalized, &slide, out->image, sizeof(out->image),
+                                      &text_lo, &text_hi);
+    }
+    out->normalized_address = normalized;
+
+    if (mh) {
+        out->address_mapped = 1;
+        if (in_range(normalized, text_lo, text_hi)) {
+            FuncStartsCache *fc = func_starts_for(mh, slide, text_hi);
+            uint64_t start = 0, end = 0, vmaddr = 0, offset = 0;
+            if (resolve_func_bounds(fc, normalized, &start, &end, &vmaddr, &offset)) {
+                out->has_function = 1;
+                out->function_start = start;
+                out->function_end = end;
+                out->function_vmaddr = vmaddr;
+                out->function_offset = offset;
+                out->symbol_offset = offset;
+
+                char exact[sizeof(out->symbol)] = {0}; uint64_t exact_off = 0;
+                if (name_at(start, exact, sizeof(exact), &exact_off) && exact_off == 0) {
+                    strncpy(out->symbol, exact, sizeof(out->symbol) - 1);
+                    strncpy(out->symbol_source, "dladdr_exact", sizeof(out->symbol_source) - 1);
+                    out->has_symbol = 1;
+                } else {
+                    snprintf(out->symbol, sizeof(out->symbol), "sub_%llx", start);
+                    strncpy(out->symbol_source, "lc_function_starts", sizeof(out->symbol_source) - 1);
+                }
+                strncpy(out->confidence, "high", sizeof(out->confidence) - 1);
+                return 0;
+            }
+        }
+    }
+
+    // 无 FUNCTION_STARTS 或地址不在 __text 时才退回 dladdr。此路径明确标低可信，
+    // 调用方不得把 nearest symbol 当作已确认的函数边界。
+    Dl_info dl;
+    memset(&dl, 0, sizeof(dl));
+    if (dladdr((void *)(uintptr_t)normalized, &dl) && dl.dli_saddr && dl.dli_sname) {
+        const char *s = dl.dli_sname;
+        if (s[0] == '_') s++;
+        if (s[0]) {
+            strncpy(out->symbol, s, sizeof(out->symbol) - 1);
+            out->symbol_offset = normalized - (uint64_t)(uintptr_t)dl.dli_saddr;
+            strncpy(out->symbol_source, "dladdr_nearest", sizeof(out->symbol_source) - 1);
+            strncpy(out->confidence, "low", sizeof(out->confidence) - 1);
+            out->has_symbol = 1;
+            if (!out->image[0]) copy_basename(dl.dli_fname, out->image, sizeof(out->image));
+            return 0;
+        }
+    }
+
+    if (mh) {
+        strncpy(out->symbol_source, "image", sizeof(out->symbol_source) - 1);
+        return 0;
+    }
+    return -1;
+}
+
+// 把 site 归属到函数: 先用 FUNCTION_STARTS 定边界，仅接受恰好落在入口的 dladdr 符号。
+// 这样 stripped 大镜像中的“最近导出符号 + 数 MB 偏移”不会污染函数归属。
 static void attribute_addr(FuncStartsCache *fc, intptr_t slide, uint64_t site,
                            char *from_func, size_t ff_len, uint64_t *off,
                            uint64_t *start, uint64_t *vm) {
     from_func[0] = '\0'; *off = 0; *start = 0; *vm = 0;
+    uint64_t frt = 0, fvm = 0, foff = 0;
+    if (resolve_func(fc, site, &frt, &fvm, &foff)) {
+        char sym[256] = {0}; uint64_t symoff = 0;
+        if (name_at(frt, sym, sizeof(sym), &symoff) && symoff == 0) {
+            strncpy(from_func, sym, ff_len - 1); from_func[ff_len - 1] = '\0';
+        } else {
+            snprintf(from_func, ff_len, "sub_%llx", frt);
+        }
+        *off = foff; *start = frt; *vm = fvm;
+        return;
+    }
     char sym[256] = {0}; uint64_t symoff = 0;
     if (name_at(site, sym, sizeof(sym), &symoff)) {
         strncpy(from_func, sym, ff_len - 1); from_func[ff_len - 1] = '\0';
         *off = symoff; *start = site - symoff; *vm = *start - (uint64_t)slide;
-        return;
-    }
-    uint64_t frt = 0, fvm = 0, foff = 0;
-    if (resolve_func(fc, site, &frt, &fvm, &foff)) {
-        snprintf(from_func, ff_len, "sub_%llx", frt);
-        *off = foff; *start = frt; *vm = fvm;
     }
 }
 

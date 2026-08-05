@@ -244,7 +244,7 @@ static NSDictionary *tool_list_imports(NSDictionary *args) {
     });
 }
 
-// disassemble_function —— 从地址反汇编, 遇 ret 停 (函数边界)
+// disassemble_function —— 中间地址先归一到包含函数入口；无 FUNCTION_STARTS 才退回 ret 启发式。
 static NSDictionary *tool_disassemble_function(NSDictionary *args) {
     NSString *addrStr = args[@"address"];
     NSString *arch    = args[@"arch"] ?: @"arm64";
@@ -252,53 +252,102 @@ static NSDictionary *tool_disassemble_function(NSDictionary *args) {
     uint64_t addr = strtoull(addrStr.UTF8String, NULL, 0);
     if (addr == 0) return tool_err(@"'address' must be non-zero");
     size_t maxBytes = [args[@"max_bytes"] isKindOfClass:NSNumber.class] ? (size_t)[args[@"max_bytes"] unsignedLongLongValue] : 4096;
+    if (maxBytes == 0) maxBytes = 4096;
+    if (maxBytes > 65536) maxBytes = 65536;
 
     AnalysisInsn insns[1024];
-    int n = analysis_disassemble_func(addr, maxBytes, arch.UTF8String, insns, 1024);
+    AnalysisAddressInfo info;
+    BOOL haveFunction = analysis_address_info(addr, &info) == 0 && info.has_function &&
+                        info.function_end > info.function_start;
+    uint64_t readStart = haveFunction ? info.function_start : addr;
+    size_t readSize = maxBytes;
+    if (haveFunction && info.function_end - info.function_start < readSize)
+        readSize = (size_t)(info.function_end - info.function_start);
+
+    int n = haveFunction
+        ? analysis_disassemble_at(readStart, readSize, arch.UTF8String, insns, 1024)
+        : analysis_disassemble_func(readStart, readSize, arch.UTF8String, insns, 1024);
     if (n == -2) return tool_err([NSString stringWithFormat:@"memory not readable at 0x%llx", addr]);
     if (n < 0)  return tool_err(@"capstone init failed");
     BOOL endsWithRet = (n > 0 && strcmp(insns[n-1].mnemonic, "ret") == 0);
-    return tool_ok(@{
+    uint64_t decodedEnd = n > 0 ? insns[n - 1].address + insns[n - 1].size : readStart;
+    BOOL truncated = haveFunction ? decodedEnd < info.function_end : (!endsWithRet && readSize == maxBytes);
+    NSMutableDictionary *result = [@{
         @"address": [NSString stringWithFormat:@"0x%llx", addr],
+        @"requested_address": [NSString stringWithFormat:@"0x%llx", addr],
+        @"resolved_start": [NSString stringWithFormat:@"0x%llx", readStart],
+        @"requested_offset": @(addr - readStart),
         @"arch": arch,
         @"count": @(n),
         @"ends_with_ret": @(endsWithRet),
+        @"boundary_source": haveFunction ? @"lc_function_starts" : @"ret_heuristic",
+        // 下一 FUNCTION_STARTS 是可靠上界，但可能包含尾部对齐填充，不宣称是精确 CFG 结束点。
+        @"boundary_confidence": haveFunction ? @"medium" : @"low",
+        @"boundary_complete": haveFunction ? @(decodedEnd >= info.function_end) : @(endsWithRet),
+        @"truncated": @(truncated),
+        @"next_address": truncated ? (id)[NSString stringWithFormat:@"0x%llx", decodedEnd] : (id)[NSNull null],
         @"instructions": insns_to_array(insns, n),
-    });
+    } mutableCopy];
+    if (haveFunction) {
+        result[@"resolved_end"] = [NSString stringWithFormat:@"0x%llx", info.function_end];
+        result[@"function_vmaddr"] = [NSString stringWithFormat:@"0x%llx", info.function_vmaddr];
+        result[@"function_size"] = @(info.function_end - info.function_start);
+        result[@"symbol"] = info.symbol[0] ? (id)@(info.symbol) : (id)[NSNull null];
+        result[@"symbol_source"] = @(info.symbol_source);
+    }
+    return tool_ok(result);
 }
 
 // resolve_symbol —— 符号名 -> 运行时地址
 static NSDictionary *tool_resolve_symbol(NSDictionary *args) {
-    NSString *name = args[@"name"];
-    if (![name isKindOfClass:NSString.class] || name.length == 0) return tool_err(@"missing 'name'");
+    NSString *symbol = [args[@"symbol"] isKindOfClass:NSString.class] ? args[@"symbol"] : nil;
+    NSString *legacy = [args[@"name"] isKindOfClass:NSString.class] ? args[@"name"] : nil;
+    if (symbol.length && legacy.length && ![symbol isEqualToString:legacy])
+        return tool_err(@"'symbol' and deprecated 'name' disagree");
+    NSString *name = symbol.length ? symbol : legacy;
+    if (name.length == 0) return tool_err(@"missing 'symbol' (deprecated alias: 'name')");
     uint64_t addr = 0; char img[256] = {0};
     if (analysis_resolve_symbol(name.UTF8String, &addr, img, sizeof(img)) != 0)
         return tool_err([NSString stringWithFormat:@"symbol not found: %@", name]);
     return tool_ok(@{
         @"name": name,
+        @"symbol": name,
         @"address": [NSString stringWithFormat:@"0x%llx", addr],
         @"image": @(img),
     });
 }
 
-// symbolicate —— 地址 -> 最近符号 + 偏移
+// symbolicate —— 地址 -> 镜像 + 包含函数 + 有来源/置信度的符号标签
 static NSDictionary *tool_symbolicate(NSDictionary *args) {
     NSString *addrStr = args[@"address"];
     if (![addrStr isKindOfClass:NSString.class]) return tool_err(@"missing 'address'");
     uint64_t addr = strtoull(addrStr.UTF8String, NULL, 0);
-    char sym[512] = {0}, img[256] = {0}; uint64_t off = 0, normalized = 0;
-    if (analysis_symbolicate(addr, sym, sizeof(sym), &off, img, sizeof(img), &normalized) != 0)
+    AnalysisAddressInfo info;
+    if (analysis_address_info(addr, &info) != 0)
         return tool_ok(@{@"address": [NSString stringWithFormat:@"0x%llx", addr], @"found": @NO});
-    return tool_ok(@{
+    BOOL found = info.symbol[0] != '\0';
+    NSMutableDictionary *result = [@{
         @"address": [NSString stringWithFormat:@"0x%llx", addr],
-        @"normalized_address": [NSString stringWithFormat:@"0x%llx", normalized],
-        @"pointer_normalized": (normalized != addr) ? @YES : @NO,
-        @"found": @YES,
-        @"symbol": @(sym),
-        @"offset": @(off),
-        @"display": [NSString stringWithFormat:@"%s+0x%llx", sym, off],
-        @"image": @(img),
-    });
+        @"normalized_address": [NSString stringWithFormat:@"0x%llx", info.normalized_address],
+        @"pointer_normalized": (info.normalized_address != addr) ? @YES : @NO,
+        @"address_mapped": info.address_mapped ? @YES : @NO,
+        @"found": @(found),
+        @"has_symbol": info.has_symbol ? @YES : @NO,
+        @"symbol": found ? (id)@(info.symbol) : (id)[NSNull null],
+        @"symbol_source": @(info.symbol_source),
+        @"confidence": @(info.confidence),
+        @"offset": @(info.symbol_offset),
+        @"display": found ? (id)[NSString stringWithFormat:@"%s+0x%llx", info.symbol, info.symbol_offset] : (id)[NSNull null],
+        @"image": info.image[0] ? (id)@(info.image) : (id)[NSNull null],
+    } mutableCopy];
+    if (info.has_function) {
+        result[@"function_start"] = [NSString stringWithFormat:@"0x%llx", info.function_start];
+        result[@"function_end"] = [NSString stringWithFormat:@"0x%llx", info.function_end];
+        result[@"function_vmaddr"] = [NSString stringWithFormat:@"0x%llx", info.function_vmaddr];
+        result[@"function_offset"] = @(info.function_offset);
+        result[@"function_size"] = @(info.function_end - info.function_start);
+    }
+    return tool_ok(result);
 }
 
 // isa -> Class: 只认注册过的类, 绝不解引用不可信指针(避免注入进程崩溃)。
@@ -1553,7 +1602,7 @@ static NSArray *tool_definitions(void) {
         },
         @{
             @"name": @"disassemble_function",
-            @"description": @"Disassemble process memory starting at `address` until a `ret` (function-boundary heuristic) or max_bytes. Better than analyze_function for reading a whole function.",
+            @"description": @"Disassemble the function containing `address`. When LC_FUNCTION_STARTS is available, an interior address is normalized to the real function start and decoding stops at the next function entry instead of the first ret. The response reports resolved_start/end, requested_offset, boundary_source/confidence and truncation. Falls back to a low-confidence ret heuristic only when function metadata is unavailable.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
@@ -1566,18 +1615,19 @@ static NSArray *tool_definitions(void) {
         },
         @{
             @"name": @"resolve_symbol",
-            @"description": @"Resolve a symbol name to its runtime address via dlsym (exported/dynamic symbols). Feed the result to disassemble_function.",
+            @"description": @"Resolve an exported/dynamic symbol to its runtime address via dlsym. Prefer `symbol`; deprecated `name` remains accepted for compatibility. Feed the result to disassemble_function.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
-                    @"name": @{@"type": @"string", @"description": @"Symbol name, e.g. \"CCCrypt\" (no leading underscore)"},
+                    @"symbol": @{@"type": @"string", @"description": @"Symbol name, e.g. \"CCCrypt\" (no leading underscore)"},
+                    @"name": @{@"type": @"string", @"description": @"Deprecated alias for symbol"},
                 },
-                @"required": @[@"name"],
+                @"anyOf": @[@{@"required": @[@"symbol"]}, @{@"required": @[@"name"]}],
             },
         },
         @{
             @"name": @"symbolicate",
-            @"description": @"Resolve an address to the nearest symbol + offset via dladdr. Use to label branch targets and call-stack addresses.",
+            @"description": @"Resolve an address to its image and containing function. LC_FUNCTION_STARTS takes precedence over dladdr so stripped images return a high-confidence synthetic sub_<addr> instead of an unrelated exported symbol with a huge offset. Inspect symbol_source/confidence before treating a label as authoritative.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
