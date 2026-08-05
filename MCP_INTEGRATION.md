@@ -32,6 +32,7 @@
 | `list_functions` | 函数清单（`LC_FUNCTION_STARTS`）：name（符号或 `sub_<addr>`）、start、vmaddr、size≈到下一入口；支持 `query` 子串过滤与 offset/limit 分页 | 无 |
 | `objc_resolve_imp` | selector → 当前运行时 IMP；明确不宣称恢复第三方 swizzle 前实现 | `selector` + (`class` 或 `object`) |
 | `find_objc_methods` | 查询 runtime 中类自身声明的方法：selector、type encoding、当前 IMP、class image 与 IMP image；支持过滤和分页 | 至少一个过滤条件 |
+| `export_events` | 按稳定 seq 游标分页导出完整事件 JSON，包含密钥/IV/输入输出/结构化调用栈和进程元数据；blob 有界并标记截断 | 无 |
 
 可选参数：`disassemble`/`analyze_function` 的 `arch`（`arm64`/`arm`/`thumb`，默认 arm64）；`list_imports` 的 `query`（子串过滤）、`limit`；四个 xref 工具均支持 `image`（镜像名子串，默认主程序）、`max_results`（默认 256）、`scan_offset` 和 `scan_size`。
 
@@ -44,6 +45,8 @@
 **地址与函数边界**：`symbolicate` 和 xref 的函数归属先用 `LC_FUNCTION_STARTS` 确定包含函数，只接受恰好落在该入口的 `dladdr` 符号。strip 镜像会返回 `symbol_source=lc_function_starts`、`has_symbol=false` 的 `sub_<runtime>`，而不会把数 MB 外的最近导出符号当作函数名。缺少函数元数据时才返回 `symbol_source=dladdr_nearest`、`confidence=low`。`disassemble_function` 接受函数中间地址，响应给出 `requested_address`、`resolved_start/end`、`requested_offset`、`boundary_source/confidence`；有 `LC_FUNCTION_STARTS` 时读到下一入口，不会在早退 `ret` 处误停。入口归属为高可信，结束位置仍是“下一入口”近似值，因此 `boundary_confidence=medium`。
 
 **结构化反汇编与常量**：三个反汇编工具的每条指令除 `mnemonic/op_str` 外，还返回 `operands`（register/immediate/memory/floating_point）、显式 `registers_read/registers_written`、`groups`（jump/call/return）和直接分支 `target`。ARM64 的 `MOVZ/MOVN/MOVK` 会额外返回 `constant_build`，包含已拼接的 `value`、`known_mask`、位宽、链起点和指令数。该跟踪只在当前线性结果内工作，遇到控制流或寄存器覆盖即失效，不做 CFG/跨函数推演；`complete=false` 表示只知道部分 16 位片段，不应把未知位当成 0。
+
+**事件 JSON 导出**：`export_events` 按 `seq` 升序返回完整事件。第一页记录 `cursor.snapshot_until_seq`，后续把它作为 `until_seq`，并把 `cursor.next_after_seq` 作为 `after_seq`，直到 `has_more=false`；固定上界可防止新事件插入造成翻页重复或漂移，但导出期间被内存保留策略淘汰的旧事件无法恢复。默认每页 25 条、每个 key/iv/input/output 最多编码 64KB，截断字段带 `<field>Truncated=true`；`include_dumps` 默认关闭，避免与 hex 重复膨胀。导出内容可能含密钥、明文、Token、路径和请求数据，必须按敏感材料存储和分享。
 
 **`find_string_refs`（tier-2A）**：谁引用了某字符串。给 `string`（子串匹配）或 `address`（精确字符串地址），可选 `image`（默认主程序）、`max_results`。识别两种取址模式——`ADRP+ADD`（直接，`indirect:false`，目标在被扫镜像的 `__cstring`/`__objc_methname`/`__objc_classname`/`__objc_methtype`）与 `ADRP+LDR`→指针槽（间接，`indirect:true`，仅认 `__objc_selrefs`/`__got`/... 白名单槽；运行时 selref 已定到别处的 SEL，目标可能跨镜像，section 标 `(external)` 但字符串内容仍如实读出）。局部窗口回溯：按寄存器缓存最近 `ADRP` 页，寄存器被写即失效，不做跨基本块/跨函数数据流。每条结果带 `ref_site`、`string`、`string_addr`、`string_vmaddr`、`section`、`instruction`、`indirect`，以及与 find_xrefs 同款的 `from_func` 归属字段。
 

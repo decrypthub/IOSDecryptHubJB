@@ -61,25 +61,54 @@ NSDictionary *dh_log_entry_summary(DHLogEntry *e) {
     };
 }
 
-NSDictionary *dh_log_entry_detail(DHLogEntry *e) {
+static NSData *bounded_blob(NSData *data, NSUInteger maxBytes, BOOL *truncated) {
+    if (truncated) *truncated = data.length > maxBytes;
+    if (data.length <= maxBytes) return data;
+    return [data subdataWithRange:NSMakeRange(0, maxBytes)];
+}
+
+NSDictionary *dh_log_entry_detail_bounded(DHLogEntry *e, NSUInteger maxBlobBytes,
+                                           BOOL includeDumps) {
     NSMutableDictionary *m = [dh_log_entry_summary(e) mutableCopy] ?: [NSMutableDictionary dictionary];
-    if (e.key)    { m[@"key"]    = @(e.key.length);    m[@"keyHex"]    = DHHexFromData(e.key); }
-    if (e.iv)     { m[@"iv"]     = @(e.iv.length);     m[@"ivHex"]     = DHHexFromData(e.iv); }
+    if (e.key) {
+        BOOL truncated = NO;
+        NSData *data = bounded_blob(e.key, maxBlobBytes, &truncated);
+        m[@"key"] = @(e.key.length);
+        m[@"keyHex"] = DHHexFromData(data);
+        if (truncated) m[@"keyTruncated"] = @YES;
+    }
+    if (e.iv) {
+        BOOL truncated = NO;
+        NSData *data = bounded_blob(e.iv, maxBlobBytes, &truncated);
+        m[@"iv"] = @(e.iv.length);
+        m[@"ivHex"] = DHHexFromData(data);
+        if (truncated) m[@"ivTruncated"] = @YES;
+    }
     if (e.input)  {
+        BOOL truncated = NO;
+        NSData *data = bounded_blob(e.input, maxBlobBytes, &truncated);
         m[@"input"]    = @(e.input.length);
-        m[@"inputHex"] = DHHexFromData(e.input);
-        NSString *u = DHUTF8FromData(e.input);
+        m[@"inputHex"] = DHHexFromData(data);
+        NSString *u = DHUTF8FromData(data);
         if (![u isEqualToString:@"(非UTF-8)"]) m[@"inputUtf8"] = u;
-        m[@"inputDump"] = DHHexDumpFromData(e.input);
+        if (includeDumps) m[@"inputDump"] = DHHexDumpFromData(data);
+        if (truncated) m[@"inputTruncated"] = @YES;
     }
     if (e.output) {
+        BOOL truncated = NO;
+        NSData *data = bounded_blob(e.output, maxBlobBytes, &truncated);
         m[@"output"]    = @(e.output.length);
-        m[@"outputHex"] = DHHexFromData(e.output);
-        NSString *u = DHUTF8FromData(e.output);
+        m[@"outputHex"] = DHHexFromData(data);
+        NSString *u = DHUTF8FromData(data);
         if (![u isEqualToString:@"(非UTF-8)"]) m[@"outputUtf8"] = u;
-        m[@"outputDump"] = DHHexDumpFromData(e.output);
+        if (includeDumps) m[@"outputDump"] = DHHexDumpFromData(data);
+        if (truncated) m[@"outputTruncated"] = @YES;
     }
     if (e.publicKeyInfo) m[@"publicKeyInfo"] = e.publicKeyInfo;
     if (e.callStack)     m[@"callStack"] = e.callStack;
     return m;
+}
+
+NSDictionary *dh_log_entry_detail(DHLogEntry *e) {
+    return dh_log_entry_detail_bounded(e, NSUIntegerMax, YES);
 }

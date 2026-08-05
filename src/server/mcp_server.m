@@ -1517,20 +1517,93 @@ static NSArray *parse_callstack_frames(NSString *cs) {
     return frames;
 }
 
+static NSDictionary *event_detail_with_frames(DHLogEntry *e, NSUInteger maxBlobBytes,
+                                               BOOL includeDumps) {
+    NSDictionary *detail = dh_log_entry_detail_bounded(e, maxBlobBytes, includeDumps);
+    NSString *cs = detail[@"callStack"];
+    if (!cs.length) return detail;
+    NSMutableDictionary *out = [detail mutableCopy];
+    out[@"callStackFrames"] = parse_callstack_frames(cs);
+    return out;
+}
+
 // get_event —— 单条完整详情 (key / iv / 明文 / 密文 / 调用栈 + 结构化帧)
 static NSDictionary *tool_get_event(NSDictionary *args) {
     NSNumber *seqN = args[@"seq"];
     if (![seqN isKindOfClass:NSNumber.class]) return tool_err(@"missing 'seq'");
     DHLogEntry *e = [[DHLogStore shared] entryWithSeq:(uint64_t)seqN.unsignedLongLongValue];
     if (!e) return tool_err([NSString stringWithFormat:@"no event with seq %@", seqN]);
-    NSDictionary *detail = dh_log_entry_detail(e);
-    NSString *cs = detail[@"callStack"];
-    if (cs.length) {
-        NSMutableDictionary *m = [detail mutableCopy];
-        m[@"callStackFrames"] = parse_callstack_frames(cs);   // [{index,image,address,symbol,offset}]
-        detail = m;
+    return tool_ok(event_detail_with_frames(e, NSUIntegerMax, YES));
+}
+
+// export_events —— 按 seq 升序分页导出完整 JSON；固定上界避免新事件插入扰动翻页。
+static NSDictionary *tool_export_events(NSDictionary *args) {
+    NSNumber *afterN = [args[@"after_seq"] isKindOfClass:NSNumber.class] ? args[@"after_seq"] : nil;
+    NSNumber *untilN = [args[@"until_seq"] isKindOfClass:NSNumber.class] ? args[@"until_seq"] : nil;
+    if ((afterN && afterN.longLongValue < 0) || (untilN && untilN.longLongValue < 0))
+        return tool_err(@"after_seq and until_seq must be >= 0");
+
+    NSInteger limit = [args[@"limit"] isKindOfClass:NSNumber.class] ? [args[@"limit"] integerValue] : 25;
+    if (limit <= 0 || limit > 100) return tool_err(@"limit must be between 1 and 100");
+    NSInteger maxBlob = [args[@"max_blob_bytes"] isKindOfClass:NSNumber.class]
+        ? [args[@"max_blob_bytes"] integerValue] : 64 * 1024;
+    if (maxBlob < 0 || maxBlob > 1024 * 1024)
+        return tool_err(@"max_blob_bytes must be between 0 and 1048576");
+    BOOL includeDumps = [args[@"include_dumps"] isKindOfClass:NSNumber.class] &&
+                        [args[@"include_dumps"] boolValue];
+
+    uint64_t afterSeq = afterN ? afterN.unsignedLongLongValue : 0;
+    DHLogStore *store = [DHLogStore shared];
+    uint64_t currentMax = (uint64_t)[store totalCount];
+    uint64_t snapshotUntil = untilN ? MIN(untilN.unsignedLongLongValue, currentMax) : currentMax;
+    if (afterSeq > snapshotUntil)
+        return tool_err(@"after_seq must not exceed the effective snapshot_until_seq");
+
+    NSInteger cat = category_from_string(args[@"category"]);
+    NSString *query = [args[@"query"] isKindOfClass:NSString.class] ? args[@"query"] : @"";
+    NSUInteger minSize = [args[@"min_size"] isKindOfClass:NSNumber.class] ? [args[@"min_size"] unsignedIntegerValue] : 0;
+    NSUInteger maxSize = [args[@"max_size"] isKindOfClass:NSNumber.class] ? [args[@"max_size"] unsignedIntegerValue] : 0;
+    NSString *outHexEq = [args[@"output_hex"] isKindOfClass:NSString.class] ? args[@"output_hex"] : nil;
+    NSString *outHexPre = [args[@"output_hex_prefix"] isKindOfClass:NSString.class] ? args[@"output_hex_prefix"] : nil;
+    NSNumber *outLen = [args[@"output_len"] isKindOfClass:NSNumber.class] ? args[@"output_len"] : nil;
+    NSNumber *tid = [args[@"thread_id"] isKindOfClass:NSNumber.class] ? args[@"thread_id"] : nil;
+    uint64_t sinceMs = [args[@"since_ts_ms"] isKindOfClass:NSNumber.class] ? [args[@"since_ts_ms"] unsignedLongLongValue] : 0;
+    uint64_t untilMs = [args[@"until_ts_ms"] isKindOfClass:NSNumber.class] ? [args[@"until_ts_ms"] unsignedLongLongValue] : 0;
+    NSString *stackHas = [args[@"stack_contains"] isKindOfClass:NSString.class] ? args[@"stack_contains"] : nil;
+
+    NSArray *source = [store snapshotMatching:query category:cat minInputSize:minSize maxInputSize:maxSize];
+    NSMutableArray *events = [NSMutableArray arrayWithCapacity:(NSUInteger)limit];
+    NSUInteger matched = 0;
+    uint64_t lastSeq = afterSeq;
+    for (DHLogEntry *e in source) {
+        if (e.seq <= afterSeq || e.seq > snapshotUntil) continue;
+        if (!event_passes_extra(e, outHexEq, outHexPre, outLen, tid, sinceMs, untilMs, stackHas)) continue;
+        matched++;
+        if ((NSInteger)events.count >= limit) continue;
+        [events addObject:event_detail_with_frames(e, (NSUInteger)maxBlob, includeDumps)];
+        lastSeq = e.seq;
     }
-    return tool_ok(detail);
+    BOOL hasMore = matched > events.count;
+    id nextAfter = hasMore ? (id)@(lastSeq) : (id)[NSNull null];
+    return tool_ok(@{
+        @"format": @"iosdecrypthub.events.v1",
+        @"server_version": @MCP_SERVER_VERSION,
+        @"process": [store processInfo] ?: @{},
+        @"order": @"seq_ascending",
+        @"count": @(events.count),
+        @"matched_after_cursor": @(matched),
+        @"max_blob_bytes": @(maxBlob),
+        @"include_dumps": includeDumps ? @YES : @NO,
+        @"cursor": @{
+            @"after_seq": @(afterSeq),
+            @"snapshot_until_seq": @(snapshotUntil),
+            @"next_after_seq": nextAfter,
+            @"has_more": hasMore ? @YES : @NO,
+        },
+        @"events": events,
+        @"retention_note": @"The cursor fixes the upper sequence bound, but events can still disappear if the configured in-memory retention limit evicts them during export.",
+        @"sensitive_data_warning": @"Export may contain keys, plaintext, ciphertext, tokens, paths, and request data. Store and share it as sensitive material.",
+    });
 }
 
 // query_noise —— 噪声板块事件 (被过滤掉的高频调用)
@@ -2045,6 +2118,31 @@ static NSArray *tool_definitions(void) {
             },
         },
         @{
+            @"name": @"export_events",
+            @"description": @"Export retained full events as upper-bound-stable, paged JSON for offline analysis. Results are seq-ascending. Reuse cursor.snapshot_until_seq as until_seq and cursor.next_after_seq as after_seq until has_more=false. Blob content is capped per field (default 64KB, max 1MB) and marked with <field>Truncated; hexdumps are off by default to avoid duplicating hex data. The response contains highly sensitive keys/plaintext/tokens and must be handled accordingly.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"category": @{@"type": @"string", @"enum": @[@"all", @"digest", @"hmac", @"sym", @"asym", @"file", @"sys", @"net", @"keychain", @"other"], @"description": @"Filter by category (default all)"},
+                    @"query": @{@"type": @"string", @"description": @"Keyword filter (algorithm/path/content)"},
+                    @"after_seq": @{@"type": @"number", @"description": @"Exclusive paging cursor (default 0)"},
+                    @"until_seq": @{@"type": @"number", @"description": @"Inclusive stable snapshot upper bound; reuse cursor.snapshot_until_seq on later pages"},
+                    @"limit": @{@"type": @"number", @"description": @"Full records per page (default 25, max 100)"},
+                    @"max_blob_bytes": @{@"type": @"number", @"description": @"Max bytes encoded from each key/iv/input/output field (default 65536, max 1048576; 0 omits blob content but preserves lengths)"},
+                    @"include_dumps": @{@"type": @"boolean", @"description": @"Include human-readable hexdumps in addition to hex (default false)"},
+                    @"min_size": @{@"type": @"number", @"description": @"Min input bytes"},
+                    @"max_size": @{@"type": @"number", @"description": @"Max input bytes (0 = no cap)"},
+                    @"output_hex": @{@"type": @"string", @"description": @"Exact output hex match"},
+                    @"output_hex_prefix": @{@"type": @"string", @"description": @"Output hex prefix match"},
+                    @"output_len": @{@"type": @"number", @"description": @"Exact output byte length"},
+                    @"thread_id": @{@"type": @"number", @"description": @"Only events on this thread"},
+                    @"since_ts_ms": @{@"type": @"number", @"description": @"Only events with timestampMs >= this"},
+                    @"until_ts_ms": @{@"type": @"number", @"description": @"Only events with timestampMs <= this"},
+                    @"stack_contains": @{@"type": @"string", @"description": @"Only events whose call stack contains this substring"},
+                },
+            },
+        },
+        @{
             @"name": @"query_noise",
             @"description": @"List noise-filtered events (high-frequency calls diverted from the main feed).",
             @"inputSchema": @{
@@ -2266,6 +2364,7 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"query_events"])          return tool_query_events(args);
     if ([name isEqualToString:@"correlate_request"])     return tool_correlate_request(args);
     if ([name isEqualToString:@"get_event"])             return tool_get_event(args);
+    if ([name isEqualToString:@"export_events"])         return tool_export_events(args);
     if ([name isEqualToString:@"query_noise"])           return tool_query_noise(args);
     if ([name isEqualToString:@"list_files"])            return tool_list_files(args);
     if ([name isEqualToString:@"read_file"])             return tool_read_file(args);

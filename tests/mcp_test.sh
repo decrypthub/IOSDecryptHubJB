@@ -91,7 +91,7 @@ mc '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' > "$RESULT_DIR/tools.json"
 eq "$(jq -r '[.result.tools[].name] as $names |
     ["get_capabilities","disassemble","objc_resolve_imp","find_objc_methods","list_loaded_images","find_xrefs","find_string_refs",
      "find_selector_refs","find_function_refs","list_functions","get_stats","query_events",
-     "correlate_request","get_event","get_diag","hook_import","hook_method","unhook"] |
+     "correlate_request","get_event","export_events","get_diag","hook_import","hook_method","unhook"] |
     all(. as $name | $names | index($name) != null)' "$RESULT_DIR/tools.json")" \
     "true" "tools/list 包含关键兼容工具集合"
 mc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"fd7bbfa9","arch":"arm64"}}}' > "$RESULT_DIR/dh_disasm_stp.json"
@@ -139,6 +139,22 @@ DSEQ=$(jq -r '.result.structuredContent.events[0].seq // empty' "$RESULT_DIR/dh_
 mc "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"get_event\",\"arguments\":{\"seq\":${DSEQ:-0}}}}" > "$RESULT_DIR/dh_ev.json"
 OH=$(jq -r '.result.structuredContent.outputHex // empty' "$RESULT_DIR/dh_ev.json")
 eq "$([ -n "$OH" ] && echo yes)" "yes" "get_event 返回 outputHex"
+
+mc '{"jsonrpc":"2.0","id":49,"method":"tools/call","params":{"name":"export_events","arguments":{"category":"digest","limit":1,"max_blob_bytes":8}}}' > "$RESULT_DIR/dh_export.json"
+eq "$(jq -r '.result.structuredContent.format' "$RESULT_DIR/dh_export.json")" "iosdecrypthub.events.v1" "export_events 返回稳定格式标识"
+eq "$(jq -r '.result.structuredContent.order' "$RESULT_DIR/dh_export.json")" "seq_ascending" "事件导出按 seq 升序"
+eq "$(jq -r '.result.structuredContent.events|length' "$RESULT_DIR/dh_export.json")" "1" "事件导出遵守分页 limit"
+eq "$(jq -r '.result.structuredContent.events[0] | (.inputHex|length)<=16 and (has("inputDump")|not)' "$RESULT_DIR/dh_export.json")" "true" "批量导出限制 blob 且默认不重复 hexdump"
+eq "$(jq -r '.result.structuredContent.events[0] | if .input>8 then .inputTruncated==true else (has("inputTruncated")|not) end' "$RESULT_DIR/dh_export.json")" "true" "blob 截断标记与原始长度一致"
+eq "$(jq -r '.result.structuredContent.events[0].callStackFrames|type' "$RESULT_DIR/dh_export.json")" "array" "批量导出包含结构化调用栈"
+
+mc '{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"export_events","arguments":{"limit":1,"max_blob_bytes":0}}}' > "$RESULT_DIR/dh_export_page1.json"
+EXPORT_NEXT=$(jq -r '.result.structuredContent.cursor.next_after_seq // empty' "$RESULT_DIR/dh_export_page1.json")
+EXPORT_UNTIL=$(jq -r '.result.structuredContent.cursor.snapshot_until_seq' "$RESULT_DIR/dh_export_page1.json")
+eq "$(jq -r '.result.structuredContent.cursor.has_more' "$RESULT_DIR/dh_export_page1.json")" "true" "多事件导出返回下一页游标"
+mc "{\"jsonrpc\":\"2.0\",\"id\":51,\"method\":\"tools/call\",\"params\":{\"name\":\"export_events\",\"arguments\":{\"after_seq\":${EXPORT_NEXT:-0},\"until_seq\":${EXPORT_UNTIL:-0},\"limit\":1,\"max_blob_bytes\":0}}}" > "$RESULT_DIR/dh_export_page2.json"
+eq "$(jq --argjson prev "${EXPORT_NEXT:-0}" '.result.structuredContent.events[0].seq>$prev' "$RESULT_DIR/dh_export_page2.json")" "true" "下一页从 after_seq 之后继续"
+eq "$(jq -r '.result.structuredContent.cursor.snapshot_until_seq' "$RESULT_DIR/dh_export_page2.json")" "$EXPORT_UNTIL" "分页复用同一快照上界"
 # output_hex 反查应命中自身
 mc "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"query_events\",\"arguments\":{\"output_hex\":\"$OH\"}}}" > "$RESULT_DIR/dh_rev.json"
 ge "$(jq '.result.structuredContent.matched' "$RESULT_DIR/dh_rev.json")" 1 "output_hex 反查命中"
