@@ -402,11 +402,13 @@
   .io-card-head .io-label { margin-bottom:0; }
   .io-card-head .io-meta { margin-bottom:0; margin-left:2px; }
   .io-card-head .spacer { flex:1; }
-  .io-card-head .io-copy { min-height:24px; padding:0 9px; }
   .io-block { margin-top:2px; }
-  .io-block-head { display:flex; align-items:center; gap:8px; }
-  .io-block-head .copy-mini { min-height:20px; padding:0 7px; font-size:10px; color:var(--muted); background:var(--surface-2); border-color:var(--line-soft); border-radius:3px; }
-  .io-block-head .copy-mini:hover { color:var(--ink); background:var(--surface-3); border-color:#646e7d; }
+  .io-block-body { position:relative; }
+  .io-block-body:hover pre, .io-block-body:focus-within pre { border-color:#4a5260; }
+  .block-copy { position:absolute; top:8px; right:8px; width:26px; height:26px; padding:0; display:grid; place-items:center; opacity:0; pointer-events:none; color:var(--muted); background:var(--surface-3); border:1px solid var(--line); border-radius:4px; transition: opacity .12s, color .15s, background .15s, border-color .15s; }
+  .io-block-body:hover .block-copy, .io-block-body:focus-within .block-copy { opacity:1; pointer-events:auto; }
+  .block-copy:hover { color:var(--ink); background:var(--surface-2); border-color:#646e7d; }
+  .block-copy svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
   .io-label { padding:4px 8px; border-radius:3px; letter-spacing:0; }
   .io-label.in { color:#07101f; background:var(--blue); }
   .io-label.out { color:#180c09; background:var(--coral); border-color:var(--coral); }
@@ -1266,16 +1268,19 @@
     if (!cached && listHasMore) html += '<button class="loadmore" id="loadMoreBtn">加载更早 ↓</button>';
     $('list').innerHTML = html;
   }
+  const COPY_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></svg>';
+  function blockCopy(copyId) {
+    return '<button class="block-copy" data-copy="'+copyId+'" title="复制">'+COPY_ICON+'</button>';
+  }
   function ioKV(label, byteLen, hex) {
-    return '<div class="io-section kv-card"><div class="io-card-head"><div class="io-label kv">'+label+' ('+byteLen+' bytes)</div><span class="spacer"></span>' +
-      '<button class="io-copy" data-copy="hex-'+label+'">复制</button></div>' +
-      '<pre class="hex">'+escapeHTML(hex||'')+'</pre></div>';
+    return '<div class="io-section kv-card"><div class="io-card-head"><div class="io-label kv">'+label+' ('+byteLen+' bytes)</div></div>' +
+      '<div class="io-block-body"><pre class="hex">'+escapeHTML(hex||'')+'</pre>'+blockCopy('hex-'+label)+'</div></div>';
   }
   function ioBody(byteLen, hex, utf8, dump, label) {
     let b = '';
-    if (utf8) b += '<div class="io-block"><div class="io-block-head"><h3>UTF-8</h3><button class="copy-mini" data-copy="utf8-'+label+'">复制</button></div><pre>'+escapeHTML(utf8)+'</pre></div>';
-    b += '<div class="io-block"><div class="io-block-head"><h3>Hex</h3><button class="copy-mini" data-copy="hex-'+label+'">复制</button></div><pre class="hex">'+escapeHTML(hex||'')+'</pre></div>';
-    if (dump) b += '<div class="io-block"><div class="io-block-head"><h3>HexDump</h3><button class="copy-mini" data-copy="dump-'+label+'">复制</button></div><pre class="hex">'+escapeHTML(dump)+'</pre></div>';
+    if (utf8) b += '<div class="io-block"><h3>UTF-8</h3><div class="io-block-body"><pre>'+escapeHTML(utf8)+'</pre>'+blockCopy('utf8-'+label)+'</div></div>';
+    b += '<div class="io-block"><h3>Hex</h3><div class="io-block-body"><pre class="hex">'+escapeHTML(hex||'')+'</pre>'+blockCopy('hex-'+label)+'</div></div>';
+    if (dump) b += '<div class="io-block"><h3>HexDump</h3><div class="io-block-body"><pre class="hex">'+escapeHTML(dump)+'</pre>'+blockCopy('dump-'+label)+'</div></div>';
     return b;
   }
   function _s2hex(s) { let h=''; for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);if(c<128){h+=c.toString(16).padStart(2,'0');}else if(c<2048){h+=((c>>6)|0xc0).toString(16).padStart(2,'0')+((c&0x3f)|0x80).toString(16).padStart(2,'0');}else{h+=((c>>12)|0xe0).toString(16).padStart(2,'0')+(((c>>6)&0x3f)|0x80).toString(16).padStart(2,'0')+((c&0x3f)|0x80).toString(16).padStart(2,'0');}} return h; }
@@ -1330,8 +1335,6 @@
     const rawHttp = buildRawHttp(d);
     let actions = '<div class="detail-actions">' +
       '<button data-copyall="'+d.seq+'">复制整条</button>' +
-      (d.inputUtf8 ? '<button data-copy="utf8-INPUT">复制明文</button>' : '') +
-      (d.inputHex ? '<button data-copy="hex-INPUT">复制 Hex</button>' : '') +
       (rawHttp ? '<button data-copyraw="'+d.seq+'">复制报文</button>' : '') +
       '</div>';
     let h = '<div class="detail-head"><h2><span class="cat-dot '+dcls+'"></span>#'+d.seq+'  '+escapeHTML(d.algorithm)+'</h2>' +
@@ -1356,8 +1359,8 @@
     }
     if (d.key) h += ioKV('KEY', d.key, d.keyHex);
     if (d.iv)  h += ioKV('IV', d.iv, d.ivHex);
-    if (d.input && !rawHttp)  h += '<div class="io-section in-card"><div class="io-card-head"><div class="io-label in">输入 / INPUT</div><div class="io-meta">'+d.input+' bytes</div><span class="spacer"></span><button class="io-copy" data-copy="all-INPUT">复制</button></div>'+ioBody(d.input, d.inputHex, d.inputUtf8, d.inputDump, 'INPUT')+'</div>';
-    if (d.output && !rawHttp) h += '<div class="io-section out-card"><div class="io-card-head"><div class="io-label out">输出 / OUTPUT</div><div class="io-meta">'+d.output+' bytes</div><span class="spacer"></span><button class="io-copy" data-copy="all-OUTPUT">复制</button></div>'+ioBody(d.output, d.outputHex, d.outputUtf8, d.outputDump, 'OUTPUT')+'</div>';
+    if (d.input && !rawHttp)  h += '<div class="io-section in-card"><div class="io-card-head"><div class="io-label in">输入 / INPUT</div><div class="io-meta">'+d.input+' bytes</div></div>'+ioBody(d.input, d.inputHex, d.inputUtf8, d.inputDump, 'INPUT')+'</div>';
+    if (d.output && !rawHttp) h += '<div class="io-section out-card"><div class="io-card-head"><div class="io-label out">输出 / OUTPUT</div><div class="io-meta">'+d.output+' bytes</div></div>'+ioBody(d.output, d.outputHex, d.outputUtf8, d.outputDump, 'OUTPUT')+'</div>';
     if (d.callStack) h += '<details class="callstack" id="callstack-'+d.seq+'"><summary>调用栈 ('+(d.callStack.split('\n').length)+' 帧)</summary><pre>'+escapeHTML(d.callStack)+'</pre></details>';
     return h;
   }
@@ -1687,13 +1690,6 @@
       ev.stopPropagation(); const d = detailCache[selectedSeq]; if (!d) return;
       const [kind, ...rest] = copyHex.split('-'); const label = rest.join('-');
       const field = label==='KEY'?'key':label==='IV'?'iv':label==='INPUT'?'input':'output';
-      if (kind === 'all') {
-        const parts = [];
-        if (d[field+'Utf8']) parts.push('UTF-8:\n'+d[field+'Utf8']);
-        if (d[field+'Hex']) parts.push('Hex:\n'+d[field+'Hex']);
-        if (d[field+'Dump']) parts.push('HexDump:\n'+d[field+'Dump']);
-        copyText(parts.join('\n\n')); return;
-      }
       copyText((kind==='hex' ? d[field+'Hex'] : kind==='dump' ? d[field+'Dump'] : d[field+'Utf8'])||''); return;
     }
     const copyRaw = ev.target.dataset && ev.target.dataset.copyraw;
