@@ -282,6 +282,8 @@
   header .stats { gap:7px; padding:0; color:var(--green); background:transparent; border:0; border-radius:0; white-space:nowrap; }
   header .stats b { color:var(--ink); }
   .header-process { position:relative; min-width:0; margin-left:auto; }
+  header .stats .ver { color:var(--muted); font-variant-numeric:tabular-nums; }
+  header .stats .ver::before { content:''; display:inline-block; width:1px; height:11px; margin:0 8px; background:var(--line); vertical-align:-2px; }
   .process-trigger { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:10px; min-width:180px; max-width:300px; min-height:38px; padding:4px 10px !important; text-align:left; }
   .process-trigger .proc-primary { overflow:hidden; color:var(--ink); font-size:11px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
   .process-trigger .proc-secondary { grid-column:1; overflow:hidden; color:var(--muted); font:10px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
@@ -395,10 +397,16 @@
   .detail-head h2 { color:var(--ink); font-size:17px; }
   .detail-head .sub { color:var(--muted); }
   .io-section { margin-top:16px; }
-  .io-section.kv-card,.io-section.in-card,.io-section.out-card { padding:14px 15px; background:var(--surface); border-color:var(--line); border-radius:5px; }
-  .io-section.in-card { border-top:2px solid var(--blue); }
-  .io-section.out-card { border-top:2px solid var(--coral); }
-  .io-section.raw-card { border-top:2px solid var(--cyan); }
+  .io-section.kv-card,.io-section.in-card,.io-section.out-card,.io-section.raw-card { padding:14px 15px; background:var(--surface); border-color:var(--line); border-radius:5px; }
+  .io-card-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .io-card-head .io-label { margin-bottom:0; }
+  .io-card-head .io-meta { margin-bottom:0; margin-left:2px; }
+  .io-card-head .spacer { flex:1; }
+  .io-card-head .io-copy { min-height:24px; padding:0 9px; }
+  .io-block { margin-top:2px; }
+  .io-block-head { display:flex; align-items:center; gap:8px; }
+  .io-block-head .copy-mini { min-height:20px; padding:0 7px; font-size:10px; color:var(--muted); background:var(--surface-2); border-color:var(--line-soft); border-radius:3px; }
+  .io-block-head .copy-mini:hover { color:var(--ink); background:var(--surface-3); border-color:#646e7d; }
   .io-label { padding:4px 8px; border-radius:3px; letter-spacing:0; }
   .io-label.in { color:#07101f; background:var(--blue); }
   .io-label.out { color:#180c09; background:var(--coral); border-color:var(--coral); }
@@ -1101,7 +1109,8 @@
       const bc = stats.byCategory || [];
       const sp = stats.paused ? '已暂停' : '运行中';
       const dotCls = (stats.health && stats.health.summary) ? 'err' : (stats.paused ? 'paused' : 'ok');
-      $('stats').innerHTML = '<span><span class="status-dot '+dotCls+'"></span>'+sp+'</span>';
+      const ver = stats.version ? '<span class="ver">v'+escapeHTML(stats.version)+'</span>' : '';
+      $('stats').innerHTML = '<span><span class="status-dot '+dotCls+'"></span>'+sp+'</span>'+ver;
       const cryptoN = (bc[0]||0)+(bc[1]||0)+(bc[2]||0)+(bc[3]||0);
       $('n-crypto').textContent = cryptoN ? cryptoN : '';
       $('n-sys').textContent = ((bc[4]||0)+(bc[5]||0)) ? ((bc[4]||0)+(bc[5]||0)) : '';
@@ -1258,14 +1267,15 @@
     $('list').innerHTML = html;
   }
   function ioKV(label, byteLen, hex) {
-    return '<div class="io-section kv-card"><div class="io-label kv">'+label+' ('+byteLen+' bytes)</div>' +
+    return '<div class="io-section kv-card"><div class="io-card-head"><div class="io-label kv">'+label+' ('+byteLen+' bytes)</div><span class="spacer"></span>' +
+      '<button class="io-copy" data-copy="hex-'+label+'">复制</button></div>' +
       '<pre class="hex">'+escapeHTML(hex||'')+'</pre></div>';
   }
   function ioBody(byteLen, hex, utf8, dump, label) {
-    let b = '<div class="io-meta">'+byteLen+' bytes</div>';
-    if (utf8) b += '<h3>UTF-8</h3><pre>'+escapeHTML(utf8)+'</pre>';
-    b += '<h3>Hex</h3><pre class="hex">'+escapeHTML(hex||'')+'</pre>';
-    if (dump) b += '<h3>HexDump</h3><pre class="hex">'+escapeHTML(dump)+'</pre>';
+    let b = '';
+    if (utf8) b += '<div class="io-block"><div class="io-block-head"><h3>UTF-8</h3><button class="copy-mini" data-copy="utf8-'+label+'">复制</button></div><pre>'+escapeHTML(utf8)+'</pre></div>';
+    b += '<div class="io-block"><div class="io-block-head"><h3>Hex</h3><button class="copy-mini" data-copy="hex-'+label+'">复制</button></div><pre class="hex">'+escapeHTML(hex||'')+'</pre></div>';
+    if (dump) b += '<div class="io-block"><div class="io-block-head"><h3>HexDump</h3><button class="copy-mini" data-copy="dump-'+label+'">复制</button></div><pre class="hex">'+escapeHTML(dump)+'</pre></div>';
     return b;
   }
   function _s2hex(s) { let h=''; for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);if(c<128){h+=c.toString(16).padStart(2,'0');}else if(c<2048){h+=((c>>6)|0xc0).toString(16).padStart(2,'0')+((c&0x3f)|0x80).toString(16).padStart(2,'0');}else{h+=((c>>12)|0xe0).toString(16).padStart(2,'0')+(((c>>6)&0x3f)|0x80).toString(16).padStart(2,'0')+((c&0x3f)|0x80).toString(16).padStart(2,'0');}} return h; }
@@ -1346,8 +1356,8 @@
     }
     if (d.key) h += ioKV('KEY', d.key, d.keyHex);
     if (d.iv)  h += ioKV('IV', d.iv, d.ivHex);
-    if (d.input && !rawHttp)  h += '<div class="io-section in-card"><div class="io-label in">输入 / INPUT</div>'+ioBody(d.input, d.inputHex, d.inputUtf8, d.inputDump, 'INPUT')+'</div>';
-    if (d.output && !rawHttp) h += '<div class="io-section out-card"><div class="io-label out">输出 / OUTPUT</div>'+ioBody(d.output, d.outputHex, d.outputUtf8, d.outputDump, 'OUTPUT')+'</div>';
+    if (d.input && !rawHttp)  h += '<div class="io-section in-card"><div class="io-card-head"><div class="io-label in">输入 / INPUT</div><div class="io-meta">'+d.input+' bytes</div><span class="spacer"></span><button class="io-copy" data-copy="all-INPUT">复制</button></div>'+ioBody(d.input, d.inputHex, d.inputUtf8, d.inputDump, 'INPUT')+'</div>';
+    if (d.output && !rawHttp) h += '<div class="io-section out-card"><div class="io-card-head"><div class="io-label out">输出 / OUTPUT</div><div class="io-meta">'+d.output+' bytes</div><span class="spacer"></span><button class="io-copy" data-copy="all-OUTPUT">复制</button></div>'+ioBody(d.output, d.outputHex, d.outputUtf8, d.outputDump, 'OUTPUT')+'</div>';
     if (d.callStack) h += '<details class="callstack" id="callstack-'+d.seq+'"><summary>调用栈 ('+(d.callStack.split('\n').length)+' 帧)</summary><pre>'+escapeHTML(d.callStack)+'</pre></details>';
     return h;
   }
@@ -1677,7 +1687,14 @@
       ev.stopPropagation(); const d = detailCache[selectedSeq]; if (!d) return;
       const [kind, ...rest] = copyHex.split('-'); const label = rest.join('-');
       const field = label==='KEY'?'key':label==='IV'?'iv':label==='INPUT'?'input':'output';
-      copyText((kind==='hex' ? d[field+'Hex'] : d[field+'Utf8'])||''); return;
+      if (kind === 'all') {
+        const parts = [];
+        if (d[field+'Utf8']) parts.push('UTF-8:\n'+d[field+'Utf8']);
+        if (d[field+'Hex']) parts.push('Hex:\n'+d[field+'Hex']);
+        if (d[field+'Dump']) parts.push('HexDump:\n'+d[field+'Dump']);
+        copyText(parts.join('\n\n')); return;
+      }
+      copyText((kind==='hex' ? d[field+'Hex'] : kind==='dump' ? d[field+'Dump'] : d[field+'Utf8'])||''); return;
     }
     const copyRaw = ev.target.dataset && ev.target.dataset.copyraw;
     if (copyRaw) {
