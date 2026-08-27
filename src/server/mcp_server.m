@@ -1417,18 +1417,29 @@ static NSDictionary *tool_correlate_request(NSDictionary *args) {
     for (id s in inc) { NSInteger c = category_from_string(s); if (c >= 0) [allow addObject:@(c)]; }
     BOOL allowAll = (allow.count == 0);
 
-    // 解析锚点 request headers ("> KEY: VALUE") + URL + X-Validator
+    // 解析锚点请求头 + URL。新格式是 `-- Request Headers --` 段落下的 `Key: Value`;
+    // 旧格式是 curl 风格 `> Key: Value`。两种都认, 避免旧日志 correlate 失败。
     NSMutableDictionary *headers = [NSMutableDictionary dictionary];
     NSString *method = anchor.operation ?: @"";
     NSArray *lines = [(anchor.detail ?: @"") componentsSeparatedByString:@"\n"];
     NSString *url = lines.count ? lines[0] : @"";
     if ([url hasPrefix:[method stringByAppendingString:@" "]]) url = [url substringFromIndex:method.length + 1];
-    for (NSString *ln in lines) {
-        if (![ln hasPrefix:@"> "]) continue;
-        NSString *kv = [ln substringFromIndex:2];
-        NSRange colon = [kv rangeOfString:@": "];
+    BOOL inReq = NO;
+    for (NSString *raw in lines) {
+        NSString *ln = raw;
+        if ([ln hasPrefix:@"-- "]) {
+            BOOL isReq = [ln rangeOfString:@"Request Header" options:NSCaseInsensitiveSearch].location != NSNotFound
+                      || [ln isEqualToString:@"-- Headers --"];
+            inReq = isReq;
+            continue;
+        }
+        if ([ln hasPrefix:@"> "]) { ln = [ln substringFromIndex:2]; inReq = YES; }
+        else if ([ln hasPrefix:@"< "]) { inReq = NO; continue; }
+        if (!inReq) continue;
+        NSRange colon = [ln rangeOfString:@": "];
         if (colon.location == NSNotFound) continue;
-        headers[[kv substringToIndex:colon.location]] = [kv substringFromIndex:colon.location + 2];
+        NSString *key = [ln substringToIndex:colon.location];
+        if (key.length) headers[key] = [ln substringFromIndex:colon.location + 2];
     }
     // 匹配头: 指定 match_header 则只查它, 否则扫描全部请求头(任何 base64 值都试着反查)。
     // 不再把 X-Validator 写死 —— 它只是「优先展示」的兼容默认。

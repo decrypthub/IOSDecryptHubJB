@@ -65,7 +65,7 @@
   @keyframes dh-pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
   .detail-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
   details.callstack summary { cursor:pointer; color:#b0b8c4; font-size:11px; font-weight:500; text-transform:uppercase; letter-spacing:0.05em; user-select:none; }
-  details.callstack pre { margin-top:8px; }
+  details.callstack .io-block-body { margin-top:8px; }
   .filters input[type=search], .filters select { background:#0b0d12; color:#f7f8fb; border:1px solid #414a59; padding:5px 8px; border-radius:8px; font-size:12px; }
   .filters input[type=search]:focus, .filters select:focus { outline:none; border-color:#8ab4ff; }
   .filters input[type=search] { width: 240px; }
@@ -408,7 +408,7 @@
   .block-copy { position:absolute; top:8px; right:8px; width:26px; height:26px; padding:0; display:grid; place-items:center; opacity:0; pointer-events:none; color:var(--muted); background:var(--surface-3); border:1px solid var(--line); border-radius:4px; transition: opacity .12s, color .15s, background .15s, border-color .15s; }
   .io-block-body:hover .block-copy, .io-block-body:focus-within .block-copy { opacity:1; pointer-events:auto; }
   .block-copy:hover { color:var(--ink); background:var(--surface-2); border-color:#646e7d; }
-  .block-copy svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+  .block-copy svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
   .io-label { padding:4px 8px; border-radius:3px; letter-spacing:0; }
   .io-label.in { color:#07101f; background:var(--blue); }
   .io-label.out { color:#180c09; background:var(--coral); border-color:var(--coral); }
@@ -1283,85 +1283,47 @@
     if (dump) b += '<div class="io-block"><h3>HexDump</h3><div class="io-block-body"><pre class="hex">'+escapeHTML(dump)+'</pre>'+blockCopy('dump-'+label)+'</div></div>';
     return b;
   }
-  function _s2hex(s) { let h=''; for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);if(c<128){h+=c.toString(16).padStart(2,'0');}else if(c<2048){h+=((c>>6)|0xc0).toString(16).padStart(2,'0')+((c&0x3f)|0x80).toString(16).padStart(2,'0');}else{h+=((c>>12)|0xe0).toString(16).padStart(2,'0')+(((c>>6)&0x3f)|0x80).toString(16).padStart(2,'0')+((c&0x3f)|0x80).toString(16).padStart(2,'0');}} return h; }
-  function _s2dump(s) { const hex=_s2hex(s); let r=''; for(let i=0;i<hex.length;i+=32){const off=(i/2).toString(16).padStart(6,'0')+': ';const chunk=hex.substring(i,i+32);let h='',a='';for(let j=0;j<chunk.length;j+=2){if(j>0&&j%8===0)h+=' ';h+=chunk[j]+chunk[j+1]+' ';const b=parseInt(chunk.substring(j,j+2),16);a+=(b>=32&&b<127)?String.fromCharCode(b):'.';}r+=off+h.padEnd(40,' ')+' |'+a+'|\n';} return r.trimEnd(); }
-  function _hex2dump(hex){let r='';for(let i=0;i<hex.length;i+=32){const off=(i/2).toString(16).padStart(6,'0')+': ';const chunk=hex.substring(i,i+32);let h='',a='';for(let j=0;j<chunk.length;j+=2){if(j>0&&j%8===0)h+=' ';h+=chunk[j]+chunk[j+1]+' ';const b=parseInt(chunk.substring(j,j+2),16);a+=(b>=32&&b<127)?String.fromCharCode(b):'.';}r+=off+h.padEnd(40,' ')+' |'+a+'|\n';}return r.trimEnd();}
-  function buildRawHttp(d) {
-    if (!d.detail || d.categoryName !== 'net') return null;
-    const lines = d.detail.split('\n');
-    if (!lines.length) return null;
-    const m = lines[0].match(/^(\S+)\s+(\S+)/);
-    if (!m) return null;
-    const method = m[1], urlStr = m[2];
-    let path = '/', host = '';
-    try { const u = new URL(urlStr); path = u.pathname + (u.search||''); host = u.host; } catch(e) { path = urlStr; }
-    const reqH = [], respH = [];
-    let statusLine = '';
-    for (let i = 1; i < lines.length; i++) {
-      const l = lines[i];
-      if (l.startsWith('> ')) reqH.push(l.substring(2));
-      else if (l.startsWith('< ')) respH.push(l.substring(2));
-      else if (l.startsWith('-- Status:')) statusLine = l.replace(/^--\s*/, '').replace(/\s*--$/, '');
+  // 旧日志用 curl 风格 >/< 标注请求/响应头。展示与复制时剥掉, 避免看起来像原始报文。
+  function formatNetDetail(detail) {
+    if (!detail) return '';
+    const out = [];
+    let seenReq = false, seenResp = false;
+    for (const l of detail.split('\n')) {
+      if (l.startsWith('> ')) {
+        if (!seenReq) { out.push('-- Request Headers --'); seenReq = true; }
+        out.push(l.substring(2));
+      } else if (l.startsWith('< ')) {
+        if (!seenResp) { out.push('-- Response Headers --'); seenResp = true; }
+        out.push(l.substring(2));
+      } else {
+        if (/Request Header|-- Headers --/.test(l)) seenReq = true;
+        if (/Response Header/.test(l)) seenResp = true;
+        out.push(l);
+      }
     }
-    let req = method + ' ' + path + ' HTTP/1.1\r\nHost: ' + host + '\r\n';
-    let hasCL = false;
-    for (const h of reqH) { if (/^content-length:/i.test(h)) hasCL = true; req += h + '\r\n'; }
-    if (!hasCL && d.input) req += 'Content-Length: ' + d.input + '\r\n';
-    req += '\r\n';
-    if (d.inputUtf8) req += d.inputUtf8;
-    const body = d.inputUtf8 || '';
-    let resp = '';
-    if (statusLine) {
-      const sm = statusLine.match(/Status:\s*(\d+)/);
-      resp = 'HTTP/1.1 ' + (sm ? sm[1] : '???') + '\r\n';
-      for (const h of respH) resp += h + '\r\n';
-      resp += '\r\n';
-      if (d.outputUtf8) resp += d.outputUtf8;
-    }
-    const reqBin = !d.inputUtf8 && (d.input||0) > 0;
-    const respBin = !d.outputUtf8 && (d.output||0) > 0;
-    const reqBodyDump = reqBin ? _hex2dump(d.inputHex||'') : '';
-    const respBodyDump = respBin ? _hex2dump(d.outputHex||'') : '';
-    return {
-      request: req, requestHex: _s2hex(req), requestDump: _s2dump(req),
-      body: body, bodyHex: _s2hex(body), bodyDump: _s2dump(body),
-      response: resp || null, responseHex: resp ? _s2hex(resp) : null, responseDump: resp ? _s2dump(resp) : null,
-      reqBin: reqBin, respBin: respBin, reqBodyDump: reqBodyDump, respBodyDump: respBodyDump
-    };
+    return out.join('\n').replace(/\n+$/, '');
   }
   function renderDetailPane(d) {
     if (!d) return EMPTY;
     const dcls = CAT_CLS[d.category]||'other';
-    const rawHttp = buildRawHttp(d);
+    const isNet = d.categoryName === 'net';
+    const displayDetail = isNet ? formatNetDetail(d.detail) : (d.detail || '');
     let actions = '<div class="detail-actions">' +
       '<button data-copyall="'+d.seq+'">复制整条</button>' +
-      (rawHttp ? '<button data-copyraw="'+d.seq+'">复制报文</button>' : '') +
       '</div>';
     let h = '<div class="detail-head"><h2><span class="cat-dot '+dcls+'"></span>#'+d.seq+'  '+escapeHTML(d.algorithm)+'</h2>' +
       '<div class="sub">'+escapeHTML(d.operation)+' · '+escapeHTML(d.timestamp)+(d.publicKeyInfo?' · '+escapeHTML(d.publicKeyInfo):'')+'</div>' +
       actions + '</div>';
-    if (d.detail && !rawHttp) h += '<div class="io-section kv-card"><div class="io-label kv">详情</div><pre>'+escapeHTML(d.detail)+'</pre></div>';
-    if (rawHttp) {
-      const reqBodySec = rawHttp.reqBin ? '<h3>请求体 HexDump (二进制, '+d.input+' bytes)</h3><pre class="hex">'+escapeHTML(rawHttp.reqBodyDump)+'</pre>' : '';
-      h += '<div class="io-section raw-card"><div class="io-label raw">原始请求 / RAW REQUEST</div>' +
-        '<div class="io-meta">'+rawHttp.request.length+' bytes'+(rawHttp.reqBin?' · 请求体为二进制 '+d.input+' bytes':'')+'</div>' +
-        '<h3>Text</h3><pre style="white-space:pre;word-break:normal;">'+escapeHTML(rawHttp.request)+'</pre>' +
-        '<h3>Hex</h3><pre class="hex">'+escapeHTML(rawHttp.requestHex)+'</pre>' +
-        reqBodySec + '</div>';
-      if (rawHttp.response) {
-        const respBodySec = rawHttp.respBin ? '<h3>响应体 HexDump (二进制, '+d.output+' bytes)</h3><pre class="hex">'+escapeHTML(rawHttp.respBodyDump)+'</pre>' : '';
-        h += '<div class="io-section raw-card"><div class="io-label raw">原始响应 / RAW RESPONSE</div>' +
-          '<div class="io-meta">'+rawHttp.response.length+' bytes'+(rawHttp.respBin?' · 响应体为二进制 '+d.output+' bytes':'')+'</div>' +
-          '<h3>Text</h3><pre style="white-space:pre;word-break:normal;">'+escapeHTML(rawHttp.response)+'</pre>' +
-          '<h3>Hex</h3><pre class="hex">'+escapeHTML(rawHttp.responseHex)+'</pre>' +
-          respBodySec + '</div>';
-      }
-    }
+    if (displayDetail) h += '<div class="io-section kv-card"><div class="io-label kv">详情</div>' +
+      '<div class="io-block-body"><pre>'+escapeHTML(displayDetail)+'</pre>'+blockCopy('detail')+'</div></div>';
     if (d.key) h += ioKV('KEY', d.key, d.keyHex);
     if (d.iv)  h += ioKV('IV', d.iv, d.ivHex);
-    if (d.input && !rawHttp)  h += '<div class="io-section in-card"><div class="io-card-head"><div class="io-label in">输入 / INPUT</div><div class="io-meta">'+d.input+' bytes</div></div>'+ioBody(d.input, d.inputHex, d.inputUtf8, d.inputDump, 'INPUT')+'</div>';
-    if (d.output && !rawHttp) h += '<div class="io-section out-card"><div class="io-card-head"><div class="io-label out">输出 / OUTPUT</div><div class="io-meta">'+d.output+' bytes</div></div>'+ioBody(d.output, d.outputHex, d.outputUtf8, d.outputDump, 'OUTPUT')+'</div>';
-    if (d.callStack) h += '<details class="callstack" id="callstack-'+d.seq+'"><summary>调用栈 ('+(d.callStack.split('\n').length)+' 帧)</summary><pre>'+escapeHTML(d.callStack)+'</pre></details>';
+    const inLabel = isNet ? '请求体 / REQUEST' : '输入 / INPUT';
+    const outLabel = isNet ? '响应体 / RESPONSE' : '输出 / OUTPUT';
+    if (d.input)  h += '<div class="io-section in-card"><div class="io-card-head"><div class="io-label in">'+inLabel+'</div><div class="io-meta">'+d.input+' bytes</div></div>'+ioBody(d.input, d.inputHex, d.inputUtf8, d.inputDump, 'INPUT')+'</div>';
+    if (d.output) h += '<div class="io-section out-card"><div class="io-card-head"><div class="io-label out">'+outLabel+'</div><div class="io-meta">'+d.output+' bytes</div></div>'+ioBody(d.output, d.outputHex, d.outputUtf8, d.outputDump, 'OUTPUT')+'</div>';
+    if (d.callStack) h += '<details class="callstack" id="callstack-'+d.seq+'"><summary>调用栈 ('+(d.callStack.split('\n').length)+' 帧)</summary>' +
+      '<div class="io-block-body"><pre>'+escapeHTML(d.callStack)+'</pre>'+blockCopy('stack')+'</div></details>';
     return h;
   }
   async function selectRow(seq) {
@@ -1685,25 +1647,24 @@
     const tab = ev.target.closest('.tab');
     if (tab) { switchTab(tab.dataset.tab); return; }
     if (ev.target.id==='loadMoreBtn') { loadOlder(); return; }
-    const copyHex = ev.target.dataset && ev.target.dataset.copy;
-    if (copyHex) {
+    const copyBtn = ev.target.closest && ev.target.closest('[data-copy]');
+    if (copyBtn) {
       ev.stopPropagation(); const d = detailCache[selectedSeq]; if (!d) return;
+      const copyHex = copyBtn.dataset.copy;
+      if (copyHex === 'stack') { copyText(d.callStack || ''); return; }
+      if (copyHex === 'detail') {
+        copyText((d.categoryName === 'net' ? formatNetDetail(d.detail) : d.detail) || '');
+        return;
+      }
       const [kind, ...rest] = copyHex.split('-'); const label = rest.join('-');
       const field = label==='KEY'?'key':label==='IV'?'iv':label==='INPUT'?'input':'output';
       copyText((kind==='hex' ? d[field+'Hex'] : kind==='dump' ? d[field+'Dump'] : d[field+'Utf8'])||''); return;
-    }
-    const copyRaw = ev.target.dataset && ev.target.dataset.copyraw;
-    if (copyRaw) {
-      ev.stopPropagation(); const d = detailCache[copyRaw]; if (!d) return;
-      const raw = buildRawHttp(d);
-      if (raw) { let t = raw.request; if (raw.response) t += '\r\n\r\n' + raw.response; copyText(t); }
-      return;
     }
     const copyAll = ev.target.dataset && ev.target.dataset.copyall;
     if (copyAll) {
       ev.stopPropagation(); const d = detailCache[copyAll]; if (!d) return;
       const lines = ['序号: '+d.seq, '时间: '+d.timestamp, '算法: '+d.algorithm, '操作: '+d.operation];
-      if (d.detail) lines.push('详情: '+d.detail);
+      if (d.detail) lines.push('详情: '+(d.categoryName === 'net' ? formatNetDetail(d.detail) : d.detail));
       if (d.publicKeyInfo) lines.push('密钥信息: '+d.publicKeyInfo);
       for (const f of ['key','iv','input','output']) { if (d[f]) { lines.push(''); lines.push('=== '+f.toUpperCase()+' ('+d[f].length+' bytes) ==='); lines.push(d[f+'Hex']); if (d[f+'Utf8']) { lines.push('-- UTF-8 --'); lines.push(d[f+'Utf8']); } } }
       if (d.callStack) { lines.push(''); lines.push('=== CallStack ==='); lines.push(d.callStack); }
