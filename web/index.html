@@ -1225,17 +1225,16 @@
     } else { listHasMore = false; }
     renderList(false);
   }
-  function netSummary(detail){
-    if(!detail) return '';
-    const ls = detail.split('\n');
-    const first = ls[0]||'';
+  function netSummary(e){
+    const detail = e.detail || '';
+    if (!detail) return '';
+    const first = detail.split('\n')[0] || '';
     let url = first;
     const sp = first.indexOf(' ');
-    if (sp > 0) { try { const u = new URL(first.slice(sp+1)); url = first.slice(0,sp)+' '+u.host+u.pathname; } catch(e){} }
-    const sm = detail.match(/--\s*Status:\s*(\d+)/);
-    const em = detail.match(/--\s*Error:\s*([^\n]+)/);
-    if (sm) url += ' \u00b7 '+sm[1];
-    else if (em) url += ' \u00b7 ERR';
+    if (sp > 0) { try { const u = new URL(first.slice(sp+1)); url = first.slice(0,sp)+' '+u.host+u.pathname; } catch(ex){} }
+    const st = e.statusCode || ((detail.match(/--\s*Status:\s*(\d+)/)||[])[1]);
+    if (st) url += ' \u00b7 '+st;
+    else if (e.netError || /--\s*Error:/.test(detail)) url += ' \u00b7 ERR';
     return url;
   }
   function rowHTML(e){
@@ -1243,7 +1242,7 @@
     const sel = (selectedSeq===e.seq) ? ' selected' : '';
     const isNet = e.categoryName==='net';
     let rawMeta;
-    if (isNet) rawMeta = netSummary(e.detail);
+    if (isNet) rawMeta = netSummary(e);
     else rawMeta = e.detail ? e.detail : ('in:'+(e.inLen||0)+'B · out:'+(e.outLen||0)+'B');
     const meta = escapeHTML(rawMeta);
     const lensExtra = (!isNet && !e.detail && e.outputHexPreview) ? ' <span style="color:#7fd6df">⇢'+escapeHTML(e.outputHexPreview)+'</span>' : '';
@@ -1276,52 +1275,52 @@
     return '<div class="io-section kv-card"><div class="io-card-head"><div class="io-label kv">'+label+' ('+byteLen+' bytes)</div></div>' +
       '<div class="io-block-body"><pre class="hex">'+escapeHTML(hex||'')+'</pre>'+blockCopy('hex-'+label)+'</div></div>';
   }
-  function ioBody(byteLen, hex, utf8, dump, label) {
+  function ioBody(byteLen, hex, utf8, dump, label, skipUtf8) {
     let b = '';
-    if (utf8) b += '<div class="io-block"><h3>UTF-8</h3><div class="io-block-body"><pre>'+escapeHTML(utf8)+'</pre>'+blockCopy('utf8-'+label)+'</div></div>';
+    if (utf8 && !skipUtf8) b += '<div class="io-block"><h3>UTF-8</h3><div class="io-block-body"><pre>'+escapeHTML(utf8)+'</pre>'+blockCopy('utf8-'+label)+'</div></div>';
     b += '<div class="io-block"><h3>Hex</h3><div class="io-block-body"><pre class="hex">'+escapeHTML(hex||'')+'</pre>'+blockCopy('hex-'+label)+'</div></div>';
     if (dump) b += '<div class="io-block"><h3>HexDump</h3><div class="io-block-body"><pre class="hex">'+escapeHTML(dump)+'</pre>'+blockCopy('dump-'+label)+'</div></div>';
     return b;
   }
-  // 旧日志用 curl 风格 >/< 标注请求/响应头。展示与复制时剥掉, 避免看起来像原始报文。
-  function formatNetDetail(detail) {
-    if (!detail) return '';
-    const out = [];
-    let seenReq = false, seenResp = false;
-    for (const l of detail.split('\n')) {
-      if (l.startsWith('> ')) {
-        if (!seenReq) { out.push('-- Request Headers --'); seenReq = true; }
-        out.push(l.substring(2));
-      } else if (l.startsWith('< ')) {
-        if (!seenResp) { out.push('-- Response Headers --'); seenResp = true; }
-        out.push(l.substring(2));
-      } else {
-        if (/Request Header|-- Headers --/.test(l)) seenReq = true;
-        if (/Response Header/.test(l)) seenResp = true;
-        out.push(l);
-      }
-    }
-    return out.join('\n').replace(/\n+$/, '');
+  function netRequestText(d) {
+    let t = (d.detail || '').replace(/\n+$/, '');
+    if (d.inputUtf8) t += (t ? '\n\n' : '') + d.inputUtf8;
+    return t;
+  }
+  function netResponseText(d) {
+    let t = (d.responseDetail || '').replace(/\n+$/, '');
+    if (d.outputUtf8) t += (t ? '\n\n' : '') + d.outputUtf8;
+    return t;
   }
   function renderDetailPane(d) {
     if (!d) return EMPTY;
     const dcls = CAT_CLS[d.category]||'other';
     const isNet = d.categoryName === 'net';
-    const displayDetail = isNet ? formatNetDetail(d.detail) : (d.detail || '');
+    const isHttp = isNet && d.algorithm === 'HTTP';
     let actions = '<div class="detail-actions">' +
       '<button data-copyall="'+d.seq+'">复制整条</button>' +
       '</div>';
     let h = '<div class="detail-head"><h2><span class="cat-dot '+dcls+'"></span>#'+d.seq+'  '+escapeHTML(d.algorithm)+'</h2>' +
       '<div class="sub">'+escapeHTML(d.operation)+' · '+escapeHTML(d.timestamp)+(d.publicKeyInfo?' · '+escapeHTML(d.publicKeyInfo):'')+'</div>' +
       actions + '</div>';
-    if (displayDetail) h += '<div class="io-section kv-card"><div class="io-label kv">详情</div>' +
-      '<div class="io-block-body"><pre>'+escapeHTML(displayDetail)+'</pre>'+blockCopy('detail')+'</div></div>';
+    if (isHttp) {
+      const reqText = netRequestText(d);
+      if (reqText) h += '<div class="io-section raw-card"><div class="io-label raw">原始请求</div>' +
+        '<div class="io-block-body"><pre style="white-space:pre;word-break:normal;">'+escapeHTML(reqText)+'</pre>'+blockCopy('detail')+'</div></div>';
+      const respText = netResponseText(d);
+      if (respText) h += '<div class="io-section raw-card"><div class="io-label raw">原始响应</div>' +
+        '<div class="io-block-body"><pre style="white-space:pre;word-break:normal;">'+escapeHTML(respText)+'</pre>'+blockCopy('response')+'</div></div>';
+      if (d.netError) h += '<div class="io-section kv-card"><div class="io-label kv">错误</div><pre>'+escapeHTML(d.netError)+'</pre></div>';
+    } else if (d.detail) {
+      h += '<div class="io-section kv-card"><div class="io-label kv">详情</div>' +
+        '<div class="io-block-body"><pre>'+escapeHTML(d.detail)+'</pre>'+blockCopy('detail')+'</div></div>';
+    }
     if (d.key) h += ioKV('KEY', d.key, d.keyHex);
     if (d.iv)  h += ioKV('IV', d.iv, d.ivHex);
-    const inLabel = isNet ? '请求体 / REQUEST' : '输入 / INPUT';
-    const outLabel = isNet ? '响应体 / RESPONSE' : '输出 / OUTPUT';
-    if (d.input)  h += '<div class="io-section in-card"><div class="io-card-head"><div class="io-label in">'+inLabel+'</div><div class="io-meta">'+d.input+' bytes</div></div>'+ioBody(d.input, d.inputHex, d.inputUtf8, d.inputDump, 'INPUT')+'</div>';
-    if (d.output) h += '<div class="io-section out-card"><div class="io-card-head"><div class="io-label out">'+outLabel+'</div><div class="io-meta">'+d.output+' bytes</div></div>'+ioBody(d.output, d.outputHex, d.outputUtf8, d.outputDump, 'OUTPUT')+'</div>';
+    const inLabel = isHttp ? '请求体 / REQUEST' : '输入 / INPUT';
+    const outLabel = isHttp ? '响应体 / RESPONSE' : '输出 / OUTPUT';
+    if (d.input)  h += '<div class="io-section in-card"><div class="io-card-head"><div class="io-label in">'+inLabel+'</div><div class="io-meta">'+d.input+' bytes</div></div>'+ioBody(d.input, d.inputHex, d.inputUtf8, d.inputDump, 'INPUT', isHttp && !!d.inputUtf8)+'</div>';
+    if (d.output) h += '<div class="io-section out-card"><div class="io-card-head"><div class="io-label out">'+outLabel+'</div><div class="io-meta">'+d.output+' bytes</div></div>'+ioBody(d.output, d.outputHex, d.outputUtf8, d.outputDump, 'OUTPUT', isHttp && !!d.outputUtf8)+'</div>';
     if (d.callStack) h += '<details class="callstack" id="callstack-'+d.seq+'"><summary>调用栈 ('+(d.callStack.split('\n').length)+' 帧)</summary>' +
       '<div class="io-block-body"><pre>'+escapeHTML(d.callStack)+'</pre>'+blockCopy('stack')+'</div></details>';
     return h;
@@ -1653,9 +1652,10 @@
       const copyHex = copyBtn.dataset.copy;
       if (copyHex === 'stack') { copyText(d.callStack || ''); return; }
       if (copyHex === 'detail') {
-        copyText((d.categoryName === 'net' ? formatNetDetail(d.detail) : d.detail) || '');
+        copyText((d.algorithm === 'HTTP' ? netRequestText(d) : d.detail) || '');
         return;
       }
+      if (copyHex === 'response') { copyText(netResponseText(d) || ''); return; }
       const [kind, ...rest] = copyHex.split('-'); const label = rest.join('-');
       const field = label==='KEY'?'key':label==='IV'?'iv':label==='INPUT'?'input':'output';
       copyText((kind==='hex' ? d[field+'Hex'] : kind==='dump' ? d[field+'Dump'] : d[field+'Utf8'])||''); return;
@@ -1664,7 +1664,15 @@
     if (copyAll) {
       ev.stopPropagation(); const d = detailCache[copyAll]; if (!d) return;
       const lines = ['序号: '+d.seq, '时间: '+d.timestamp, '算法: '+d.algorithm, '操作: '+d.operation];
-      if (d.detail) lines.push('详情: '+(d.categoryName === 'net' ? formatNetDetail(d.detail) : d.detail));
+      if (d.algorithm === 'HTTP') {
+        const req = netRequestText(d);
+        const resp = netResponseText(d);
+        if (req) { lines.push(''); lines.push(req); }
+        if (resp) { lines.push(''); lines.push(resp); }
+        if (d.netError) lines.push(d.netError);
+      } else if (d.detail) {
+        lines.push('详情: '+d.detail);
+      }
       if (d.publicKeyInfo) lines.push('密钥信息: '+d.publicKeyInfo);
       for (const f of ['key','iv','input','output']) { if (d[f]) { lines.push(''); lines.push('=== '+f.toUpperCase()+' ('+d[f].length+' bytes) ==='); lines.push(d[f+'Hex']); if (d[f+'Utf8']) { lines.push('-- UTF-8 --'); lines.push(d[f+'Utf8']); } } }
       if (d.callStack) { lines.push(''); lines.push('=== CallStack ==='); lines.push(d.callStack); }

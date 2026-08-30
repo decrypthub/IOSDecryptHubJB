@@ -1417,25 +1417,19 @@ static NSDictionary *tool_correlate_request(NSDictionary *args) {
     for (id s in inc) { NSInteger c = category_from_string(s); if (c >= 0) [allow addObject:@(c)]; }
     BOOL allowAll = (allow.count == 0);
 
-    // 解析锚点请求头 + URL。新格式是 `-- Request Headers --` 段落下的 `Key: Value`;
-    // 旧格式是 curl 风格 `> Key: Value`。两种都认, 避免旧日志 correlate 失败。
+    // 解析锚点请求头 + URL。detail 经 dh_net_split_detail 后是纯请求 (METHOD URL + Key: Value),
+    // 旧日志的 >/< 与分段标签也会被剥掉。
+    NSString *req = nil, *resp = nil, *nerr = nil;
+    NSInteger st = 0;
+    dh_net_split_detail(anchor.detail, &req, &resp, &nerr, &st);
     NSMutableDictionary *headers = [NSMutableDictionary dictionary];
     NSString *method = anchor.operation ?: @"";
-    NSArray *lines = [(anchor.detail ?: @"") componentsSeparatedByString:@"\n"];
+    NSArray *lines = [(req ?: @"") componentsSeparatedByString:@"\n"];
     NSString *url = lines.count ? lines[0] : @"";
     if ([url hasPrefix:[method stringByAppendingString:@" "]]) url = [url substringFromIndex:method.length + 1];
-    BOOL inReq = NO;
-    for (NSString *raw in lines) {
-        NSString *ln = raw;
-        if ([ln hasPrefix:@"-- "]) {
-            BOOL isReq = [ln rangeOfString:@"Request Header" options:NSCaseInsensitiveSearch].location != NSNotFound
-                      || [ln isEqualToString:@"-- Headers --"];
-            inReq = isReq;
-            continue;
-        }
-        if ([ln hasPrefix:@"> "]) { ln = [ln substringFromIndex:2]; inReq = YES; }
-        else if ([ln hasPrefix:@"< "]) { inReq = NO; continue; }
-        if (!inReq) continue;
+    for (NSUInteger i = 1; i < lines.count; i++) {
+        NSString *ln = lines[i];
+        if ([ln hasPrefix:@"> "]) ln = [ln substringFromIndex:2];
         NSRange colon = [ln rangeOfString:@": "];
         if (colon.location == NSNotFound) continue;
         NSString *key = [ln substringToIndex:colon.location];

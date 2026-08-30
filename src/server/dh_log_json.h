@@ -15,6 +15,14 @@ NSInteger dh_log_category_count(void);
 // DHCategory -> 短名 ("digest"/"hmac"/"sym"/.../"net"/"keychain"/"other")
 const char *dh_log_category_name(NSInteger c);
 
+// 把网络事件 detail 拆成纯请求 / 纯响应 / 错误, 不含 -- Request Headers -- 等标签。
+// 新格式: request \\x1e response \\x1e error; 旧格式: >/< 与 -- Status: -- 等。
+void dh_net_split_detail(NSString * _Nullable detail,
+                         NSString * _Nullable * _Nonnull outReq,
+                         NSString * _Nullable * _Nonnull outResp,
+                         NSString * _Nullable * _Nonnull outErr,
+                         NSInteger * _Nullable outStatus);
+
 // 摘要 (列表用): seq / category / algorithm / operation / timestamp / in-outLen / detail / preview
 NSDictionary *dh_log_entry_summary(DHLogEntry *e);
 

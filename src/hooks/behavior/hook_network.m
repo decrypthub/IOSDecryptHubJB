@@ -44,30 +44,28 @@ static void net_log(NSString *algo, NSString *op, NSString *detail, NSData *body
     [[DHLogStore shared] append:e];
 }
 
-static void net_append_headers(NSMutableString *d, NSString *title, NSDictionary *hdrs) {
+static void net_append_headers(NSMutableString *d, NSDictionary *hdrs) {
     if (!hdrs.count) return;
-    [d appendFormat:@"-- %@ --\n", title];
     for (id k in hdrs) [d appendFormat:@"%@: %@\n", k, hdrs[k]];
 }
 
-// 请求↔响应配对记录: 一条 entry 里 input=请求体 / output=响应体 / detail=URL+状态+头。
+// 请求↔响应配对记录: 一条 entry 里 input=请求体 / output=响应体。
 // tsMs/tid 为「请求构建时刻」的值(不是响应到达时刻), 保证与算 Header 的 crypto 落在同一时间窗/线程。
-// detail 只记实际捕获到的字段(方法、URL、请求头、状态、响应头), 不加 curl 风格 >/<, 也不拼 HTTP/1.1 报文。
+// detail 用 \x1e 分成「纯请求 / 纯响应 / 错误」三段, 请求段只有 METHOD URL + Header: value, 不加任何标签。
 static void net_log_pair(NSString *method, NSString *urlStr, NSDictionary *reqHdrs, NSData *reqBody,
                          NSData *respData, NSURLResponse *resp, NSError *err, NSString *callStack,
                          uint64_t tsMs, uint64_t tid) {
     if (!dh_capture_sub_enabled(DH_CAP_NETWORK)) return;
-    NSMutableString *d = [NSMutableString stringWithFormat:@"%@ %@\n", method ?: @"GET", urlStr ?: @"?"];
-    net_append_headers(d, @"Request Headers", reqHdrs);
+    NSMutableString *req = [NSMutableString stringWithFormat:@"%@ %@\n", method ?: @"GET", urlStr ?: @"?"];
+    net_append_headers(req, reqHdrs);
+    NSMutableString *respPart = [NSMutableString string];
     if ([resp isKindOfClass:[NSHTTPURLResponse class]]) {
         NSHTTPURLResponse *http = (NSHTTPURLResponse *)resp;
-        [d appendFormat:@"-- Status: %ld  (resp %llu bytes) --\n", (long)http.statusCode,
-                        (unsigned long long)respData.length];
-        net_append_headers(d, @"Response Headers", http.allHeaderFields);
-    } else if (respData) {
-        [d appendFormat:@"-- resp %llu bytes --\n", (unsigned long long)respData.length];
+        [respPart appendFormat:@"%ld\n", (long)http.statusCode];
+        net_append_headers(respPart, http.allHeaderFields);
     }
-    if (err) [d appendFormat:@"-- Error: %@\n", err.localizedDescription];
+    NSString *errPart = err.localizedDescription ?: @"";
+    NSString *d = [NSString stringWithFormat:@"%@\x1e%@\x1e%@", req, respPart, errPart];
 
     DHLogEntry *e = [DHLogEntry new];
     e.category  = DHCategoryNetwork;
@@ -161,7 +159,7 @@ static void swz_task_resume(id self, SEL _cmd) {
             if (req && req.URL) {
                 NSMutableString *d = [NSMutableString stringWithFormat:@"%@ %@\n",
                                       req.HTTPMethod ?: @"GET", req.URL.absoluteString ?: @""];
-                net_append_headers(d, @"Request Headers", req.allHTTPHeaderFields);
+                net_append_headers(d, req.allHTTPHeaderFields);
                 net_log(@"HTTP", req.HTTPMethod ?: @"GET", d, req.HTTPBody);
             }
         }
