@@ -47,7 +47,6 @@
   .filters { display:flex; gap:8px; padding:8px 14px; background:#171b22; border-bottom:1px solid #414a59; align-items:center; flex-wrap:wrap; }
   .toolbar-filters { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .toolbar-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-left:auto; }
-  .toolbar-noise { margin-left:4px; }
   .filters.noise-mode { background:#171b22; border-bottom-color:#b0b8c4; }
   .noisebar { display:none; align-items:center; gap:10px; padding:7px 14px; background:#171b22; border-bottom:1px solid #414a59; color:#b0b8c4; font-size:12px; flex-shrink:0; }
   .noisebar.show { display:flex; }
@@ -184,6 +183,8 @@
   .modal h3 button { background:#0b0d12; color:#f7f8fb; border:1px solid #414a59; padding:4px 10px; border-radius:8px; font-size:12px; cursor:pointer; }
   .modal h3 button:hover { background:#171b22; border-color:#b0b8c4; }
   .modal pre { flex:1; overflow:auto; margin:0; padding:14px 16px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; word-break:break-all; color:#f7f8fb; }
+  #mcpMask .modal { height:auto; max-height:min(80vh,720px); }
+  #mcpMask .modal pre { flex:none; }
   .sym-workspace { flex:1; display:flex; min-height:0; }
   .files-workspace { flex:1; display:flex; min-height:0; }
   .files-list-pane { display:flex; flex-direction:column; overflow-y:hidden; }
@@ -265,8 +266,8 @@
 
   /* ===== 2026 workbench redesign ===== */
   :root {
-    --bg:#06070a; --chrome:#090b0f; --surface:#0f1218; --surface-2:#151922;
-    --surface-3:#1b202a; --line:#343b48; --line-soft:#20252e;
+    --bg:#06070a; --chrome:#06070a; --surface:#0f1218; --surface-2:#151922;
+    --surface-3:#1b202a; --line:#2c3340; --line-soft:#1a1f28;
     --ink:#ffffff; --ink-2:#e5e8ee; --muted:#aeb5c0;
     --blue:#78a9ff; --coral:#ff8b7b; --amber:#ffc85c; --lilac:#c7a6ff;
     --cyan:#79d6e8; --pink:#ff9fbc; --green:#8bd6a8; --danger:#ff788c;
@@ -274,7 +275,7 @@
   html,body { background:var(--bg); color:var(--ink); font-size:13px; letter-spacing:0; }
   body { min-width:320px; }
   button,input,select,textarea { letter-spacing:0; }
-  header { min-height:60px; padding:9px 16px; gap:14px; background:var(--surface); border-bottom-color:var(--line); }
+  header { min-height:60px; padding:9px 16px; gap:14px; background:var(--bg); border-bottom-color:var(--line-soft); }
   .brand-lockup { display:flex; align-items:center; gap:11px; flex-shrink:0; }
   header h1 { display:flex; align-items:center; color:var(--ink); font-family:Inter,-apple-system,sans-serif; font-size:16px; letter-spacing:0; }
   .hdr-raven { box-sizing:content-box; width:20px; height:18px; padding:6px 5px; margin-right:10px !important; color:#000; background:#fff; border-radius:4px; flex-shrink:0; }
@@ -284,7 +285,8 @@
   .header-process { position:relative; min-width:0; margin-left:auto; }
   header .stats .ver { color:var(--muted); font-variant-numeric:tabular-nums; }
   header .stats .ver::before { content:''; display:inline-block; width:1px; height:11px; margin:0 8px; background:var(--line); vertical-align:-2px; }
-  .process-trigger { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:10px; min-width:180px; max-width:300px; min-height:38px; padding:4px 10px !important; text-align:left; }
+  .process-trigger { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:10px; min-width:180px; max-width:300px; min-height:38px; padding:4px 10px !important; text-align:left; border-color:transparent; }
+  .process-trigger:hover { border-color:transparent; }
   .process-trigger .proc-primary { overflow:hidden; color:var(--ink); font-size:11px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
   .process-trigger .proc-secondary { grid-column:1; overflow:hidden; color:var(--muted); font:10px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
   .process-trigger .menu-chevron { grid-column:2; grid-row:1 / 3; align-self:center; color:var(--muted); }
@@ -296,8 +298,8 @@
   .auto-refresh-control input:checked + .toggle-track { background:var(--blue); }
   .auto-refresh-control input:checked + .toggle-track::after { transform:translateX(13px); }
   .auto-refresh-control input:focus-visible + .toggle-track { outline:2px solid rgba(120,169,255,.55); outline-offset:2px; }
-  header button,header a.btn,.filters button { min-height:32px; padding:0 10px; color:var(--ink-2); background:var(--surface); border-color:var(--line); border-radius:4px; }
-  header button:hover,header a.btn:hover,.filters button:hover { color:var(--ink); background:var(--surface-2); border-color:#646e7d; }
+  header button,header a.btn,.filters button { min-height:32px; padding:0 10px; color:var(--ink-2); background:transparent; border-color:var(--line); border-radius:4px; }
+  header button:hover,header a.btn:hover,.filters button:hover { color:var(--ink); background:rgba(255,255,255,.04); border-color:#646e7d; }
   .compact-action { display:inline-flex; align-items:center; justify-content:center; gap:6px; white-space:nowrap; }
   .icon-button { display:inline-grid !important; width:34px; min-width:34px; padding:0 !important; place-items:center; font-size:18px !important; line-height:1; }
   .menu-wrap { position:relative; }
@@ -323,14 +325,14 @@
   .healthbar:hover { background:#ff91a1; }
   .healthbar .hint { color:#5b202a; }
   .offlinebar { padding:9px 16px; color:#190d04; background:var(--amber); border-bottom-color:var(--amber); }
-  .tabbar { min-height:48px; gap:0; padding:0 12px; background:var(--chrome); border-bottom-color:var(--line); }
+  .tabbar { min-height:48px; gap:0; padding:0 12px; background:var(--bg); border-bottom-color:var(--line-soft); }
   .tab { position:relative; min-height:48px; padding:0 16px; color:var(--muted); border-bottom-width:2px; font-size:12px; }
-  .tab:hover { color:var(--ink); background:var(--surface); }
-  .tab.active { color:var(--ink); background:#101725; border-bottom-color:var(--blue); }
-  .tab .n { display:inline-grid; min-width:19px; height:19px; margin-left:7px; place-items:center; color:var(--muted); background:var(--surface-3); border-radius:3px; font-size:10px; }
+  .tab:hover { color:var(--ink); background:transparent; }
+  .tab.active { color:var(--ink); background:transparent; border-bottom-color:var(--blue); }
+  .tab .n { display:inline; min-width:0; height:auto; margin-left:6px; color:var(--muted); background:transparent; border-radius:0; font-size:11px; font-variant-numeric:tabular-nums; }
   .tab .n:empty { display:none; }
-  .tab.active .n { color:#07101f; background:var(--blue); }
-  .filters { min-height:52px; padding:8px 14px; gap:8px; flex-direction:column; align-items:stretch; background:var(--surface); border-bottom-color:var(--line); }
+  .tab.active .n { color:var(--blue); background:transparent; }
+  .filters { min-height:52px; padding:8px 14px; gap:8px; flex-direction:column; align-items:stretch; background:var(--bg); border-bottom-color:var(--line-soft); }
   .filters.noise-mode { background:#17140d; border-bottom-color:var(--amber); }
   .toolbar-main { display:flex; width:100%; align-items:center; gap:8px; }
   .toolbar-actions { display:flex; align-items:center; gap:7px; margin-left:auto; }
@@ -345,12 +347,11 @@
   .active-filter { display:inline-flex !important; min-height:27px !important; max-width:190px; align-items:center; gap:6px; padding:0 8px !important; overflow:hidden; color:var(--blue) !important; background:#14213a !important; border-color:#294a78 !important; text-overflow:ellipsis; white-space:nowrap; }
   .active-filter .filter-x { color:var(--muted); font-size:14px; }
   .filters label { color:var(--muted); }
-  .filters input[type=search],.filters select,.size-filter input[type=number] { min-height:32px; color:var(--ink); background:var(--bg); border-color:var(--line); border-radius:4px; }
+  .filters input[type=search],.filters select,.size-filter input[type=number] { min-height:32px; color:var(--ink); background:transparent; border-color:var(--line); border-radius:4px; }
   .filters input[type=search] { width:280px; }
   .filters input:focus,.filters select:focus,.size-filter input[type=number]:focus { outline:2px solid rgba(120,169,255,.25); outline-offset:0; border-color:var(--blue); }
   .size-filter .size-sep,.size-filter .size-unit,.size-filter .size-hint { color:var(--muted); }
   .size-filter button.size-reset { min-height:28px; border-radius:4px; }
-  .toolbar-noise { margin-left:auto; }
   .pause-btn.is-paused { color:#171007; background:var(--amber); border-color:var(--amber); font-weight:650; }
   .pause-btn.is-paused:hover { color:#171007; background:#ffd57d; border-color:#ffd57d; }
   #count { color:var(--muted) !important; font-variant-numeric:tabular-nums; }
@@ -363,13 +364,13 @@
   .status-dot.paused { background:var(--amber); }
   .status-dot.err { background:var(--danger); }
   .workspace { background:var(--bg); }
-  .list-pane { background:#090b0f; }
-  .splitter { width:5px; background:var(--surface-2); border-color:var(--line); }
+  .list-pane { background:var(--bg); }
+  .splitter { width:5px; background:transparent; border-color:var(--line-soft); }
   .splitter:hover,.splitter.dragging { background:var(--blue); }
-  .detail-pane { padding:0 20px 30px; background:#0c0e13; }
-  .row { min-height:70px; padding:10px 14px; background:#090b0f; border-bottom-color:var(--line-soft); border-left-width:3px; }
-  .row:hover { background:var(--surface); }
-  .row.selected { background:#172136; border-left-color:var(--blue); box-shadow:inset 0 0 0 1px rgba(120,169,255,.08); }
+  .detail-pane { padding:0 20px 30px; background:var(--bg); }
+  .row { min-height:70px; padding:10px 14px; background:transparent; border-bottom-color:var(--line-soft); border-left-width:3px; }
+  .row:hover { background:rgba(255,255,255,.035); }
+  .row.selected { background:rgba(120,169,255,.08); border-left-color:var(--blue); box-shadow:none; }
   .row .top { gap:10px; }
   .row .seq,.row .op,.row .ts,.row .lens,.row .preview { color:var(--muted); }
   .row .algo { color:var(--ink); font-weight:650; }
@@ -383,95 +384,112 @@
   .row.cat-net { border-left-color:var(--cyan); }
   .row.cat-keychain { border-left-color:var(--pink); }
   .row.selected { border-left-color:var(--blue); }
-  .pill { padding:2px 7px; border-color:transparent; border-radius:3px; }
-  .pill.digest { color:var(--green); background:#13251a; }
-  .pill.hmac { color:var(--blue); background:#14213a; }
-  .pill.sym { color:var(--amber); background:#2b2110; }
-  .pill.asym { color:var(--lilac); background:#21172f; }
-  .pill.file { color:var(--coral); background:#2c1816; }
-  .pill.sys { color:var(--lilac); background:#21172f; }
-  .pill.net { color:var(--cyan); background:#10252b; }
-  .pill.keychain { color:var(--pink); background:#2c1620; }
-  .pill.other { color:var(--muted); background:var(--surface-2); }
+  .pill { padding:0 2px; border:0; border-radius:0; background:transparent; }
+  .pill.digest { color:var(--green); background:transparent; }
+  .pill.hmac { color:var(--blue); background:transparent; }
+  .pill.sym { color:var(--amber); background:transparent; }
+  .pill.asym { color:var(--lilac); background:transparent; }
+  .pill.file { color:var(--coral); background:transparent; }
+  .pill.sys { color:var(--lilac); background:transparent; }
+  .pill.net { color:var(--cyan); background:transparent; }
+  .pill.keychain { color:var(--pink); background:transparent; }
+  .pill.other { color:var(--muted); background:transparent; }
   .cat-dot.digest { background:var(--green); } .cat-dot.hmac { background:var(--blue); }
   .cat-dot.sym { background:var(--amber); } .cat-dot.asym { background:var(--lilac); }
   .cat-dot.file { background:var(--coral); } .cat-dot.sys { background:var(--lilac); }
   .cat-dot.net { background:var(--cyan); } .cat-dot.keychain { background:var(--pink); }
-  .detail-head { padding:17px 0 13px; background:#0c0e13; border-bottom-color:var(--line); }
+  .detail-head { padding:17px 0 13px; background:var(--bg); border-bottom-color:var(--line-soft); }
   .detail-head h2 { color:var(--ink); font-size:17px; }
   .detail-head .sub { color:var(--muted); }
-  .io-section { margin-top:16px; }
-  .io-section.kv-card,.io-section.in-card,.io-section.out-card,.io-section.raw-card { padding:14px 15px; background:var(--surface); border-color:var(--line); border-radius:5px; }
-  .io-card-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .io-section { margin-top:18px; }
+  .io-section.kv-card,.io-section.in-card,.io-section.out-card,.io-section.raw-card { padding:0 0 2px 12px; background:transparent; border:0; border-radius:0; border-left:2px solid var(--line); }
+  .io-section.in-card { border-left-color:var(--blue); }
+  .io-section.out-card { border-left-color:var(--coral); }
+  .io-section.raw-card { border-left-color:var(--cyan); }
+  .io-card-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
   .io-card-head .io-label { margin-bottom:0; }
   .io-card-head .io-meta { margin-bottom:0; margin-left:2px; }
   .io-card-head .spacer { flex:1; }
   .io-block { margin-top:2px; }
   .io-block-body { position:relative; }
-  .io-block-body:hover pre, .io-block-body:focus-within pre { border-color:#4a5260; }
-  .block-copy { position:absolute; top:8px; right:8px; width:26px; height:26px; padding:0; display:grid; place-items:center; opacity:0; pointer-events:none; color:var(--muted); background:var(--surface-3); border:1px solid var(--line); border-radius:4px; transition: opacity .12s, color .15s, background .15s, border-color .15s; }
+  .io-block-body:hover pre, .io-block-body:focus-within pre { border-color:transparent; }
+  .block-copy { position:absolute; top:4px; right:0; width:26px; height:26px; padding:0; display:grid; place-items:center; opacity:0; pointer-events:none; color:var(--muted); background:transparent; border:0; border-radius:4px; transition: opacity .12s, color .15s, background .15s; }
   .io-block-body:hover .block-copy, .io-block-body:focus-within .block-copy { opacity:1; pointer-events:auto; }
-  .block-copy:hover { color:var(--ink); background:var(--surface-2); border-color:#646e7d; }
+  .block-copy:hover { color:var(--ink); background:rgba(255,255,255,.06); border-color:transparent; }
   .block-copy svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
-  .io-label { padding:4px 8px; border-radius:3px; letter-spacing:0; }
-  .io-label.in { color:#07101f; background:var(--blue); }
-  .io-label.out { color:#180c09; background:var(--coral); border-color:var(--coral); }
-  .io-label.kv { color:var(--ink); background:var(--surface-3); border-color:var(--line); }
-  .io-label.raw { color:#071f1c; background:var(--cyan); border-color:var(--cyan); }
+  .io-label { padding:0; border:0; border-radius:0; letter-spacing:.04em; text-transform:uppercase; font-size:11px; font-weight:650; }
+  .io-label.in { color:var(--blue); background:transparent; }
+  .io-label.out { color:var(--coral); background:transparent; border:0; }
+  .io-label.kv { color:var(--muted); background:transparent; border:0; }
+  .io-label.raw { color:var(--cyan); background:transparent; border:0; }
   .io-meta,.detail-pane h3 { color:var(--muted); letter-spacing:0; }
-  .detail-pane pre { padding:11px 12px; color:#f1f3f7; background:#08090c; border-color:var(--line); border-radius:4px; line-height:1.65; }
-  .detail-pane button { min-height:28px; color:var(--ink-2); background:var(--surface); border-color:var(--line); border-radius:4px; }
-  .detail-pane button:hover { background:var(--surface-2); border-color:#646e7d; }
+  .detail-pane pre { padding:8px 0; color:#f1f3f7; background:transparent; border:0; border-radius:0; line-height:1.65; }
+  .detail-pane button { min-height:28px; color:var(--ink-2); background:transparent; border-color:var(--line); border-radius:4px; }
+  .detail-pane button:hover { background:rgba(255,255,255,.04); border-color:#646e7d; }
   .detail-empty,.empty,.loading { color:var(--muted); }
   .spinner { border-color:var(--line); border-top-color:var(--blue); }
   .toast { color:#07101f; background:var(--blue); border-color:var(--blue); border-radius:4px; box-shadow:0 12px 40px rgba(0,0,0,.5); }
-  .dumppane { padding:24px; background:#0c0e13; }
+  .dumppane { padding:24px; background:var(--bg); }
   .dumpwrap { max-width:1080px; }
   .dumpwrap h2 { color:var(--ink); font-size:18px; }
   .dumpwrap .note,.dump-stage { color:var(--muted); }
   .dumpwrap .warn-note { color:var(--amber); }
-  .dump-actions button,.files-head button,.sym-img-head button { min-height:32px; color:var(--ink-2); background:var(--surface); border-color:var(--line); border-radius:4px; }
+  .dump-actions button,.files-head button,.sym-img-head button { min-height:32px; color:var(--ink-2); background:transparent; border-color:var(--line); border-radius:4px; }
   .dump-actions button.primary { color:#07101f; background:var(--blue); border-color:var(--blue); }
-  .dump-bar { height:9px; background:var(--surface-2); border-color:var(--line); border-radius:3px; }
+  .dump-bar { height:9px; background:rgba(255,255,255,.06); border-color:var(--line-soft); border-radius:3px; }
   .dump-bar > div { background:var(--blue); }
   .dl-link,.files-breadcrumb a { color:var(--blue); }
-  .dump-table th,.dump-table td { padding:9px 10px; border-bottom-color:var(--line); }
-  .dump-table th { color:var(--muted); background:var(--surface); }
-  .files-head,.sym-img-head { min-height:50px; border-bottom-color:var(--line); background:var(--surface); }
+  .dump-table th,.dump-table td { padding:9px 10px; border-bottom-color:var(--line-soft); }
+  .dump-table th { color:var(--muted); background:transparent; }
+  .files-head,.sym-img-head { min-height:50px; border-bottom-color:var(--line-soft); background:transparent; }
   .files-breadcrumb,.files-row .files-icon,.files-row .n,.sym-img-row .kind,.sym-img-row .n { color:var(--muted); }
   .files-row .name,.sym-img-row .name,.dump-table td.symname { color:var(--ink); }
-  .files-row .files-actions button { color:var(--muted); background:var(--surface); border-color:var(--line); border-radius:3px; }
-  .files-preview-head,.sym-detail-controls { background:#0c0e13; border-color:var(--line); }
+  .files-row .files-actions button { color:var(--muted); background:transparent; border-color:var(--line); border-radius:3px; }
+  .files-preview-head,.sym-detail-controls { background:var(--bg); border-color:var(--line-soft); }
   .files-preview-head .path,#filesPreviewBody { color:var(--ink-2); }
-  .sym-detail-controls input[type=search] { min-height:34px; color:var(--ink); background:var(--bg); border-color:var(--line); border-radius:4px; }
+  .sym-detail-controls input[type=search] { min-height:34px; color:var(--ink); background:transparent; border-color:var(--line); border-radius:4px; }
   .modal-mask { background:rgba(0,0,0,.76); backdrop-filter:blur(6px); }
-  .modal { background:#0c0e13; border-color:#4a5260; border-radius:6px; box-shadow:0 28px 90px rgba(0,0,0,.65); }
-  .modal h3 { min-height:52px; padding:10px 14px; color:var(--ink); background:var(--surface); border-bottom-color:var(--line); }
-  .modal h3 button,.diag-boards button { min-height:30px; color:var(--ink-2); background:var(--bg); border-color:var(--line); border-radius:4px; }
+  .modal { background:var(--bg); border-color:var(--line); border-radius:6px; box-shadow:0 28px 90px rgba(0,0,0,.65); }
+  .modal h3 { min-height:52px; padding:10px 14px; color:var(--ink); background:transparent; border-bottom-color:var(--line-soft); }
+  .modal h3 button,.diag-boards button { min-height:30px; color:var(--ink-2); background:transparent; border-color:var(--line); border-radius:4px; }
   .modal h3 button.issue { color:#07101f; background:var(--blue); border-color:var(--blue); }
   .diag-boards button.active { color:#07101f; background:var(--blue); border-color:var(--blue); }
-  .diag-hint { color:var(--muted); background:#11151c; border-bottom-color:var(--line); }
+  .diag-hint { color:var(--muted); background:transparent; border-bottom-color:var(--line-soft); }
   .diag-hint a { color:var(--blue); }
   .modal pre { color:var(--ink-2); }
+  #mcpMask .modal { height:auto; max-height:min(80vh,640px); width:min(520px,92vw); }
+  .mcp-shell { display:flex; flex-direction:column; }
+  .mcp-body { padding:4px 20px 22px; overflow-y:auto; }
+  .mcp-step { margin-top:18px; }
+  .mcp-step:first-child { margin-top:10px; }
+  .mcp-step h4 { margin:0 0 8px; color:var(--muted); font-size:11px; font-weight:650; letter-spacing:.06em; text-transform:uppercase; }
+  .mcp-fence { position:relative; display:flex; align-items:flex-start; gap:8px; padding:10px 52px 10px 12px; border-left:2px solid var(--line); }
+  .mcp-prompt { flex:0 0 auto; color:var(--muted); font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; user-select:none; }
+  .mcp-fence code, .mcp-fence pre { flex:1; min-width:0; margin:0; padding:0; color:var(--ink); background:transparent; border:0; border-radius:0; font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; word-break:break-all; }
+  .mcp-fence--json pre { white-space:pre; word-break:normal; overflow-x:auto; }
+  .mcp-copy { position:absolute; top:8px; right:0; min-height:26px !important; padding:0 8px !important; color:var(--muted) !important; background:transparent !important; border:0 !important; font-size:11px !important; }
+  .mcp-copy:hover { color:var(--ink) !important; }
+  .mcp-copy.is-copied { color:var(--green) !important; }
+  .mcp-note { margin:18px 0 0; color:var(--muted); font-size:11px; }
   .set-shell { width:min(980px,95vw); height:min(88vh,760px); }
   .set-close-x { color:var(--muted); border-radius:4px; }
-  .set-close-x:hover { color:var(--ink); background:var(--surface-3); }
-  .set-nav { width:190px; padding:48px 10px 14px; background:#090b0f; border-right-color:var(--line); }
+  .set-close-x:hover { color:var(--ink); background:rgba(255,255,255,.06); }
+  .set-nav { width:190px; padding:48px 10px 14px; background:transparent; border-right-color:var(--line-soft); }
   .set-nav button { min-height:38px; color:var(--muted); border-left:3px solid transparent; border-radius:3px; }
-  .set-nav button:hover { color:var(--ink); background:var(--surface); }
-  .set-nav button.active { color:var(--ink); background:#172136; border-left-color:var(--blue); }
+  .set-nav button:hover { color:var(--ink); background:rgba(255,255,255,.04); }
+  .set-nav button.active { color:var(--ink); background:transparent; border-left-color:var(--blue); }
   .set-main { padding:44px 32px 28px; }
   .set-page h4,.set-toggle-row .lab b,.set-row .lab b { color:var(--ink); }
   .set-lead,.set-section-title,.set-toggle-row .lab .fn,.set-row .lab span,.set-row .val { color:var(--muted); }
-  .set-section-title,.set-toggle-row,.set-row { border-color:var(--line); }
+  .set-section-title,.set-toggle-row,.set-row { border-color:var(--line-soft); }
   .set-switch .slider { background:#414958; border-radius:12px; }
   .set-switch .slider:before { background:var(--ink); }
   .set-switch input:checked + .slider { background:var(--blue); }
-  .set-row select { color:var(--ink); background:var(--bg); border-color:var(--line); border-radius:4px; }
-  .set-actions a.btn,.set-actions button { color:var(--ink-2); background:var(--surface); border-color:var(--line); border-radius:4px; }
-  .set-actions button.danger { color:var(--danger); background:#1d1015; border-color:#6d2f3d; }
-  .loadmore { color:var(--muted); background:var(--chrome); border-top-color:var(--line); }
-  .loadmore:hover { color:var(--ink); background:var(--surface); }
+  .set-row select { color:var(--ink); background:transparent; border-color:var(--line); border-radius:4px; }
+  .set-actions a.btn,.set-actions button { color:var(--ink-2); background:transparent; border-color:var(--line); border-radius:4px; }
+  .set-actions button.danger { color:var(--danger); background:transparent; border-color:#6d2f3d; }
+  .loadmore { color:var(--muted); background:transparent; border-top-color:var(--line-soft); }
+  .loadmore:hover { color:var(--ink); background:rgba(255,255,255,.04); }
   @media (max-width:980px) {
     header { flex-wrap:wrap; }
     .header-actions { margin-left:auto; }
@@ -498,7 +516,6 @@
     .toolbar-actions { margin-left:0; }
     .advanced-filters { flex-wrap:wrap; }
     .size-filter { width:100%; }
-    .toolbar-noise { margin-left:0; }
     .workspace { flex-direction:column; height:calc(100vh - 260px); min-height:560px; }
     .list-pane { width:100% !important; height:44%; min-height:240px; }
     .detail-pane { min-height:320px; }
@@ -546,18 +563,13 @@
         </button>
       </div>
     </div>
-    <div class='menu-wrap'>
-      <button type='button' class='compact-action' id='downloadMenuBtn' aria-expanded='false' aria-controls='downloadMenu'><span aria-hidden='true'>↓</span>下载<span class='menu-chevron' aria-hidden='true'>⌄</span></button>
-      <div class='popover menu-popover' id='downloadMenu'>
-        <a id='dlAll' href='/download' target='_blank' title='下载完整落盘日志 — 每条都已实时写入设备沙箱, App 闪退/被检测杀掉后重启仍可取全量(含崩溃前), 用于离线排查闭环'>下载全部日志</a>
-        <button type='button' id='tabDownloadBtn'>下载当前板块</button>
-      </div>
-    </div>
+    <button type='button' class='compact-action' id='mcpBtn' title='MCP：安装 idh、连接本设备、客户端配置'>MCP</button>
     <div class='menu-wrap'>
       <button type='button' class='icon-button' id='globalMoreBtn' aria-label='更多工具' aria-expanded='false' aria-controls='globalMoreMenu' title='更多工具'>⋯</button>
       <div class='popover menu-popover' id='globalMoreMenu'>
         <button type='button' id='diagBtn' title='查看内部诊断/审查日志, 便于排查与复现'>审查日志</button>
-        <button type='button' id='mcpBtn' title='MCP 客户端接入配置 — 供 AI 经 HTTP 调用反汇编/符号/镜像分析'>MCP 配置</button>
+        <a id='dlAll' href='/download' target='_blank' title='下载完整落盘日志'>下载全部日志</a>
+        <button type='button' id='tabDownloadBtn'>下载当前板块</button>
         <div class='menu-separator'></div>
         <button type='button' id='settingsBtn' title='捕获 / 日志 / 噪声 / 数据管理'>设置</button>
       </div>
@@ -587,6 +599,7 @@
     <div class='active-filters' id='activeFilters'></div>
     <div class='toolbar-actions'>
       <span id='count' style='color:#b0b8c4; font-size:11px;'></span>
+      <button type='button' id='viewNoiseBtn'>查看噪声<span class='n' id='n-noise-btn'></span></button>
       <button type='button' id='tabPauseBtn' class='pause-btn'>暂停</button>
       <div class='menu-wrap'>
         <button type='button' class='icon-button' id='toolbarMoreBtn' aria-label='当前板块更多操作' aria-expanded='false' aria-controls='toolbarMenu' title='当前板块更多操作'>⋯</button>
@@ -615,7 +628,6 @@
       <span id='sizeHint' class='size-hint'>不限</span>
       <button type='button' id='sizeReset' class='size-reset' title='清除大小过滤'>清除</button>
     </span>
-    <button type='button' id='viewNoiseBtn' class='toolbar-noise'>查看噪声<span class='n' id='n-noise-btn'></span></button>
   </div>
 </div>
 <div class='workspace'>
@@ -683,11 +695,42 @@
   </div>
 </div>
 <div class='modal-mask' id='mcpMask'>
-  <div class='modal'>
-    <h3>MCP 配置<span class='spacer'></span>
-      <button id='mcpCopy'>复制</button><button id='mcpClose'>关闭</button></h3>
-    <div class='diag-hint' id='mcpHint'></div>
-    <pre id='mcpBody'>加载中…</pre>
+  <div class='modal mcp-shell'>
+    <h3>MCP<span class='spacer'></span>
+      <button type='button' id='mcpClose'>关闭</button></h3>
+    <div class='mcp-body'>
+      <section class='mcp-step'>
+        <h4>安装</h4>
+        <div class='mcp-fence'>
+          <span class='mcp-prompt' aria-hidden='true'>$</span>
+          <code id='mcpInstall'>pip install ios-decrypt-hub</code>
+          <button type='button' class='mcp-copy' data-mcp-copy='install' title='复制'>复制</button>
+        </div>
+      </section>
+      <section class='mcp-step'>
+        <h4>连接</h4>
+        <div class='mcp-fence'>
+          <span class='mcp-prompt' aria-hidden='true'>$</span>
+          <code id='mcpConnect'>idh connect</code>
+          <button type='button' class='mcp-copy' data-mcp-copy='connect' title='复制'>复制</button>
+        </div>
+      </section>
+      <section class='mcp-step'>
+        <h4>配置</h4>
+        <div class='mcp-fence mcp-fence--json'>
+          <pre id='mcpConfig'>{
+  "mcpServers": {
+    "idh": {
+      "command": "idh",
+      "args": ["mcp"]
+    }
+  }
+}</pre>
+          <button type='button' class='mcp-copy' data-mcp-copy='config' title='复制'>复制</button>
+        </div>
+      </section>
+      <p class='mcp-note'>仅限可信网络</p>
+    </div>
   </div>
 </div>
 <div class='modal-mask' id='setMask'>
@@ -906,8 +949,10 @@
     updateSizeHint();
     refreshList({loading:true});
   }
-  function noiseBoard() { return NOISE_BOARD[activeTab] || 'crypto'; }
-  function noiseStateKey() { return 'noise_' + noiseBoard(); }
+  function noiseBoard() { return NOISE_BOARD[activeTab] || null; }
+  function noiseStateKey() { return 'noise_' + (noiseBoard() || 'crypto'); }
+  function hasNoiseBoard() { return !noiseView && !!NOISE_BOARD[activeTab]; }
+  function hasCryptoFilters() { return !noiseView && activeTab === 'crypto'; }
   function noiseCountForTab() {
     const nc = (stats && stats.noiseCount) || [];
     const idx = activeTab === 'crypto' ? 0 : 1;
@@ -939,7 +984,6 @@
   const POPOVERS = [
     ['processPopover','processBtn'],
     ['wechatPopover','wechatBtn'],
-    ['downloadMenu','downloadMenuBtn'],
     ['globalMoreMenu','globalMoreBtn'],
     ['toolbarMenu','toolbarMoreBtn'],
   ];
@@ -959,13 +1003,13 @@
   function setFiltersOpen(open) {
     filtersOpen = !!open;
     localStorage.setItem('dh_filters_open', filtersOpen ? '1' : '0');
-    $('filterToggleBtn').setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
-    $('advancedFilters').hidden = noiseView || !filtersOpen;
+    $('filterToggleBtn').setAttribute('aria-expanded', hasCryptoFilters() && filtersOpen ? 'true' : 'false');
+    $('advancedFilters').hidden = !hasCryptoFilters() || !filtersOpen;
   }
   function updateFilterSummary() {
     if (!$('activeFilters')) return;
     const chips = [];
-    if (!noiseView && activeTab === 'crypto') {
+    if (hasCryptoFilters()) {
       if ($('catSel').value !== '-2') {
         const label = $('catSel').options[$('catSel').selectedIndex].textContent;
         chips.push('<button type="button" class="active-filter" data-clear-filter="category">分类: '+escapeHTML(label)+'<span class="filter-x" aria-hidden="true">×</span></button>');
@@ -976,9 +1020,9 @@
     $('activeFilters').innerHTML = chips.join('');
     $('activeFilters').style.display = chips.length ? '' : 'none';
     $('filterBadge').textContent = chips.length ? String(chips.length) : '';
-    $('filterToggleBtn').style.display = noiseView ? 'none' : '';
-    $('filterToggleBtn').setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
-    $('advancedFilters').hidden = noiseView || !filtersOpen;
+    $('filterToggleBtn').style.display = hasCryptoFilters() ? '' : 'none';
+    $('filterToggleBtn').setAttribute('aria-expanded', hasCryptoFilters() && filtersOpen ? 'true' : 'false');
+    $('advancedFilters').hidden = !hasCryptoFilters() || !filtersOpen;
   }
 
   // 局域网直连, 无鉴权。dlUrl 直通(下载链接不再附令牌)。
@@ -998,16 +1042,14 @@
       $('noisebarLabel').textContent = NOISE_LABEL[noiseBoard()] || '';
       $('noisebarCount').textContent = n ? ('('+n+' 条)') : '';
     }
-    $('catWrap').style.display = inNoise ? 'none' : (activeTab==='crypto' ? '' : 'none');
-    $('sizeWrap').style.display = inNoise ? 'none' : (activeTab==='crypto' ? '' : 'none');
     $('tabPauseBtn').style.display = inNoise ? 'none' : '';
     $('tabDownloadBtn').style.display = inNoise ? 'none' : '';
     $('tabClearBtn').textContent = inNoise ? '清空噪声' : '清空本类';
     $('q').placeholder = inNoise ? '搜索噪声: 算法/路径/明文/Hex…' : '搜索本类: 算法/路径/明文/Hex…';
     const btn = $('viewNoiseBtn');
     if (btn) {
-      btn.style.display = inNoise ? 'none' : '';
-      if (!inNoise) {
+      btn.style.display = hasNoiseBoard() ? '' : 'none';
+      if (hasNoiseBoard()) {
         const cnt = noiseCountForTab() ? (' '+noiseCountForTab()) : '';
         btn.innerHTML = '查看噪声<span class="n" id="n-noise-btn">'+cnt+'</span>';
       }
@@ -1107,15 +1149,33 @@
     toast('审查日志已复制；Issue 页面已打开，请补充复现步骤后提交', 3200);
   }
   async function openDiag(){ $('diagMask').classList.add('show'); buildDiagBoards(); loadDiag(); }
-  // MCP 接入配置: 端点复用当前页面地址(自动填对可达 IP:端口), 供 AI 客户端粘贴。
+  // MCP：三步可复制命令。不要把 HTTP 端点直接配进客户端。
+  const MCP_INSTALL = 'pip install ios-decrypt-hub';
+  const MCP_CONFIG = '{\n  "mcpServers": {\n    "idh": {\n      "command": "idh",\n      "args": ["mcp"]\n    }\n  }\n}';
+  function mcpConnectCmd() { return 'idh connect ' + location.host; }
   function openMcp(){
-    const url = location.protocol + '//' + location.host + '/api/mcp';
-    const cfg = { mcpServers: { 'ios-decrypt-helper': { type: 'http', url: url } } };
-    $('mcpBody').textContent = JSON.stringify(cfg, null, 2);
-    $('mcpHint').innerHTML = '把下面配置加入 MCP 客户端(如 Claude Code / Desktop)。端点 <code>'+url
-      +'</code>；命令行等价: <code>claude mcp add --transport http ios-decrypt-helper "'+url+'"'
-      +'</code>。<b>令牌已内嵌在 URL 里；本服务开放进程内存读取, 仅在可信网络使用。</b>';
+    $('mcpConnect').textContent = mcpConnectCmd();
+    $('mcpConfig').textContent = MCP_CONFIG;
     $('mcpMask').classList.add('show');
+  }
+  function copyMcp(kind, btn) {
+    const text = kind === 'install' ? MCP_INSTALL : kind === 'connect' ? mcpConnectCmd() : MCP_CONFIG;
+    const done = () => {
+      if (!btn) { toast('已复制'); return; }
+      const prev = btn.textContent;
+      btn.textContent = '已复制';
+      btn.classList.add('is-copied');
+      setTimeout(() => { btn.textContent = prev; btn.classList.remove('is-copied'); }, 1200);
+    };
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+      done();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(fallback);
+    } else fallback();
   }
   async function refreshStats() {
     try {
@@ -1350,7 +1410,7 @@
     $('detail').innerHTML = renderDetailPane(detailCache[seq]);
   }
   function enterNoiseView() {
-    if (noiseView) return;
+    if (noiseView || !NOISE_BOARD[activeTab]) return;
     noiseView = true;
     $('q').value = (tabState[noiseStateKey()]||{}).q || '';
     updateNoiseToolbar();
@@ -1717,7 +1777,6 @@
     }
     toast('已复制 DecryptHub');
   });
-  $('downloadMenuBtn').addEventListener('click', () => togglePopover('downloadMenu','downloadMenuBtn'));
   $('globalMoreBtn').addEventListener('click', () => togglePopover('globalMoreMenu','globalMoreBtn'));
   $('toolbarMoreBtn').addEventListener('click', () => togglePopover('toolbarMenu','toolbarMoreBtn'));
   $('filterToggleBtn').addEventListener('click', () => setFiltersOpen(!filtersOpen));
@@ -1769,9 +1828,12 @@
   $('diagBtn').addEventListener('click', () => { closePopovers(); openDiag(); });
   $('healthbar').addEventListener('click', openDiag);
   $('mcpBtn').addEventListener('click', () => { closePopovers(); openMcp(); });
-  $('mcpCopy').addEventListener('click', () => copyText($('mcpBody').textContent||''));
   $('mcpClose').addEventListener('click', () => $('mcpMask').classList.remove('show'));
-  $('mcpMask').addEventListener('click', (e) => { if(e.target===$('mcpMask')) $('mcpMask').classList.remove('show'); });
+  $('mcpMask').addEventListener('click', (e) => {
+    if (e.target === $('mcpMask')) { $('mcpMask').classList.remove('show'); return; }
+    const btn = e.target.closest('[data-mcp-copy]');
+    if (btn) copyMcp(btn.dataset.mcpCopy, btn);
+  });
   $('diagClose').addEventListener('click', () => $('diagMask').classList.remove('show'));
   $('diagRefresh').addEventListener('click', loadDiag);
   $('diagCopy').addEventListener('click', () => copyText($('diagBody').textContent||''));

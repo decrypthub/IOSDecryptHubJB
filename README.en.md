@@ -102,3 +102,9 @@ arm64e process.
 - Do not post captured keys, passwords, plaintext or other sensitive data to public issues.
 
 Report problems via [GitHub Issues](https://github.com/taisuii/IOSDecryptHub/issues/new/choose).
+
+## License
+
+[MIT](./LICENSE)
+
+Vendored [fishhook](https://github.com/facebook/fishhook) and [Capstone](https://www.capstone-engine.org/) (both BSD-3-Clause); see [NOTICE](./NOTICE).

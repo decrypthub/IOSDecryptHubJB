@@ -4,6 +4,7 @@
 //   1) swizzle 三个 completion-handler 建任务方法  —— 请求↔响应【配对】成一条完整记录
 //      (input=请求体, output=响应体, detail=URL+状态码+头), 用 task 身份天然关联。
 //      覆盖用 completionHandler 的 NSURLSession 调用 (绝大多数 App)。
+//      HTTPBody 必须在调用 orig 之前快照: URLSession 发出请求后原对象上的 body 经常变 nil。
 //   2) swizzle -[NSURLSessionTask resume]           —— delegate 型任务(无 completion)的请求兜底,
 //      已被 (1) 配对捕获的 task 会跳过, 不重复记。
 //   3) fishhook SSL_write / SSL_read                —— App 自带 TLS 栈(bundle OpenSSL/BoringSSL、
@@ -25,10 +26,65 @@
 
 // 标记「此 task 的响应会由 completion 配对捕获」, 供 resume 兜底去重。
 static const void *kDHNetHandled = &kDHNetHandled;
+// 建任务时快照的请求字段, 挂在 task 上。completion 时 HTTPBody 往往已被 URLSession 转成 stream 清掉。
+static const void *kDHNetSnap = &kDHNetSnap;
+// -[NSMutableURLRequest setHTTPBody:] 当时的副本, 防止 getter 随后返回 nil。
+static const void *kDHSetHTTPBody = &kDHSetHTTPBody;
 
 // 请求时刻的 ms/tid —— 配对事件用它做锚点(而非响应到达时刻), 否则慢请求会跳出关联时间窗。
 static uint64_t dh_now_ms(void) { struct timeval tv; gettimeofday(&tv, NULL); return (uint64_t)tv.tv_sec * 1000ULL + tv.tv_usec / 1000; }
 static uint64_t dh_cur_tid(void) { uint64_t t = 0; pthread_threadid_np(NULL, &t); return t; }
+
+// 建任务瞬间的请求快照。必须在调用 orig 之前取 HTTPBody, 发出去之后原对象上的 body 经常变 nil。
+@interface DHNetSnap : NSObject
+@property (copy)   NSString *method;
+@property (copy)   NSString *url;
+@property (copy)   NSDictionary *headers;
+@property (strong) NSData *body;
+@property (copy)   NSString *callStack;
+@property (assign) uint64_t tsMs;
+@property (assign) uint64_t tid;
+@end
+@implementation DHNetSnap
+@end
+
+static NSDictionary *dh_merge_headers(NSDictionary *base, NSDictionary *extra) {
+    if (!base.count) return extra.count ? [extra copy] : nil;
+    if (!extra.count) return [base copy];
+    NSMutableDictionary *h = [base mutableCopy];
+    [h addEntriesFromDictionary:extra];
+    return h;
+}
+
+static DHNetSnap *dh_snap_from_request(NSURLRequest *req, id session) {
+    DHNetSnap *s = [DHNetSnap new];
+    s.method = req.HTTPMethod ?: @"GET";
+    s.url = req.URL.absoluteString ?: @"";
+    NSMutableDictionary *h = [NSMutableDictionary dictionary];
+    if ([session isKindOfClass:[NSURLSession class]]) {
+        NSDictionary *add = ((NSURLSession *)session).configuration.HTTPAdditionalHeaders;
+        if (add.count) [h addEntriesFromDictionary:add];
+    }
+    if (req.allHTTPHeaderFields.count) [h addEntriesFromDictionary:req.allHTTPHeaderFields];
+    s.headers = h;
+    NSData *body = req.HTTPBody;
+    if (!body.length) body = objc_getAssociatedObject(req, kDHSetHTTPBody);
+    s.body = body;
+    s.callStack = DHCallStackFiltered();
+    s.tsMs = dh_now_ms();
+    s.tid = dh_cur_tid();
+    return s;
+}
+
+static void dh_attach_snap(id task, DHNetSnap *snap) {
+    if (task && snap) objc_setAssociatedObject(task, kDHNetSnap, snap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void (*orig_setHTTPBody)(id, SEL, NSData *) = NULL;
+static void swz_setHTTPBody(id self, SEL _cmd, NSData *body) {
+    if (body) objc_setAssociatedObject(self, kDHSetHTTPBody, body, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    if (orig_setHTTPBody) orig_setHTTPBody(self, _cmd, body);
+}
 
 // ============================================================
 // 记录
@@ -89,24 +145,36 @@ typedef void (^DHDataCH)(NSData *, NSURLResponse *, NSError *);
 static id (*orig_dtReqCH)(id, SEL, NSURLRequest *, DHDataCH) = NULL;
 static id (*orig_dtURLCH)(id, SEL, NSURL *, DHDataCH) = NULL;
 static id (*orig_upReqCH)(id, SEL, NSURLRequest *, NSData *, DHDataCH) = NULL;
+static id (*orig_dtReq)(id, SEL, NSURLRequest *) = NULL;
+static id (*orig_upReq)(id, SEL, NSURLRequest *, NSData *) = NULL;
 
 static id mark_handled(id task) {
     if (task) objc_setAssociatedObject(task, kDHNetHandled, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return task;
 }
 
+static void net_log_from_snap(DHNetSnap *snap, id task, NSData *respData, NSURLResponse *resp, NSError *err) {
+    NSURLRequest *cur = [task isKindOfClass:[NSURLSessionTask class]] ? [(NSURLSessionTask *)task currentRequest] : nil;
+    NSDictionary *hdrs = dh_merge_headers(snap.headers, cur.allHTTPHeaderFields);
+    NSData *body = snap.body ?: cur.HTTPBody;
+    if (!body.length) body = objc_getAssociatedObject(cur, kDHSetHTTPBody);
+    net_log_pair(snap.method, snap.url, hdrs, body, respData, resp, err, snap.callStack, snap.tsMs, snap.tid);
+}
+
 // -[NSURLSession dataTaskWithRequest:completionHandler:]
 static id swz_dtReqCH(id self, SEL _cmd, NSURLRequest *req, DHDataCH ch) {
     if (!ch || !dh_capture_sub_enabled(DH_CAP_NETWORK)) return orig_dtReqCH(self, _cmd, req, ch);
-    NSURLRequest *rc = req;
-    NSString *cs = DHCallStackFiltered();
-    uint64_t reqMs = dh_now_ms(), reqTid = dh_cur_tid();
+    DHNetSnap *snap = dh_snap_from_request(req, self);
+    __block __weak id weakTask = nil;
     DHDataCH wrapped = ^(NSData *data, NSURLResponse *resp, NSError *err) {
-        @try { net_log_pair(rc.HTTPMethod, rc.URL.absoluteString, rc.allHTTPHeaderFields, rc.HTTPBody, data, resp, err, cs, reqMs, reqTid); }
+        @try { net_log_from_snap(snap, weakTask, data, resp, err); }
         @catch (__unused NSException *e) {}
         ch(data, resp, err);
     };
-    return mark_handled(orig_dtReqCH(self, _cmd, req, wrapped));
+    id task = orig_dtReqCH(self, _cmd, req, wrapped);
+    weakTask = task;
+    dh_attach_snap(task, snap);
+    return mark_handled(task);
 }
 
 // -[NSURLSession dataTaskWithURL:completionHandler:]
@@ -126,15 +194,38 @@ static id swz_dtURLCH(id self, SEL _cmd, NSURL *url, DHDataCH ch) {
 // -[NSURLSession uploadTaskWithRequest:fromData:completionHandler:]
 static id swz_upReqCH(id self, SEL _cmd, NSURLRequest *req, NSData *bodyData, DHDataCH ch) {
     if (!ch || !dh_capture_sub_enabled(DH_CAP_NETWORK)) return orig_upReqCH(self, _cmd, req, bodyData, ch);
-    NSURLRequest *rc = req; NSData *bc = bodyData ?: req.HTTPBody;
-    NSString *cs = DHCallStackFiltered();
-    uint64_t reqMs = dh_now_ms(), reqTid = dh_cur_tid();
+    DHNetSnap *snap = dh_snap_from_request(req, self);
+    if (bodyData.length) snap.body = bodyData;
+    __block __weak id weakTask = nil;
     DHDataCH wrapped = ^(NSData *data, NSURLResponse *resp, NSError *err) {
-        @try { net_log_pair(rc.HTTPMethod, rc.URL.absoluteString, rc.allHTTPHeaderFields, bc, data, resp, err, cs, reqMs, reqTid); }
+        @try { net_log_from_snap(snap, weakTask, data, resp, err); }
         @catch (__unused NSException *e) {}
         ch(data, resp, err);
     };
-    return mark_handled(orig_upReqCH(self, _cmd, req, bodyData, wrapped));
+    id task = orig_upReqCH(self, _cmd, req, bodyData, wrapped);
+    weakTask = task;
+    dh_attach_snap(task, snap);
+    return mark_handled(task);
+}
+
+// 无 completion 的建任务: 只快照 body/头, 响应仍走 resume 兜底(只有请求)。
+static id swz_dtReq(id self, SEL _cmd, NSURLRequest *req) {
+    if (!orig_dtReq) return nil;
+    id task = orig_dtReq(self, _cmd, req);
+    if (dh_capture_sub_enabled(DH_CAP_NETWORK) && !objc_getAssociatedObject(task, kDHNetSnap))
+        dh_attach_snap(task, dh_snap_from_request(req, self));
+    return task;
+}
+
+static id swz_upReq(id self, SEL _cmd, NSURLRequest *req, NSData *bodyData) {
+    if (!orig_upReq) return nil;
+    id task = orig_upReq(self, _cmd, req, bodyData);
+    if (dh_capture_sub_enabled(DH_CAP_NETWORK) && !objc_getAssociatedObject(task, kDHNetSnap)) {
+        DHNetSnap *snap = dh_snap_from_request(req, self);
+        if (bodyData.length) snap.body = bodyData;
+        dh_attach_snap(task, snap);
+    }
+    return task;
 }
 
 static BOOL swz_instance(Class cls, SEL sel, IMP newImp, IMP *origOut) {
@@ -156,11 +247,16 @@ static void swz_task_resume(id self, SEL _cmd) {
             !objc_getAssociatedObject(self, kDHNetHandled)) {   // 已配对捕获则不重复记请求
             NSURLSessionTask *task = (NSURLSessionTask *)self;
             NSURLRequest *req = task.currentRequest ?: task.originalRequest;
+            DHNetSnap *snap = objc_getAssociatedObject(self, kDHNetSnap);
             if (req && req.URL) {
-                NSMutableString *d = [NSMutableString stringWithFormat:@"%@ %@\n",
-                                      req.HTTPMethod ?: @"GET", req.URL.absoluteString ?: @""];
-                net_append_headers(d, req.allHTTPHeaderFields);
-                net_log(@"HTTP", req.HTTPMethod ?: @"GET", d, req.HTTPBody);
+                NSString *method = snap.method ?: (req.HTTPMethod ?: @"GET");
+                NSString *urlStr = snap.url ?: (req.URL.absoluteString ?: @"");
+                NSDictionary *hdrs = dh_merge_headers(snap.headers, req.allHTTPHeaderFields);
+                NSData *body = snap.body ?: req.HTTPBody;
+                if (!body.length) body = objc_getAssociatedObject(req, kDHSetHTTPBody);
+                NSMutableString *d = [NSMutableString stringWithFormat:@"%@ %@\n", method, urlStr];
+                net_append_headers(d, hdrs);
+                net_log(@"HTTP", method, d, body);
             }
         }
     } @catch (__unused NSException *ex) {}
@@ -173,6 +269,12 @@ static void install_urlsession_hook(void) {
     swz_instance(sc, @selector(dataTaskWithRequest:completionHandler:),          (IMP)swz_dtReqCH, (IMP *)&orig_dtReqCH);
     swz_instance(sc, @selector(dataTaskWithURL:completionHandler:),              (IMP)swz_dtURLCH, (IMP *)&orig_dtURLCH);
     swz_instance(sc, @selector(uploadTaskWithRequest:fromData:completionHandler:),(IMP)swz_upReqCH, (IMP *)&orig_upReqCH);
+    swz_instance(sc, @selector(dataTaskWithRequest:),                         (IMP)swz_dtReq, (IMP *)&orig_dtReq);
+    swz_instance(sc, @selector(uploadTaskWithRequest:fromData:),            (IMP)swz_upReq, (IMP *)&orig_upReq);
+
+    Class mreq = NSClassFromString(@"NSMutableURLRequest");
+    if (!swz_instance(mreq, @selector(setHTTPBody:), (IMP)swz_setHTTPBody, (IMP *)&orig_setHTTPBody))
+        dh_health_hook_fail(DH_DIAG_SYS, "-[NSMutableURLRequest setHTTPBody:]");
 
     // 兜底: resume (delegate 型任务的请求)
     Class taskCls = NSClassFromString(@"NSURLSessionTask");

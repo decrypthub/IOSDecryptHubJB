@@ -101,3 +101,9 @@ make deb-roothide     # roothide（arm64e）
 - 请勿将捕获到的 Key、口令、明文或其他敏感数据提交到公开 Issue。
 
 遇到问题可在 [GitHub Issues](https://github.com/taisuii/IOSDecryptHub/issues/new/choose) 反馈。
+
+## 协议
+
+[MIT](./LICENSE)
+
+内嵌 [fishhook](https://github.com/facebook/fishhook) 与 [Capstone](https://www.capstone-engine.org/)（均为 BSD-3-Clause），版权声明见 [NOTICE](./NOTICE)。
