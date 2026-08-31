@@ -1,17 +1,10 @@
 #!/bin/bash
-# build_deb.sh — 构建 IOSDecryptHub rootless / roothide 越狱 deb 包
+# 私有仓入口：编译闭源 dylib → 放入开源越狱仓 vendor → 调用开源打包脚本
 #
-# 用法:
-#   ./jailbreak/build_deb.sh              # 构建全部目标
-#   ./jailbreak/build_deb.sh rootless     # 仅普通 rootless
-#   ./jailbreak/build_deb.sh roothide     # 仅 roothide
+# 用法与原先相同:
+#   ./jailbreak/build_deb.sh [all|rootless|roothide]
 #
-# 前提:
-#   - macOS + Xcode (xcrun)
-#   - dpkg-deb (brew install dpkg)
-#   - ldid (brew install ldid)
-#
-# 产物: build/deb/com.iosdecrypthub_<version>_<目标>.deb
+# 越狱加载器 / 设置面板源码已迁至工作区并列仓库 IOSDecryptHubJB。
 
 set -euo pipefail
 
@@ -30,278 +23,56 @@ case "$TARGET" in
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="$PROJECT_DIR/build/deb"
-VERSION=$(grep '^VERSION' "$PROJECT_DIR/Makefile" | head -1 | sed 's/.*:= *//')
-PKG_NAME="com.iosdecrypthub"
+PRIVATE_DIR="$(dirname "$SCRIPT_DIR")"
+WORKSPACE="$(dirname "$PRIVATE_DIR")"
+JB_DIR="${DH_JB_DIR:-$WORKSPACE/IOSDecryptHubJB}"
 
-# 颜色
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 NC='\033[0m'
-
 info()  { echo -e "${GREEN}[*]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 
-# ---------- 检查依赖 ----------
-command -v dpkg-deb >/dev/null 2>&1 || error "需要 dpkg-deb (brew install dpkg)"
-command -v xcrun >/dev/null 2>&1 || error "需要 Xcode (xcrun)"
-command -v ldid >/dev/null 2>&1 || error "需要 ldid (brew install ldid)"
+[ -d "$JB_DIR" ] || error "找不到开源越狱仓: $JB_DIR
+请把 IOSDecryptHubJB 放在工作区根目录，或设置 DH_JB_DIR。"
+[ -x "$JB_DIR/build_deb.sh" ] || chmod +x "$JB_DIR/build_deb.sh"
 
-# ---------- 编译加载器 ----------
-SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-CC=$(xcrun --find clang)
-LOADER_SRC="$SCRIPT_DIR/src/loader.m"
+VERSION=$(grep '^VERSION' "$PRIVATE_DIR/Makefile" | head -1 | sed 's/.*:= *//')
+[ -n "$VERSION" ] || error "无法读取私有仓 Makefile VERSION"
 
-compile_loader() {
-    local ARCHS="$1"
-    local OUT="$2"
-    local ARCH_FLAGS=()
-    local ARCH
-    for ARCH in $ARCHS; do
-        ARCH_FLAGS+=( -arch "$ARCH" )
-    done
-    info "编译越狱加载器 (archs=$ARCHS)..."
-    mkdir -p "$(dirname "$OUT")"
-    $CC "${ARCH_FLAGS[@]}" -isysroot "$SDK" -miphoneos-version-min=14.0 \
-        -dynamiclib -install_name /usr/lib/IOSDecryptHub/IOSDecryptHubLoader.dylib \
-        -ObjC -fobjc-arc -Wall -O2 \
-        -framework Foundation \
-        "$LOADER_SRC" -o "$OUT"
-}
+info "同步版本号 $VERSION → IOSDecryptHubJB/Makefile"
+sed -i '' "s/^VERSION := .*/VERSION := $VERSION/" "$JB_DIR/Makefile"
+grep -q "^VERSION := $VERSION$" "$JB_DIR/Makefile" \
+    || error "无法把版本号写入 $JB_DIR/Makefile"
 
-# ---------- 编译 PreferenceBundle ----------
-PREFS_SRC="$SCRIPT_DIR/prefs/IOSDecryptHubPrefsListController.m"
-# 由官网仓库 public/favicon.svg 转为 Settings 使用的 PNG。
-PREFS_ICON="$SCRIPT_DIR/prefs/icon.png"
-WECHAT_PNG="$PROJECT_DIR/web/wechat-follow.png"
-
-compile_prefs() {
-    local ARCHS="$1"
-    local BUNDLE_DIR="$2"
-    local ARCH_FLAGS=()
-    local ARCH
-    for ARCH in $ARCHS; do
-        ARCH_FLAGS+=( -arch "$ARCH" )
-    done
-    info "编译设置面板 (archs=$ARCHS)..."
-    mkdir -p "$BUNDLE_DIR"
-    $CC "${ARCH_FLAGS[@]}" -isysroot "$SDK" -miphoneos-version-min=14.0 \
-        -bundle \
-        -ObjC -fobjc-arc -Wall -O2 \
-        -framework Foundation -framework UIKit \
-        -undefined dynamic_lookup \
-        "$PREFS_SRC" -o "$BUNDLE_DIR/IOSDecryptHubPrefs"
-    cp "$SCRIPT_DIR/prefs/Info.plist" "$BUNDLE_DIR/"
-    cp "$SCRIPT_DIR/prefs/Root.plist" "$BUNDLE_DIR/"
-    cp "$PREFS_ICON" "$BUNDLE_DIR/icon.png"
-    [ -f "$WECHAT_PNG" ] || error "缺少 web/wechat-follow.png"
-    cp "$WECHAT_PNG" "$BUNDLE_DIR/wechat-follow.png"
-}
-
-verify_macho_arch() {
-    local PATH_TO_VERIFY="$1"
-    local EXPECTED_ARCH="$2"
-    local LABEL="$3"
-    local ACTUAL_ARCHS
-
-    ACTUAL_ARCHS=$(xcrun lipo -archs "$PATH_TO_VERIFY")
-    [ "$ACTUAL_ARCHS" = "$EXPECTED_ARCH" ] \
-        || error "$LABEL 架构错误: 期望 $EXPECTED_ARCH, 实际 $ACTUAL_ARCHS"
-}
-
-# ---------- 打包函数 ----------
-build_variant() {
+stage_engine() {
     local VARIANT="$1"
-    local PREFIX="$2"
-    local ARCHITECTURE="$3"
-    local MACHO_ARCHS="$4"
-
-    local STAGE="$BUILD_DIR/stage-$VARIANT"
-    local DEB_OUT="$BUILD_DIR/${PKG_NAME}_${VERSION}_${VARIANT}.deb"
-    local LOADER_OUT="$BUILD_DIR/_loader-${VARIANT}/IOSDecryptHubLoader.dylib"
-    local PREFS_BUNDLE="$BUILD_DIR/_prefs-${VARIANT}/IOSDecryptHubPrefs.bundle"
-
-    # roothide 的系统进程需要 arm64e，普通 App 仍可能是 arm64；动态组件必须覆盖两者。
-    info "编译主 dylib (VARIANT=rootless, archs=$MACHO_ARCHS)..."
-    make -C "$PROJECT_DIR" -B VARIANT=rootless ARCHS="$MACHO_ARCHS" all
-    compile_loader "$MACHO_ARCHS" "$LOADER_OUT"
-    compile_prefs "$MACHO_ARCHS" "$PREFS_BUNDLE"
-
-    info "打包 $VARIANT (arch=$ARCHITECTURE, prefix=${PREFIX:-/})..."
-    rm -rf "$STAGE"
-    mkdir -p "$STAGE/DEBIAN"
-    mkdir -p "$STAGE/${PREFIX}/Library/MobileSubstrate/DynamicLibraries"
-    mkdir -p "$STAGE/${PREFIX}/usr/lib/IOSDecryptHub"
-    mkdir -p "$STAGE/${PREFIX}/Library/PreferenceBundles"
-    mkdir -p "$STAGE/${PREFIX}/Library/PreferenceLoader/Preferences"
-
-    # control
-    cat > "$STAGE/DEBIAN/control" << CTRL
-Package: ${PKG_NAME}
-Name: IOSDecryptHub
-Version: ${VERSION}
-Architecture: ${ARCHITECTURE}
-Description: iOS runtime security analysis tool (dylib injection via jailbreak)
-Maintainer: IOSDecryptHub
-Author: IOSDecryptHub
-Section: Tweaks
-Depends: ellekit, preferenceloader
-Conflicts: com.iosdecrypthub.trollstore
-CTRL
-
-    # 加载器 + Filter
-    cp "$LOADER_OUT" "$STAGE/${PREFIX}/Library/MobileSubstrate/DynamicLibraries/IOSDecryptHubLoader.dylib"
-    cp "$SCRIPT_DIR/Filter.plist" "$STAGE/${PREFIX}/Library/MobileSubstrate/DynamicLibraries/IOSDecryptHubLoader.plist"
-
-    # 主 dylib
-    cp "$PROJECT_DIR/decrypt_helper.dylib" "$STAGE/${PREFIX}/usr/lib/IOSDecryptHub/decrypt_helper.dylib"
-    cp "$SCRIPT_DIR/enabledBundles.default.plist" \
-        "$STAGE/${PREFIX}/usr/lib/IOSDecryptHub/enabledBundles.default.plist"
-
-    # 主门控配置不作为 dpkg conffile 打包，避免升级覆盖用户选择。postinst 在干净安装时
-    # 创建，在旧版升级时从 /var/mobile/Library/Preferences 自动迁移。
-    cat > "$STAGE/DEBIAN/postinst" << POSTINST
-#!/bin/sh
-set -e
-CONFIG_DIR="${PREFIX}/usr/lib/IOSDecryptHub/config"
-CONFIG_PATH="\$CONFIG_DIR/enabledBundles.plist"
-DEFAULT_PATH="${PREFIX}/usr/lib/IOSDecryptHub/enabledBundles.default.plist"
-LEGACY_PATH="/var/mobile/Library/Preferences/com.iosdecrypthub.loader.plist"
-mkdir -p "\$CONFIG_DIR"
-if [ ! -f "\$CONFIG_PATH" ]; then
-    if [ -f "\$LEGACY_PATH" ]; then
-        cp "\$LEGACY_PATH" "\$CONFIG_PATH"
-    else
-        cp "\$DEFAULT_PATH" "\$CONFIG_PATH"
-    fi
-fi
-chown mobile:mobile "\$CONFIG_DIR" "\$CONFIG_PATH" 2>/dev/null || true
-chmod 0755 "\$CONFIG_DIR"
-chmod 0644 "\$CONFIG_PATH"
-exit 0
-POSTINST
-    chmod 0755 "$STAGE/DEBIAN/postinst"
-
-    # 卸载清理：移除配置目录（保留用户偏好 plist 以便降级回旧版）
-    cat > "$STAGE/DEBIAN/postrm" << POSTRM
-#!/bin/sh
-set -e
-if [ "\$1" = "purge" ]; then
-    rm -rf "${PREFIX}/usr/lib/IOSDecryptHub"
-    rm -f "/var/mobile/Library/Preferences/com.iosdecrypthub.loader.plist"
-fi
-exit 0
-POSTRM
-    chmod 0755 "$STAGE/DEBIAN/postrm"
-
-    # 设置面板
-    cp -R "$PREFS_BUNDLE" "$STAGE/${PREFIX}/Library/PreferenceBundles/"
-    cp "$SCRIPT_DIR/prefs/entry.plist" "$STAGE/${PREFIX}/Library/PreferenceLoader/Preferences/IOSDecryptHubPrefs.plist"
-
-    verify_macho_arch \
-        "$STAGE/${PREFIX}/Library/MobileSubstrate/DynamicLibraries/IOSDecryptHubLoader.dylib" \
-        "$MACHO_ARCHS" "$VARIANT 加载器"
-    verify_macho_arch \
-        "$STAGE/${PREFIX}/usr/lib/IOSDecryptHub/decrypt_helper.dylib" \
-        "$MACHO_ARCHS" "$VARIANT 主 dylib"
-    verify_macho_arch \
-        "$STAGE/${PREFIX}/Library/PreferenceBundles/IOSDecryptHubPrefs.bundle/IOSDecryptHubPrefs" \
-        "$MACHO_ARCHS" "$VARIANT 设置面板"
-
-    # 越狱环境仍要求可加载 Mach-O 具备 ad-hoc 签名。
-    ldid -S "$STAGE/${PREFIX}/Library/MobileSubstrate/DynamicLibraries/IOSDecryptHubLoader.dylib"
-    ldid -S "$STAGE/${PREFIX}/usr/lib/IOSDecryptHub/decrypt_helper.dylib"
-    ldid -S "$STAGE/${PREFIX}/Library/PreferenceBundles/IOSDecryptHubPrefs.bundle/IOSDecryptHubPrefs"
-
-    # 构建 deb
-    dpkg-deb --build --root-owner-group "$STAGE" "$DEB_OUT" >/dev/null 2>&1
-
-    # ---------- 发布包完整性验证 ----------
-    local ACTUAL_ARCH ACTUAL_DEPENDS PACKAGE_CONTENTS
-    ACTUAL_ARCH=$(dpkg-deb -f "$DEB_OUT" Architecture)
-    ACTUAL_DEPENDS=$(dpkg-deb -f "$DEB_OUT" Depends)
-    PACKAGE_CONTENTS=$(dpkg-deb -c "$DEB_OUT")
-
-    [ "$ACTUAL_ARCH" = "$ARCHITECTURE" ] || error "$VARIANT 架构错误: 期望 $ARCHITECTURE, 实际 $ACTUAL_ARCH"
-
-    [ "$ACTUAL_DEPENDS" = "ellekit, preferenceloader" ] \
-        || error "$VARIANT 依赖集合错误: $ACTUAL_DEPENDS"
-
-    if [ "$VARIANT" = "roothide" ]; then
-        case "$PACKAGE_CONTENTS" in
-            *"./var/jb/"*) error "roothide 包不得包含固定 /var/jb 前缀" ;;
-        esac
-        case "$PACKAGE_CONTENTS" in
-            *"./Library/PreferenceLoader/Preferences/IOSDecryptHubPrefs.plist"*) ;;
-            *) error "roothide 设置入口未安装到 jbroot 根路径" ;;
-        esac
-    else
-        case "$PACKAGE_CONTENTS" in
-            *"./var/jb/Library/PreferenceLoader/Preferences/IOSDecryptHubPrefs.plist"*) ;;
-            *) error "rootless 设置入口缺少 /var/jb 前缀" ;;
-        esac
-    fi
-
-    case "$PACKAGE_CONTENTS" in
-        *"/PreferenceLoader/Preferences/IOSDecryptHubPrefs.plist"*) ;;
-        *) error "$VARIANT 缺少设置入口" ;;
-    esac
-
-    case "$PACKAGE_CONTENTS" in
-        *"/PreferenceBundles/IOSDecryptHubPrefs.bundle/icon.png"*) ;;
-        *) error "$VARIANT 缺少设置图标" ;;
-    esac
-
-    case "$PACKAGE_CONTENTS" in
-        *"/PreferenceBundles/IOSDecryptHubPrefs.bundle/wechat-follow.png"*) ;;
-        *) error "$VARIANT 缺少设置页公众号物料" ;;
-    esac
-
-    case "$PACKAGE_CONTENTS" in
-        *"/usr/lib/IOSDecryptHub/enabledBundles.default.plist"*) ;;
-        *) error "$VARIANT 缺少内置门控配置模板" ;;
-    esac
-
-    case "$PACKAGE_CONTENTS" in
-        *"/usr/lib/IOSDecryptHub/decrypt_helper.dylib"*) ;;
-        *) error "$VARIANT 缺少主 dylib" ;;
-    esac
-
-    case "$PACKAGE_CONTENTS" in
-        *"/MobileSubstrate/DynamicLibraries/IOSDecryptHubLoader.dylib"*) ;;
-        *) error "$VARIANT 缺少加载器" ;;
-    esac
-
-    grep -q '<string>com.apple.UIKit</string>' \
-        "$STAGE/${PREFIX}/Library/MobileSubstrate/DynamicLibraries/IOSDecryptHubLoader.plist" \
-        || error "$VARIANT 的 MobileLoader 过滤器未覆盖 UIKit App"
-
-    info "✅ $DEB_OUT ($(du -h "$DEB_OUT" | cut -f1))"
+    local ARCHS="$2"
+    local DEST="$JB_DIR/vendor/dylib/$VARIANT/decrypt_helper.dylib"
+    info "编译闭源 dylib (VARIANT=rootless, archs=$ARCHS) → vendor/$VARIANT"
+    make -C "$PRIVATE_DIR" -B VARIANT=rootless ARCHS="$ARCHS" all
+    [ -f "$PRIVATE_DIR/decrypt_helper.dylib" ] || error "dylib 编译失败"
+    mkdir -p "$(dirname "$DEST")"
+    cp "$PRIVATE_DIR/decrypt_helper.dylib" "$DEST"
 }
-
-# ---------- 构建目标 ----------
-# 每个目标都用 make -B 强制重编译，不执行全局 clean，避免删除同轮发布的 IPA/dylib。
-mkdir -p "$BUILD_DIR"
 
 case "$TARGET" in
     all)
-        build_variant "rootless" "/var/jb" \
-            "iphoneos-arm64" "arm64"
-        build_variant "roothide" "" \
-            "iphoneos-arm64e" "arm64 arm64e"
+        stage_engine "rootless" "arm64"
+        stage_engine "roothide" "arm64 arm64e"
         ;;
     rootless)
-        build_variant "rootless" "/var/jb" \
-            "iphoneos-arm64" "arm64"
+        stage_engine "rootless" "arm64"
         ;;
     roothide)
-        build_variant "roothide" "" \
-            "iphoneos-arm64e" "arm64 arm64e"
+        stage_engine "roothide" "arm64 arm64e"
         ;;
 esac
 
-info "全部完成! 产物在: $BUILD_DIR/"
-ls -lh "$BUILD_DIR"/*.deb 2>/dev/null || true
+info "调用开源仓打包: $JB_DIR/build_deb.sh $TARGET"
+"$JB_DIR/build_deb.sh" "$TARGET"
+
+mkdir -p "$PRIVATE_DIR/build/deb"
+cp -f "$JB_DIR/build/deb/"*.deb "$PRIVATE_DIR/build/deb/"
+info "deb 已同步回私有仓 build/deb/"
+ls -lh "$PRIVATE_DIR/build/deb/"*.deb 2>/dev/null || true

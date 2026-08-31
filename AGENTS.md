@@ -30,7 +30,7 @@ IOSDecryptHub/
 │   ├── server/             # HTTP 服务 + MCP 服务 + UDP 信标 + Web 面板
 │   └── ui/                 # iOS 悬浮窗
 ├── app-trollstore/         # TrollStore 管理器 App（SwiftUI + ObjC + 纯 C macho_patch）
-├── jailbreak/              # 越狱薄加载器、设置面板和 deb 打包
+├── jailbreak/              # 薄入口：编译闭源 dylib → 拷进 ../IOSDecryptHubJB/vendor → 打包
 ├── scripts/                # inject.sh / publish_release.sh / sim_install.sh 等
 ├── tests/                  # mcp_test.sh + test_patch_info_plist.py
 ├── web/                    # Web 面板源文件（编译时生成 C 头文件）
@@ -51,7 +51,7 @@ IOSDecryptHub/
 | `make mac` | macOS 原生编译（灰度自测） |
 | `make sim` | iOS 模拟器 dylib |
 | `make ipa` | 构建 TrollStore 管理器 IPA |
-| `make deb` | 构建 rootless deb |
+| `make deb` | 编译闭源 dylib，拷进并列开源仓 `../IOSDecryptHubJB/vendor/`，再打 rootless + roothide deb |
 | `make test-mcp` | MCP 集成测试（需 jq） |
 | `make clean` | 清理构建产物 |
 

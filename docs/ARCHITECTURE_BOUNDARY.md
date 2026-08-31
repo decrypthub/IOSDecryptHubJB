@@ -38,7 +38,8 @@
 - 允许 ElleKit 作为 dylib 加载机制。
 - 允许 rootless deb 打包和 plist 偏好门控。
 - 允许加载器依赖 `/var/jb` 下的 rootless 越狱路径。
-- `jailbreak/` 必须保持为独立薄层，仅做：读偏好 -> 判断目标进程 -> `dlopen` 主 dylib。
+- 越狱加载器必须保持为独立薄层，仅做：读偏好 -> 判断目标进程 -> `dlopen` 主 dylib。
+- 加载器与设置面板源码位于并列开源仓 `../IOSDecryptHubJB/`。本仓库 `make deb` 只编译闭源成品 dylib 并拷进开源仓 `vendor/dylib/`，不得把 `src/` 引擎源码放进开源仓。
 - 不得使用 `MSHookFunction`、`%hook` 或其他越狱框架 hook API。
 - 不得引用 daemon / `dh_server` 的代码或接口。
 
@@ -120,7 +121,8 @@ dylib 运行在目标 App 进程中，任何异常都会直接终止宿主 App�
 |---------------|------|------|
 | `src/` | 共享 | 同一份 dylib 核心引擎 |
 | `app-trollstore/` | TrollStore | 管理器 App 与 Mach-O patch |
-| `jailbreak/` | Jailbreak | 薄加载器、设置面板、deb 打包 |
+| `jailbreak/` | Jailbreak | 私有入口：编译 dylib → 拷进开源仓 vendor → 打包 |
+| `../IOSDecryptHubJB/` | Jailbreak（开源） | 薄加载器、设置面板、deb 打包；消费成品 dylib |
 | `make` | dev | 默认开发 dylib |
 | `make VARIANT=trollstore` | TrollStore | 管理器内嵌 dylib |
 | `make VARIANT=rootless` | Jailbreak | 越狱加载器加载的共享 dylib |
