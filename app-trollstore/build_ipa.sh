@@ -224,6 +224,12 @@ fi
 # App 图标
 [ -f "$APP_SRC/AppIcon60x60@2x.png" ] && cp "$APP_SRC/AppIcon60x60@2x.png" "$APP_BUNDLE/"
 
+# 公众号关注物料
+if [ -f "$ROOT/web/wechat-follow.png" ]; then
+    cp "$ROOT/web/wechat-follow.png" "$APP_BUNDLE/"
+    echo "    + wechat-follow.png"
+fi
+
 # 清理中间产物
 for obj in "${OBJC_OBJS[@]}"; do [ -f "$obj" ] && unlink "$obj"; done
 [ -f "$OUT_DIR/IOSDecryptHubTS" ] && unlink "$OUT_DIR/IOSDecryptHubTS"

@@ -8,8 +8,9 @@ build/
 *.profraw
 tests/exercise_runner
 
-# 生成的 Web 面板头文件 (make 自动从 web/index.html 生成)
+# 生成的 Web 资源头文件 (make 自动从 web/ 生成)
 src/server/web_index_html.h
+src/server/web_wechat_png.h
 
 # 注入脚本中间产物
 work_*/

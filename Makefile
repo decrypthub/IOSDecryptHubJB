@@ -102,6 +102,8 @@ ARCHS   ?= $(ARCH)
 ARCH_FLAGS := $(foreach A,$(ARCHS),-arch $(A))
 INCLUDES := -Isrc/core -Isrc/core/capstone/include -Isrc/hooks/crypto -Isrc/hooks/behavior -Isrc/server -Isrc/ui
 WEB_HEADER := src/server/web_index_html.h
+WECHAT_HEADER := src/server/web_wechat_png.h
+WEB_ASSETS := $(WEB_HEADER) $(WECHAT_HEADER)
 
 CFLAGS  := $(ARCH_FLAGS) \
            -isysroot $(SDK) \
@@ -122,7 +124,10 @@ all: $(TARGET)
 $(WEB_HEADER): web/index.html tools/gen_web.py
 	python3 tools/gen_web.py web/index.html $(WEB_HEADER)
 
-$(TARGET): $(WEB_HEADER) $(SRC)
+$(WECHAT_HEADER): web/wechat-follow.png tools/gen_web.py
+	python3 tools/gen_web.py web/wechat-follow.png $(WECHAT_HEADER) kDHWeChatPNG
+
+$(TARGET): $(WEB_ASSETS) $(SRC)
 	@if [ -z "$(SDK)" ]; then echo "❌ 没找到 iPhoneOS SDK (xcrun --sdk iphoneos)"; exit 1; fi
 	@echo "[*] 编译 iOS dylib (VARIANT=$(VARIANT), archs=$(ARCHS), min=$(MIN_IOS))..."
 	$(CC) $(CFLAGS) $(SRC) -o $(TARGET)
@@ -134,6 +139,7 @@ linux:
 		echo "❌ 需设置 IOS_SDK 和 CROSS_CC, 参考 scripts/wsl_setup_toolchain.sh"; exit 1; fi
 	@echo "[*] Linux 交叉编译 (VARIANT=$(VARIANT))..."
 	python3 tools/gen_web.py web/index.html $(WEB_HEADER)
+	python3 tools/gen_web.py web/wechat-follow.png $(WECHAT_HEADER) kDHWeChatPNG
 	$(CROSS_CC) $(ARCH_FLAGS) -isysroot $(IOS_SDK) -miphoneos-version-min=$(MIN_IOS) \
 		-dynamiclib -install_name @executable_path/$(TARGET) \
 		-ObjC -fobjc-arc -Wall -Wno-deprecated-declarations -Wno-nullability-completeness \
@@ -159,9 +165,9 @@ MAC_CFLAGS := -target $(MAC_ARCH)-apple-macos$(MAC_MIN) \
               -DDH_VARIANT=0 \
               -framework Foundation -framework CoreGraphics -framework Security
 
-mac: $(WEB_HEADER) $(MAC_TARGET)
+mac: $(WEB_ASSETS) $(MAC_TARGET)
 
-$(MAC_TARGET): $(WEB_HEADER) $(SRC)
+$(MAC_TARGET): $(WEB_ASSETS) $(SRC)
 	@if [ -z "$(MAC_SDK)" ]; then echo "❌ 没找到 macOS SDK"; exit 1; fi
 	@echo "[*] macOS 编译 (arch=$(MAC_ARCH))..."
 	$(CC) $(MAC_CFLAGS) $(SRC) -o $(MAC_TARGET)
@@ -183,9 +189,9 @@ SIM_CFLAGS := -target $(SIM_ARCH)-apple-ios$(SIM_MIN)-simulator \
               $(VERSION_DEF) \
               $(FRAMEWORKS)
 
-sim: $(WEB_HEADER) $(SIM_TARGET)
+sim: $(WEB_ASSETS) $(SIM_TARGET)
 
-$(SIM_TARGET): $(WEB_HEADER) $(SRC)
+$(SIM_TARGET): $(WEB_ASSETS) $(SRC)
 	@if [ -z "$(SIM_SDK)" ]; then echo "❌ 没找到 iPhoneSimulator SDK"; exit 1; fi
 	@echo "[*] iOS Simulator 编译 (arch=$(SIM_ARCH), min=$(SIM_MIN))..."
 	$(CC) $(SIM_CFLAGS) $(SRC) -o $(SIM_TARGET)

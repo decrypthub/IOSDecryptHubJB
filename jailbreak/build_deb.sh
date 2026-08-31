@@ -76,6 +76,7 @@ compile_loader() {
 PREFS_SRC="$SCRIPT_DIR/prefs/IOSDecryptHubPrefsListController.m"
 # 由官网仓库 public/favicon.svg 转为 Settings 使用的 PNG。
 PREFS_ICON="$SCRIPT_DIR/prefs/icon.png"
+WECHAT_PNG="$PROJECT_DIR/web/wechat-follow.png"
 
 compile_prefs() {
     local ARCHS="$1"
@@ -96,6 +97,8 @@ compile_prefs() {
     cp "$SCRIPT_DIR/prefs/Info.plist" "$BUNDLE_DIR/"
     cp "$SCRIPT_DIR/prefs/Root.plist" "$BUNDLE_DIR/"
     cp "$PREFS_ICON" "$BUNDLE_DIR/icon.png"
+    [ -f "$WECHAT_PNG" ] || error "缺少 web/wechat-follow.png"
+    cp "$WECHAT_PNG" "$BUNDLE_DIR/wechat-follow.png"
 }
 
 verify_macho_arch() {
@@ -250,6 +253,11 @@ POSTRM
     case "$PACKAGE_CONTENTS" in
         *"/PreferenceBundles/IOSDecryptHubPrefs.bundle/icon.png"*) ;;
         *) error "$VARIANT 缺少设置图标" ;;
+    esac
+
+    case "$PACKAGE_CONTENTS" in
+        *"/PreferenceBundles/IOSDecryptHubPrefs.bundle/wechat-follow.png"*) ;;
+        *) error "$VARIANT 缺少设置页公众号物料" ;;
     esac
 
     case "$PACKAGE_CONTENTS" in

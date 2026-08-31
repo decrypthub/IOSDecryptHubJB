@@ -7,6 +7,7 @@
 // ⚠️ 本 App 属于 TrollStore 变体, 不依赖 daemon/plist/Substrate。
 
 import SwiftUI
+import UIKit
 
 // MARK: - ViewModel
 
@@ -85,6 +86,7 @@ class AppListViewModel: ObservableObject {
 struct MainView: View {
     @StateObject private var vm = AppListViewModel()
     @State private var showAlert = false
+    @State private var wechatCopied = false
 
     var body: some View {
         NavigationView {
@@ -133,6 +135,8 @@ struct MainView: View {
                         }
                     }
                 }
+
+                wechatSection
             }
             .navigationTitle("IOSDecryptHub")
             .toolbar {
@@ -190,6 +194,42 @@ struct MainView: View {
             Text("状态")
         } footer: {
             Text("开关打开 = 注入 dylib, 关闭 = 恢复原始二进制。操作后需重启目标 App 生效。")
+        }
+    }
+
+    private var wechatSection: some View {
+        Section {
+            Button(action: copyWeChatAccount) {
+                VStack(spacing: 10) {
+                    if let img = UIImage(named: "wechat-follow") {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        HStack {
+                            Text("微信搜一搜")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("DecryptHub")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    if wechatCopied {
+                        Text("已复制 DecryptHub")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+    }
+
+    private func copyWeChatAccount() {
+        UIPasteboard.general.string = "DecryptHub"
+        wechatCopied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            wechatCopied = false
         }
     }
 }

@@ -29,12 +29,88 @@ typedef NS_ENUM(NSInteger, PSCellType) {
 - (void)setProperty:(id)value forKey:(NSString *)key;
 @end
 
+@interface PSTableCell : UITableViewCell
+- (instancetype)initWithStyle:(UITableViewCellStyle)style
+              reuseIdentifier:(NSString *)reuseIdentifier
+                    specifier:(PSSpecifier *)specifier;
+@end
+
 @interface PSListController : UIViewController {
     NSMutableArray *_specifiers;
 }
 @property (nonatomic, retain) NSMutableArray *specifiers;
 - (NSMutableArray *)loadSpecifiersFromPlistName:(NSString *)name target:(id)target;
 - (void)reloadSpecifier:(PSSpecifier *)specifier;
+@end
+
+static const CGFloat kDHWeChatAspect = 308.0 / 1000.0;
+static const CGFloat kDHWeChatPadX = 12.0;
+static const CGFloat kDHWeChatPadY = 8.0;
+
+static CGFloat dh_wechat_row_height(CGFloat width) {
+    if (width < 1) width = 320;
+    CGFloat inner = MAX(width - kDHWeChatPadX * 2, 200);
+    return ceil(inner * kDHWeChatAspect) + kDHWeChatPadY * 2;
+}
+
+@interface DHWeChatFollowCell : PSTableCell
+@property (nonatomic, strong) UIImageView *followView;
+@end
+
+@implementation DHWeChatFollowCell
+
++ (CGFloat)preferredHeightForWidth:(CGFloat)width {
+    return dh_wechat_row_height(width);
+}
+
++ (CGFloat)preferredHeightForWidth:(CGFloat)width inTableView:(UITableView *)tableView {
+    (void)tableView;
+    return dh_wechat_row_height(width);
+}
+
+- (instancetype)initWithStyle:(UITableViewCellStyle)style
+              reuseIdentifier:(NSString *)reuseIdentifier
+                    specifier:(PSSpecifier *)specifier {
+    if ((self = [super initWithStyle:style reuseIdentifier:reuseIdentifier specifier:specifier])) {
+        self.selectionStyle = UITableViewCellSelectionStyleNone;
+        self.separatorInset = UIEdgeInsetsMake(0, 4000, 0, 0);
+        self.textLabel.text = nil;
+        self.detailTextLabel.text = nil;
+        self.imageView.image = nil;
+
+        UIImageView *imageView = [[UIImageView alloc] init];
+        imageView.contentMode = UIViewContentModeScaleAspectFit;
+        imageView.userInteractionEnabled = YES;
+        NSString *path = [[NSBundle bundleForClass:[self class]]
+            pathForResource:@"wechat-follow" ofType:@"png"];
+        if (path.length) {
+            imageView.image = [UIImage imageWithContentsOfFile:path];
+        }
+        [self.contentView addSubview:imageView];
+        self.followView = imageView;
+
+        UITapGestureRecognizer *tap =
+            [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dh_copyAccount)];
+        [imageView addGestureRecognizer:tap];
+    }
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    self.textLabel.text = nil;
+    self.detailTextLabel.text = nil;
+    self.followView.frame = CGRectInset(self.contentView.bounds, kDHWeChatPadX, kDHWeChatPadY);
+}
+
+- (void)dh_copyAccount {
+    [UIPasteboard generalPasteboard].string = @"DecryptHub";
+    if (@available(iOS 10.0, *)) {
+        UINotificationFeedbackGenerator *feedback = [[UINotificationFeedbackGenerator alloc] init];
+        [feedback notificationOccurred:UINotificationFeedbackTypeSuccess];
+    }
+}
+
 @end
 
 // LaunchServices 私有类型只做最小声明，通过运行时加载，不产生链接依赖。

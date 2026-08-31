@@ -310,6 +310,10 @@
   .menu-popover .menu-separator { height:1px; margin:5px 4px; background:var(--line); }
   .process-popover { width:290px; padding:12px 14px; }
   .process-popover .proc-title { margin-bottom:10px; color:var(--ink); font-size:12px; font-weight:650; }
+  .wechat-popover { width:min(360px, calc(100vw - 28px)); padding:8px; }
+  .wechat-copy { display:block; width:100%; padding:0 !important; min-height:0 !important; border:0 !important; background:transparent !important; cursor:pointer; border-radius:4px; }
+  .wechat-copy:hover { background:transparent !important; border:0 !important; }
+  .wechat-copy img { display:block; width:100%; height:auto; }
   .procinfo { display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px 14px; margin:0; font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
   .procinfo dt { color:var(--muted); }
   .procinfo dd { min-width:0; margin:0; overflow-wrap:anywhere; color:var(--ink-2); text-align:right; }
@@ -534,6 +538,14 @@
       <span class='toggle-track' aria-hidden='true'></span>
       <span class='auto-refresh-label'>自动刷新</span>
     </label>
+    <div class='menu-wrap'>
+      <button type='button' class='compact-action' id='wechatBtn' aria-expanded='false' aria-controls='wechatPopover' title='微信搜一搜 DecryptHub'>公众号</button>
+      <div class='popover wechat-popover' id='wechatPopover'>
+        <button type='button' class='wechat-copy' id='wechatCopy' title='复制公众号名称 DecryptHub'>
+          <img src='/wechat-follow.png' alt='微信搜一搜 DecryptHub' width='1000' height='308'>
+        </button>
+      </div>
+    </div>
     <div class='menu-wrap'>
       <button type='button' class='compact-action' id='downloadMenuBtn' aria-expanded='false' aria-controls='downloadMenu'><span aria-hidden='true'>↓</span>下载<span class='menu-chevron' aria-hidden='true'>⌄</span></button>
       <div class='popover menu-popover' id='downloadMenu'>
@@ -926,6 +938,7 @@
 
   const POPOVERS = [
     ['processPopover','processBtn'],
+    ['wechatPopover','wechatBtn'],
     ['downloadMenu','downloadMenuBtn'],
     ['globalMoreMenu','globalMoreBtn'],
     ['toolbarMenu','toolbarMoreBtn'],
@@ -1694,6 +1707,16 @@
     if (row) selectRow(parseInt(row.dataset.seq, 10));
   });
   $('processBtn').addEventListener('click', () => togglePopover('processPopover','processBtn'));
+  $('wechatBtn').addEventListener('click', () => togglePopover('wechatPopover','wechatBtn'));
+  $('wechatCopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText('DecryptHub'); }
+    catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = 'DecryptHub'; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+    }
+    toast('已复制 DecryptHub');
+  });
   $('downloadMenuBtn').addEventListener('click', () => togglePopover('downloadMenu','downloadMenuBtn'));
   $('globalMoreBtn').addEventListener('click', () => togglePopover('globalMoreMenu','globalMoreBtn'));
   $('toolbarMoreBtn').addEventListener('click', () => togglePopover('toolbarMenu','toolbarMoreBtn'));

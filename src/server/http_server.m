@@ -4,7 +4,7 @@
 //   - 一个 socket 监听端口, 一个 accept 队列, 每个连接 dispatch 到处理队列
 //   - 每个连接一次性读 header (限 64KB), 没有 keep-alive 也没有 chunked
 //   - JSON 用 NSJSONSerialization
-//   - HTML 来自 web_index_html.h
+//   - HTML / 公众号物料来自 web_index_html.h 与 web_wechat_png.h
 //
 // 安全声明: 本服务无认证, 把 key/iv/明文都暴露给任何能连接的人.
 // 仅供调试时在可信网络上使用.
@@ -25,6 +25,7 @@
 #import "http_server.h"
 #import "log_store.h"
 #import "web_index_html.h"
+#import "web_wechat_png.h"
 #import "dh_health.h"
 #import "dh_capture.h"
 #import "dh_noise.h"
@@ -783,6 +784,11 @@ static void handle_index(int fd) {
     send_response(fd, 200, @"OK", @"text/html; charset=utf-8", body);
 }
 
+static void handle_wechat_png(int fd) {
+    NSData *body = [NSData dataWithBytes:kDHWeChatPNG length:kDHWeChatPNG_len];
+    send_response(fd, 200, @"OK", @"image/png", body);
+}
+
 // ============================================================
 // 请求 dispatch
 // ============================================================
@@ -855,6 +861,8 @@ static void handle_connection(int fd) {
         if ([method isEqualToString:@"GET"]) {
             if ([path isEqualToString:@"/"] || [path isEqualToString:@"/index.html"]) {
                 handle_index(fd);
+            } else if ([path isEqualToString:@"/wechat-follow.png"]) {
+                handle_wechat_png(fd);
             } else if ([path isEqualToString:@"/api/stats"]) {
                 handle_stats(fd);
             } else if ([path isEqualToString:@"/api/logs"]) {

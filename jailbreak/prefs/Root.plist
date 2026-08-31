@@ -34,6 +34,18 @@
             <key>label</key>
             <string>IOSDecryptHub — iOS 运行时安全分析工具</string>
         </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSStaticTextCell</string>
+            <key>cellClass</key>
+            <string>DHWeChatFollowCell</string>
+            <key>height</key>
+            <real>128</real>
+        </dict>
     </array>
     <key>title</key>
     <string>IOSDecryptHub</string>
