@@ -24,7 +24,7 @@ if [ -n "$NOTES_PATH" ] && [ -f "$NOTES_PATH" ]; then
     cat "$NOTES_PATH" > "$NOTES_FILE"
 else
     cat > "$NOTES_FILE" <<'NOTES'
-## 解密助手 v1.0.0
+## IOSDecryptHub v1.0.0
 
 > 基于 [fishhook](https://github.com/facebook/fishhook) 的 iOS 加解密 API 拦截工具,
 > 把每次调用的 **算法 / Key / IV / 明文 / 密文 / 调用栈** 完整记录下来.
@@ -84,7 +84,7 @@ PAYLOAD_FILE="$(mktemp)"
 cat > "$PAYLOAD_FILE" <<EOF
 {
   "tag_name": "$TAG",
-  "name": "解密助手 $TAG",
+  "name": "IOSDecryptHub $TAG",
   "body": $BODY_JSON,
   "draft": false,
   "prerelease": false
