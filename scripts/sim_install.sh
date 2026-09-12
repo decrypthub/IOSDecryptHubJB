@@ -91,6 +91,7 @@ if [[ "$DO_BUILD" -eq 1 ]]; then
         sim_uitest/main.m -o "$APP_BUNDLE/$APP_NAME"
 
     cp sim_uitest/Info.plist "$APP_BUNDLE/"
+    cp sim_uitest/AppIcon60x60@2x.png "$APP_BUNDLE/"
     cp "$DYLIB_NAME" "$APP_BUNDLE/"
 
     echo "[*] 注入 $DYLIB_NAME ..."
@@ -106,7 +107,12 @@ else
 fi
 
 echo "[*] 安装到模拟器 ($DEVICE) ..."
-xcrun simctl install "$DEVICE" "$APP_BUNDLE"
+# simctl 安装服务无法从外置磁盘路径创建传输 promise(IXErrorDomain code=2),
+# 先中转到本地临时目录再安装。
+STAGE_DIR="${TMPDIR:-/tmp}/dhsim-stage"
+rm -rf "$STAGE_DIR" && mkdir -p "$STAGE_DIR"
+cp -R "$APP_BUNDLE" "$STAGE_DIR/"
+xcrun simctl install "$DEVICE" "$STAGE_DIR/$APP_NAME.app"
 
 if [[ "$DO_LAUNCH" -eq 1 ]]; then
     echo "[*] 启动 $BUNDLE_ID ..."

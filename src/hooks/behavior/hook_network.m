@@ -49,6 +49,12 @@ static uint64_t dh_cur_tid(void) { uint64_t t = 0; pthread_threadid_np(NULL, &t)
 @property (copy)   NSString *url;
 @property (copy)   NSDictionary *headers;
 @property (strong) NSData *body;
+// 请求体缺失时的诚实注记 (如 HTTPBodyStream 未快照), 拼在请求段末尾, 避免被误读成「空 body」。
+@property (copy)   NSString *bodyNote;
+// 响应段注记 (如下载落地文件名/大小), 拼在响应段末尾。
+@property (copy)   NSString *respNote;
+// 下载落地文件前缀预览 (走 output 通道, 与请求体 body 槽位无关)。
+@property (strong) NSData *dlPreview;
 @property (copy)   NSString *callStack;
 @property (assign) uint64_t tsMs;
 @property (assign) uint64_t tid;
@@ -78,6 +84,10 @@ static DHNetSnap *dh_snap_from_request(NSURLRequest *req, id session) {
     NSData *body = req.HTTPBody;
     if (!body.length) body = objc_getAssociatedObject(req, kDHSetHTTPBody);
     s.body = body;
+    // HTTPBodyStream 的字节读出来就会消耗原流 (系统随后还要用它发包), 且超长流无法无损重建,
+    // 故只做诚实标注、不读内容。AFNetworking multipart 等上传走的正是这条路。
+    if (!body.length && req.HTTPBodyStream)
+        s.bodyNote = @"[request body carried by HTTPBodyStream — not captured]";
     s.callStack = DHCallStackFiltered();
     s.tsMs = dh_now_ms();
     s.tid = dh_cur_tid();
@@ -118,16 +128,19 @@ static void net_append_headers(NSMutableString *d, NSDictionary *hdrs) {
 // detail 用 \x1e 分成「纯请求 / 纯响应 / 错误」三段, 请求段只有 METHOD URL + Header: value, 不加任何标签。
 // 响应三元(respData/resp/err)全 nil 时即「只有请求」的条目 —— 无响应也照样成条, 绝不因此丢弃。
 static DHLogEntry *dh_net_make_entry(NSString *method, NSString *urlStr, NSDictionary *reqHdrs, NSData *reqBody,
-                                     NSData *respData, NSURLResponse *resp, NSError *err, NSString *callStack,
+                                     NSString *bodyNote, NSData *respData, NSURLResponse *resp, NSString *respNote,
+                                     NSError *err, NSString *callStack,
                                      uint64_t tsMs, uint64_t tid) {
     NSMutableString *req = [NSMutableString stringWithFormat:@"%@ %@\n", method ?: @"GET", urlStr ?: @"?"];
     net_append_headers(req, reqHdrs);
+    if (bodyNote.length) [req appendFormat:@"%@\n", bodyNote];
     NSMutableString *respPart = [NSMutableString string];
     if ([resp isKindOfClass:[NSHTTPURLResponse class]]) {
         NSHTTPURLResponse *http = (NSHTTPURLResponse *)resp;
         [respPart appendFormat:@"%ld\n", (long)http.statusCode];
         net_append_headers(respPart, http.allHeaderFields);
     }
+    if (respNote.length) [respPart appendFormat:@"%@\n", respNote];
     NSString *errPart = err.localizedDescription ?: @"";
     NSString *d = [NSString stringWithFormat:@"%@\x1e%@\x1e%@", req, respPart, errPart];
 
@@ -150,8 +163,8 @@ static void net_log_pair(NSString *method, NSString *urlStr, NSDictionary *reqHd
                          NSData *respData, NSURLResponse *resp, NSError *err, NSString *callStack,
                          uint64_t tsMs, uint64_t tid) {
     if (!dh_capture_sub_enabled(DH_CAP_NETWORK)) return;
-    [[DHLogStore shared] append:dh_net_make_entry(method, urlStr, reqHdrs, reqBody,
-                                                  respData, resp, err, callStack, tsMs, tid)];
+    [[DHLogStore shared] append:dh_net_make_entry(method, urlStr, reqHdrs, reqBody, nil,
+                                                  respData, resp, nil, err, callStack, tsMs, tid)];
 }
 
 // ============================================================
@@ -214,8 +227,8 @@ static void dh_net_enrich(id task, DHNetSnap *snap, NSData *respData, NSURLRespo
     NSDictionary *hdrs = dh_merge_headers(snap.headers, cur.allHTTPHeaderFields);
     NSData *body = snap.body ?: cur.HTTPBody;
     if (!body.length) body = objc_getAssociatedObject(cur, kDHSetHTTPBody);
-    DHLogEntry *full = dh_net_make_entry(snap.method, snap.url, hdrs, body,
-                                         respData, resp, err, snap.callStack, snap.tsMs, snap.tid);
+    DHLogEntry *full = dh_net_make_entry(snap.method, snap.url, hdrs, body, snap.bodyNote,
+                                         respData, resp, snap.respNote, err, snap.callStack, snap.tsMs, snap.tid);
     DHLogEntry *eager = task ? objc_getAssociatedObject(task, kDHNetEntry) : nil;
     if (eager) {
         [[DHLogStore shared] replaceNetworkEntry:eager with:full];
@@ -295,14 +308,41 @@ static id swz_upReq(id self, SEL _cmd, NSURLRequest *req, NSData *bodyData) {
     return task;
 }
 
-// -[NSURLSession downloadTaskWithRequest:completionHandler:] —— 响应落地为文件, respData 记 nil,
-// 仍把 resume 先记的「只有请求」条目原子替换成带 URL/状态码/响应头的完整条目。
+// 下载落地文件预览上限: 只读头部作 output 预览(magic/文本头), 不把整文件塞进日志内存。
+// 落盘 blob 另有 64KB 上限, 这里取同样量级。
+#define DH_NET_MAX_DOWNLOAD_PREVIEW (64 * 1024)
+
+// 下载完成: 读落地文件前缀作响应体预览 + 文件名/大小注记。必须在原 ch 被调用前同步读完,
+// 系统随后可能删除该临时文件。全程 @try/@catch, 失败降级为原来的 nil(只配对状态码)。
+static void dh_snap_download_preview(DHNetSnap *snap, NSURL *location, NSURLResponse *resp) {
+    if (!snap || !location.isFileURL) return;
+    @try {
+        NSString *name = resp.suggestedFilename ?: location.lastPathComponent ?: @"?";
+        unsigned long long size = 0;
+        NSNumber *sz = nil;
+        if ([location getResourceValue:&sz forKey:NSURLFileSizeKey error:NULL] && sz)
+            size = sz.unsignedLongLongValue;
+        NSData *head = dh_body_from_fileurl(location);
+        if (head.length > DH_NET_MAX_DOWNLOAD_PREVIEW)
+            head = [head subdataWithRange:NSMakeRange(0, DH_NET_MAX_DOWNLOAD_PREVIEW)];
+        // dh_body_from_fileurl 上限 1MB, 这里再压到 64KB 预览。
+        snap.dlPreview = head.length ? head : nil;
+        snap.respNote = [NSString stringWithFormat:@"[download] %@ (%llu bytes%@)", name, size,
+                         head.length ? @", head preview captured" : @""];
+    } @catch (__unused NSException *e) {}
+}
+
+// -[NSURLSession downloadTaskWithRequest:completionHandler:] —— 响应落地为文件, 取 64KB 前缀
+// 作响应体预览, 仍把 resume 先记的「只有请求」条目原子替换成完整条目。
 static id swz_dlReqCH(id self, SEL _cmd, NSURLRequest *req, DHDownloadCH ch) {
     if (!ch || !dh_capture_sub_enabled(DH_CAP_NETWORK)) return orig_dlReqCH(self, _cmd, req, ch);
     DHNetSnap *snap = dh_snap_from_request(req, self);
     __block __weak id weakTask = nil;
     DHDownloadCH wrapped = ^(NSURL *location, NSURLResponse *resp, NSError *err) {
-        @try { dh_net_enrich(weakTask, snap, nil, resp, err); }
+        @try {
+            dh_snap_download_preview(snap, location, resp);
+            dh_net_enrich(weakTask, snap, snap.dlPreview, resp, err);
+        }
         @catch (__unused NSException *e) {}
         ch(location, resp, err);
     };
@@ -318,7 +358,10 @@ static id swz_dlURLCH(id self, SEL _cmd, NSURL *url, DHDownloadCH ch) {
     DHNetSnap *snap = dh_snap_from_url(url, @"GET");
     __block __weak id weakTask = nil;
     DHDownloadCH wrapped = ^(NSURL *location, NSURLResponse *resp, NSError *err) {
-        @try { dh_net_enrich(weakTask, snap, nil, resp, err); }
+        @try {
+            dh_snap_download_preview(snap, location, resp);
+            dh_net_enrich(weakTask, snap, snap.dlPreview, resp, err);
+        }
         @catch (__unused NSException *e) {}
         ch(location, resp, err);
     };
@@ -386,9 +429,14 @@ static void swz_task_resume(id self, SEL _cmd) {
                 NSDictionary *hdrs = dh_merge_headers(snap.headers, req.allHTTPHeaderFields);
                 NSData *body = snap.body ?: req.HTTPBody;
                 if (!body.length) body = objc_getAssociatedObject(req, kDHSetHTTPBody);
+                // WebSocket 任务不走 data/upload 建任务 swizzle、无 completion 配对, resume 兜底是
+                // 唯一记录点: 握手请求能留档, 但 101 之后的消息帧不在覆盖内, 诚实标注。
+                NSString *note = snap.bodyNote;
+                if (!note.length && [self respondsToSelector:@selector(sendMessage:completionHandler:)])
+                    note = @"[websocket handshake — message frames not captured]";
                 // 只记请求段(响应/错误留空); 保留请求时刻/线程/调用栈, 便于与 crypto 关联。
-                DHLogEntry *eager = dh_net_make_entry(method, urlStr, hdrs, body,
-                                                      nil, nil, nil,
+                DHLogEntry *eager = dh_net_make_entry(method, urlStr, hdrs, body, note,
+                                                      nil, nil, nil, nil,
                                                       snap.callStack ?: DHCallStackFiltered(),
                                                       snap.tsMs ? snap.tsMs : dh_now_ms(),
                                                       snap.tid ? snap.tid : dh_cur_tid());

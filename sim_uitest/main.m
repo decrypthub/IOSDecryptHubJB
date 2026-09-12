@@ -154,6 +154,140 @@ static void do_dlsym(void) {
                  kMsg, strlen(kMsg), out, sizeof(out), &mv);
     }
 }
+// ==================== 网络矩阵(抓包覆盖测试) ====================
+// 目标: 本地回显服务器 tests/net_echo_server.py (默认 127.0.0.1:8099)。
+// 每个用例 path 均带唯一 case= 标记, 便于用 query_events 按 url 反查核对。
+// DH_ECHO_PORT 环境变量可改端口; DH_TRIGGER=netall 一次跑完全部。
+static NSString *net_echo_base(void) {
+    NSString *p = [[NSProcessInfo processInfo].environment[@"DH_ECHO_PORT"] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!p.length) p = @"8099";
+    return [NSString stringWithFormat:@"http://127.0.0.1:%@/", p];
+}
+static void net_fire(NSURLSession *sess, NSString *method, NSString *path,
+                     NSDictionary *headers, NSData *body, NSTimeInterval timeout,
+                     dispatch_group_t g) {
+    NSURL *u = [NSURL URLWithString:[net_echo_base() stringByAppendingString:path]];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:u];
+    req.HTTPMethod = method;
+    if (timeout > 0) req.timeoutInterval = timeout;
+    for (NSString *k in headers) [req setValue:headers[k] forHTTPHeaderField:k];
+    req.HTTPBody = body;
+    if (g) dispatch_group_enter(g);
+    NSURLSessionDataTask *t = [sess dataTaskWithRequest:req
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) { if (g) dispatch_group_leave(g); }];
+    [t resume];
+}
+static void do_net_matrix(void) {
+    NSString *base = net_echo_base();
+    dispatch_group_t g = dispatch_group_create();
+    NSURLSession *shared = [NSURLSession sharedSession];
+    NSData *json = [@"{\"probe\":\"matrix\",\"secret\":\"s3cr3t\"}" dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *form = [@"user=alice&pass=s3cr3t" dataUsingEncoding:NSUTF8StringEncoding];
+
+    net_fire(shared, @"GET",    @"echo?case=get-query&foo=bar&secret=s3cr3t",
+             @{@"X-Case": @"get-query", @"X-Validator": @"matrix-get"}, nil, 0, g);
+    net_fire(shared, @"POST",   @"echo?case=post-json",
+             @{@"Content-Type": @"application/json", @"X-Case": @"post-json"}, json, 0, g);
+    net_fire(shared, @"POST",   @"echo?case=post-form",
+             @{@"Content-Type": @"application/x-www-form-urlencoded", @"X-Case": @"post-form"}, form, 0, g);
+    net_fire(shared, @"PUT",    @"echo?case=put", @{@"X-Case": @"put"}, json, 0, g);
+    net_fire(shared, @"DELETE", @"echo?case=delete", @{@"X-Case": @"delete"}, nil, 0, g);
+    net_fire(shared, @"PATCH",  @"echo?case=patch", @{@"X-Case": @"patch"}, json, 0, g);
+    net_fire(shared, @"HEAD",   @"echo?case=head", @{@"X-Case": @"head"}, nil, 0, g);
+    net_fire(shared, @"OPTIONS",@"echo?case=options", @{@"X-Case": @"options"}, nil, 0, g);
+
+    // 大 body (100KB, 低于 1MB 快照上限, 应完整记录)
+    NSMutableData *big = [NSMutableData dataWithLength:100 * 1024];
+    memset(big.mutableBytes, 'A', big.length);
+    net_fire(shared, @"POST", @"echo?case=post-big", @{@"X-Case": @"post-big"}, big, 0, g);
+
+    // dataTaskWithURL (无 NSMutableURLRequest 对象, 疑似缺口)
+    if (g) dispatch_group_enter(g);
+    NSURLSessionDataTask *tURL = [shared dataTaskWithURL:[NSURL URLWithString:[base stringByAppendingString:@"echo?case=data-url"]]
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) { dispatch_group_leave(g); }];
+    [tURL resume];
+
+    // 自定义 session (非 shared, 走另一条 swizzle 分支)
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration defaultSessionConfiguration];
+    NSURLSession *custom = [NSURLSession sessionWithConfiguration:cfg];
+    net_fire(custom, @"GET", @"echo?case=custom-session", @{@"X-Case": @"custom-session"}, nil, 0, g);
+
+    // upload fromData / fromFile
+    if (g) dispatch_group_enter(g);
+    NSMutableURLRequest *upReq = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[base stringByAppendingString:@"echo?case=upload-data"]]];
+    upReq.HTTPMethod = @"POST";
+    [upReq setValue:@"upload-data" forHTTPHeaderField:@"X-Case"];
+    NSURLSessionUploadTask *up1 = [shared uploadTaskWithRequest:upReq fromData:json
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) { dispatch_group_leave(g); }];
+    [up1 resume];
+    NSString *tmpF = [NSTemporaryDirectory() stringByAppendingPathComponent:@"dh_upload.txt"];
+    [@"upload-file-body-s3cr3t" writeToFile:tmpF atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    if (g) dispatch_group_enter(g);
+    NSMutableURLRequest *upReq2 = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[base stringByAppendingString:@"echo?case=upload-file"]]];
+    upReq2.HTTPMethod = @"POST";
+    [upReq2 setValue:@"upload-file" forHTTPHeaderField:@"X-Case"];
+    NSURLSessionUploadTask *up2 = [shared uploadTaskWithRequest:upReq2 fromFile:[NSURL fileURLWithPath:tmpF]
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) { dispatch_group_leave(g); }];
+    [up2 resume];
+
+    // download task (request / URL 两种构造)
+    if (g) dispatch_group_enter(g);
+    NSURLRequest *dlReq = [NSURLRequest requestWithURL:[NSURL URLWithString:[base stringByAppendingString:@"echo?case=download-req"]]];
+    NSURLSessionDownloadTask *dl1 = [shared downloadTaskWithRequest:dlReq
+        completionHandler:^(NSURL *loc, NSURLResponse *r, NSError *e) { dispatch_group_leave(g); }];
+    [dl1 resume];
+    if (g) dispatch_group_enter(g);
+    NSURLSessionDownloadTask *dl2 = [shared downloadTaskWithURL:[NSURL URLWithString:[base stringByAppendingString:@"echo?case=download-url"]]
+        completionHandler:^(NSURL *loc, NSURLResponse *r, NSError *e) { dispatch_group_leave(g); }];
+    [dl2 resume];
+
+    // 大响应下载 (1MB, 测响应截断)
+    if (g) dispatch_group_enter(g);
+    NSURLSessionDownloadTask *dlBig = [shared downloadTaskWithURL:[NSURL URLWithString:[base stringByAppendingString:@"big?case=download-big"]]
+        completionHandler:^(NSURL *loc, NSURLResponse *r, NSError *e) { dispatch_group_leave(g); }];
+    [dlBig resume];
+
+    // 重定向 / 错误状态 / 超时(错误路径)
+    net_fire(shared, @"GET", @"redirect?case=redirect", @{@"X-Case": @"redirect"}, nil, 0, g);
+    net_fire(shared, @"GET", @"status/404?case=status-404", @{@"X-Case": @"status-404"}, nil, 0, g);
+    net_fire(shared, @"GET", @"status/500?case=status-500", @{@"X-Case": @"status-500"}, nil, 0, g);
+    net_fire(shared, @"GET", @"delay?ms=3000&case=timeout", @{@"X-Case": @"timeout"}, nil, 1.0, g);
+
+    // HTTPBodyStream (疑似缺口: hook 只快照 HTTPBody, 流式 body 可能记不到)
+    if (g) dispatch_group_enter(g);
+    NSMutableURLRequest *stReq = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[base stringByAppendingString:@"echo?case=body-stream"]]];
+    stReq.HTTPMethod = @"POST";
+    [stReq setValue:@"body-stream" forHTTPHeaderField:@"X-Case"];
+    stReq.HTTPBodyStream = [NSInputStream inputStreamWithData:json];
+    NSURLSessionDataTask *stT = [shared dataTaskWithRequest:stReq
+        completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) { dispatch_group_leave(g); }];
+    [stT resume];
+
+    // 并发 5 路
+    for (int i = 0; i < 5; i++)
+        net_fire(shared, @"GET", [NSString stringWithFormat:@"echo?case=concurrent&i=%d", i],
+                 @{@"X-Case": @"concurrent"}, nil, 0, g);
+
+    // WebSocket (iOS 13+, 疑似缺口: hook 大概率无覆盖, 只记录能否建连)
+    if (@available(iOS 13.0, *)) {
+        if (g) dispatch_group_enter(g);
+        NSString *wsBase = [base stringByReplacingOccurrencesOfString:@"http://" withString:@"ws://"];
+        NSURLSessionWebSocketTask *ws = [shared webSocketTaskWithURL:[NSURL URLWithString:[wsBase stringByAppendingString:@"ws"]]];
+        [ws resume];
+        [ws sendMessage:[[NSURLSessionWebSocketMessage alloc] initWithString:@"hello-ws-matrix"]
+            completionHandler:^(NSError *e) {
+                if (e) { dispatch_group_leave(g); return; }
+                [ws receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *m, NSError *e2) {
+                    [ws cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
+                    dispatch_group_leave(g);
+                }];
+            }];
+    }
+
+    long r = dispatch_group_wait(g, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * NSEC_PER_SEC)));
+    NSLog(@"[netmatrix] DONE wait=%ld (0=全部回调返回)", r);
+}
+
 static void do_network(void) {
     // 模拟微博 X-Validator 场景: SHA256(body) -> base64 设为请求头, 供 correlate_request 反查命中。
     NSData *body = [@"{\"probe\":\"network-capture\",\"secret\":\"s3cr3t\"}" dataUsingEncoding:NSUTF8StringEncoding];
@@ -320,6 +454,7 @@ static NSString *chk_device_info(void) {
               sels:@[@"onFWrite",@"onFRead",@"onFDel",@"onFRename"] keys:@[@"fwrite",@"fread",@"fdel",@"frename"]];
     [self addGroup:t1 title:@"动态库" color:purple buttons:@[@"dlopen 模块", @"dlsym 符号"]
               sels:@[@"onDlopen",@"onDlsym"] keys:@[@"dlopen",@"dlsym"]];
+    [self addGroup:t1 title:@"网络矩阵" color:mint buttons:@[@"全部请求跑一遍"] sels:@[@"onNetAll"] keys:@[@"netall"]];
 
     // --- tab 2: 伪装自检(验证越狱绕过 / 改机 / 注入隐藏是否生效) ---
     UIStackView *t2 = [self addTabStack];
@@ -355,14 +490,19 @@ static NSString *chk_device_info(void) {
         do_network();
         unsigned char d[CC_MD5_DIGEST_LENGTH]; CC_MD5("iPhone", 6, d);   // 噪声验证: 应进 crypto 噪声桶而非主流
     });
-    if ([[NSProcessInfo processInfo].environment[@"DH_AUTOLOG"] isEqualToString:@"1"]) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.3 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ [ws triggerByKey:@"log"]; });
+    // 精确触发: DH_TRIGGER=<按键 key 或 baseline.* 场景 id>, 启动后触发单个动作,
+    // 供自动化测试无人值守使用(免 simctl openurl 确认框)。
+    NSString *oneShot = [[NSProcessInfo processInfo].environment[@"DH_TRIGGER"] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (oneShot.length) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (![ws triggerByKey:oneShot]) NSLog(@"[DH_TRIGGER] 未知 key: %@", oneShot);
+        });
     }
     // 截图/自动化: DH_AUTOTEST=1 启动后自动触发各类调用(免 simctl openurl 确认框)
     if ([[NSProcessInfo processInfo].environment[@"DH_AUTOTEST"] isEqualToString:@"1"]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            for (NSString *k in @[@"md5",@"sha256",@"hmac",@"aes",@"3des",@"rsasign",@"pbkdf",
+            for (NSString *k in @[@"md5",@"sha1",@"sha256",@"sha512",@"hmac",@"aes",@"3des",@"des",@"rc4",
+                                  @"rsasign",@"rsaenc",@"pbkdf",@"big",
                                   @"fwrite",@"fread",@"fdel",@"frename",@"dlopen",@"dlsym",
                                   @"chkjb",@"chkurl",@"chkdyld",@"chkanti",@"chkdevice"])
                 [ws triggerByKey:k];
@@ -435,6 +575,7 @@ static NSString *chk_device_info(void) {
 
 - (BOOL)triggerByKey:(NSString *)key {
     if ([key hasPrefix:@"baseline."]) return [self triggerScenarioById:key];
+    if ([key isEqualToString:@"netall"]) { do_net_matrix(); [self flash:@"网络矩阵"]; return YES; }
     UIButton *b = self.btnMap[key.lowercaseString];
     if (!b) return NO;
     [b sendActionsForControlEvents:UIControlEventTouchUpInside];
@@ -462,6 +603,8 @@ static NSString *chk_device_info(void) {
         (void)chk_dyld_images();
     } else if ([scenarioId isEqualToString:@"baseline.network.request"]) {
         do_network();
+    } else if ([scenarioId isEqualToString:@"baseline.network.matrix"]) {
+        do_net_matrix();
     } else {
         NSLog(@"[scenario] UNKNOWN %@", scenarioId);
         return NO;
@@ -512,6 +655,10 @@ static NSString *chk_device_info(void) {
 // 系统
 - (void)onDlopen   { do_dlopen();      [self flash:@"dlopen 模块"]; }
 - (void)onDlsym    { do_dlsym();       [self flash:@"dlsym 符号"]; }
+- (void)onNetAll {
+    [self flash:@"网络矩阵 (约 30 秒…)"];
+    dispatch_async(dispatch_get_global_queue(0, 0), ^{ do_net_matrix(); dispatch_async(dispatch_get_main_queue(), ^{ [self flash:@"网络矩阵完成"]; }); });
+}
 // 伪装自检
 - (void)appendCheck:(NSString *)text {
     self.checkOut.text = [self.checkOut.text stringByAppendingString:[text stringByAppendingString:@"\n"]];

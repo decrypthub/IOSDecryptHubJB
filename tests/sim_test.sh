@@ -86,9 +86,17 @@ mc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_diag","a
     > "$RESULT_DIR/diagnostics.json"
 eq "$(jq -r '.result.isError' "$RESULT_DIR/diagnostics.json")" "false" "诊断信息可导出"
 
-# 单独触发复合文件生命周期，避免自动全量场景的其它文件调用掩盖缺失步骤。
+# 单独触发复合文件生命周期。为避开 simctl openurl 的系统确认框(无人值守下 URL
+# 永远送不到 App), 改用 DH_TRIGGER 环境变量重启触发, 与 DH_AUTOTEST 同通道。
 mc '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"clear_events","arguments":{"category":"file"}}}' >/dev/null
-xcrun simctl openurl "$DEVICE" 'dhtest://baseline.file.lifecycle' >/dev/null
+echo "[trigger] 重启并用 DH_TRIGGER 触发 baseline.file.lifecycle"
+xcrun simctl terminate "$DEVICE" "$BUNDLE_ID" >/dev/null 2>&1 || true
+SIMCTL_CHILD_DH_TRIGGER=baseline.file.lifecycle xcrun simctl launch "$DEVICE" "$BUNDLE_ID" >"$RESULT_DIR/relaunch.log" 2>&1 || exit 1
+PORT=$(dh_find_http_for_bundle "$BUNDLE_ID" 30) || {
+    echo "重启后未找到 $BUNDLE_ID 的 HTTP 服务"
+    exit 1
+}
+MCP="http://127.0.0.1:$PORT/api/mcp"
 file_lifecycle_ready=0
 for ((i = 0; i < 50; i++)); do
     mc '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"file","limit":100}}}' \
