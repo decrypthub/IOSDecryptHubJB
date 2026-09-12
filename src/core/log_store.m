@@ -152,6 +152,46 @@ static BOOL dh_noise_entry_matches_board(DHLogEntry *entry, DHNoiseBoard board) 
     });
 }
 
+// 网络请求先记「只有请求」的条目, 响应到达后用「请求+响应」的完整条目原位替换。
+// 为什么不原地改旧条目: 序列化读者在队列外读取 e.detail/e.output, 若在另一线程释放旧值会竞态崩溃。
+// 换整条对象引用 (旧对象不可变) 则读者要么拿到旧完整对象、要么拿到新完整对象, 永不撕裂。
+- (void)replaceNetworkEntry:(DHLogEntry *)oldEntry with:(DHLogEntry *)newEntry {
+    if (newEntry == nil) return;
+    if (oldEntry == nil) { [self append:newEntry]; return; }
+    // tid/tsMs 与 append 同理: 必须在调用(被 hook)线程取, 即 dispatch 之前。
+    if (newEntry.timestampMs == 0) {
+        struct timeval tv; gettimeofday(&tv, NULL);
+        newEntry.timestampMs = (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)(tv.tv_usec / 1000);
+    }
+    if (newEntry.threadId == 0) { uint64_t t = 0; pthread_threadid_np(NULL, &t); newEntry.threadId = t; }
+    dispatch_async(_queue, ^{
+        NSMutableArray *nb = self->_buckets[DHCategoryNetwork];
+        NSUInteger idx = [nb indexOfObjectIdenticalTo:oldEntry];   // 指针身份, 不用 isEqual
+        if (idx != NSNotFound) {
+            newEntry.seq = oldEntry.seq;      // 保持顺序与 correlate_request 锚点稳定
+            nb[idx] = newEntry;
+            [self _persist:newEntry];         // 完整条目补落盘 (磁盘先有请求, 再有完整对)
+            return;
+        }
+        for (int b = 0; b < DHNoiseBoardCount; b++) {   // 也可能被路由进噪声桶
+            NSUInteger ni = [self->_noiseBuckets[b] indexOfObjectIdenticalTo:oldEntry];
+            if (ni != NSNotFound) {
+                newEntry.seq = oldEntry.seq;
+                self->_noiseBuckets[b][ni] = newEntry;
+                [self _persist:newEntry];
+                return;
+            }
+        }
+        // 旧条目已被裁剪淘汰: 退化为追加一条完整记录。
+        newEntry.seq = ++self->_seqCounter;
+        [nb addObject:newEntry];
+        if (nb.count > self->_maxPerCategory)
+            [nb removeObjectsInRange:NSMakeRange(0, nb.count - self->_maxPerCategory)];
+        self->_categoryCounts[DHCategoryNetwork]++;
+        [self _persist:newEntry];
+    });
+}
+
 - (void)setPaused:(BOOL)paused forCategory:(DHCategory)cat {
     if (cat < 0 || cat > DHCategoryOther) return;
     dh_capture_set_cat_paused((int)cat, paused ? 1 : 0);   // 写入 dh_capture 并持久化

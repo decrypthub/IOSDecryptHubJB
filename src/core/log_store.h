@@ -47,6 +47,11 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 // 写入一条日志 (线程安全)
 - (void)append:(DHLogEntry *)entry;
 
+// 网络专用: 用「已含响应」的新条目原子替换先前只记了请求的旧条目 (保持 seq/位置不变)。
+// 旧条目保持不可变、绝不原地改写 —— 已取到快照的读者仍持有完整旧对象, 读侧零竞态。
+// 仅在串行队列内换引用并重新落盘; 旧条目若已被环形缓冲淘汰则退化为追加新条目。
+- (void)replaceNetworkEntry:(DHLogEntry *)oldEntry with:(DHLogEntry *)newEntry;
+
 // 当前所有日志快照 (按 seq 升序; 限制最近 N 条以防 UI 卡顿)
 - (NSArray<DHLogEntry *> *)snapshot;
 - (NSArray<DHLogEntry *> *)snapshotMatching:(nullable NSString *)keyword
