@@ -13,6 +13,9 @@
 #import <Security/Security.h>
 #import <AdSupport/AdSupport.h>
 #import <dlfcn.h>
+#import <sys/socket.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
 #import <unistd.h>
 #import <sys/stat.h>
 #import <sys/sysctl.h>
@@ -130,6 +133,82 @@ static void do_file_rename(void) {
 }
 
 // ==================== 系统触发(系统 tab) ====================
+// ---------- 真机无人值守验收用的状态快照 ----------
+// 真机上没有 curl/netstat，也读不到统一日志，出问题只能靠猜。宿主自己把关键事实
+// 写进 Documents/dh_status.json（root 可通过 SSH 读容器），把"猜"变成"看"：
+//   injected_images   已加载镜像里的注入痕迹（decrypt_helper / ellekit ...）
+//   local_8088        本地 8088 是否可连 —— 区分"引擎没监听"与"局域网到不了"
+//   engine_config_access  沙盒视角能否读到越狱插件目录（本身就是一条能力结论）
+static BOOL dh_can_connect(uint16_t port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return NO;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    struct timeval tv;
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    BOOL ok = (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+    close(fd);
+    return ok;
+}
+
+static NSString *dh_status_path(void) {
+    // 构造函数阶段（进程刚起、UI 还没初始化）取容器目录：HOME 最可靠，兜底 Documents
+    const char *home = getenv("HOME");
+    NSString *dir = home ? [NSString stringWithUTF8String:home] : nil;
+    if (dir.length == 0) dir = test_file_path().stringByDeletingLastPathComponent;
+    return [dir stringByAppendingPathComponent:@"dh_status.json"];
+}
+
+static void dh_write_status(void) {
+    @autoreleasepool {
+        NSMutableDictionary *out = [NSMutableDictionary dictionary];
+        out[@"time"] = @([[NSDate date] timeIntervalSince1970]);
+        out[@"pid"] = @(getpid());
+
+        NSMutableArray *images = [NSMutableArray array];
+        const char *marks[] = { "decrypt_helper", "IOSDecryptHub", "ellekit", "substrate" };
+        uint32_t count = _dyld_image_count();
+        for (uint32_t i = 0; i < count; i++) {
+            const char *name = _dyld_get_image_name(i);
+            if (!name) continue;
+            for (int j = 0; j < 4; j++) {
+                if (strstr(name, marks[j])) { [images addObject:@(name)]; break; }
+            }
+        }
+        out[@"injected_images"] = images;
+        out[@"injected"] = @(images.count > 0);
+        out[@"image_count"] = @(count);
+        out[@"local_8088"] = @(dh_can_connect(8088));
+
+        NSMutableDictionary *access = [NSMutableDictionary dictionary];
+        NSArray *paths = @[ @"/var/jb/usr/lib/IOSDecryptHub/config/enabledBundles.plist",
+                            @"/usr/lib/IOSDecryptHub/config/enabledBundles.plist" ];
+        for (NSString *path in paths) {
+            access[path] = @{ @"exists": @([[NSFileManager defaultManager] fileExistsAtPath:path]),
+                              @"readable": @([[NSFileManager defaultManager] isReadableFileAtPath:path]) };
+        }
+        out[@"engine_config_access"] = access;
+        out[@"documents"] = test_file_path().stringByDeletingLastPathComponent;
+
+        NSData *data = [NSJSONSerialization dataWithJSONObject:out
+                                                       options:NSJSONWritingPrettyPrinted
+                                                         error:nil];
+        [data writeToFile:dh_status_path() atomically:YES];
+    }
+}
+
+// 进程一启动就写一次：真机常出现"URL 拉起只进后台、UI 不初始化"的情况，
+// 放到构造函数里才能保证无论前台/后台都拿到注入与端口的第一手事实。
+__attribute__((constructor))
+static void dh_status_boot_probe(void) {
+    dh_write_status();
+}
+
 static void do_dlopen(void) {
     void *h1 = dlopen("/usr/lib/libsqlite3.dylib", RTLD_LAZY); if (h1) dlclose(h1);
     void *h2 = dlopen("/usr/lib/libz.dylib", RTLD_LAZY);       if (h2) dlclose(h2);
@@ -390,6 +469,11 @@ static NSString *chk_device_info(void) {
 @implementation TestVC
 - (void)viewDidLoad {
     [super viewDidLoad];
+    dh_write_status();
+    [NSTimer scheduledTimerWithTimeInterval:2.0 repeats:YES block:^(NSTimer *timer) {
+        (void)timer;
+        dh_write_status();
+    }];
     self.btnMap = [NSMutableDictionary dictionary];
     self.tabScrolls = [NSMutableArray array];
     self.view.backgroundColor = [UIColor colorWithRed:0.07 green:0.09 blue:0.13 alpha:1.0];
@@ -574,6 +658,7 @@ static NSString *chk_device_info(void) {
 }
 
 - (BOOL)triggerByKey:(NSString *)key {
+    dh_write_status();
     if ([key hasPrefix:@"baseline."]) return [self triggerScenarioById:key];
     if ([key isEqualToString:@"netall"]) { do_net_matrix(); [self flash:@"网络矩阵"]; return YES; }
     UIButton *b = self.btnMap[key.lowercaseString];
