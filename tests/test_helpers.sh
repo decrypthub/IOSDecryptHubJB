@@ -108,3 +108,34 @@ dh_write_results() {
             > "$RESULT_DIR/junit.xml"
     fi
 }
+
+# ---------- 真机（越狱）辅助 ----------
+# 真机不走本机端口探测：MCP 直接打在设备 IP 的 8088 上（与 idh 的连接方式一致）。
+dh_device_mcp() { # dh_device_mcp <host> <json>
+    curl -sf --connect-timeout 2 --max-time 6 -X POST "http://$1:8088/api/mcp" \
+        -H 'Content-Type: application/json' -d "$2"
+}
+
+dh_device_wait_mcp() { # dh_device_wait_mcp <host> <bundleid> [timeout_s]
+    local host="$1" want="$2" timeout="${3:-30}" got
+    local attempts=$(( timeout * 2 ))
+    for ((i = 0; i < attempts; i++)); do
+        got=$(dh_device_mcp "$host" \
+            '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_stats","arguments":{}}}' \
+            2>/dev/null | jq -r '.result.structuredContent.process.bundleId // empty' 2>/dev/null || true)
+        [[ "$got" = "$want" ]] && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
+# 当前已捕获事件的算法名集合（清空后调用即可知道本次触发了什么）
+dh_device_algorithms() { # dh_device_algorithms <host>
+    dh_device_mcp "$1" \
+        '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"query_events","arguments":{"limit":1000}}}' \
+        2>/dev/null | jq -r '[.result.structuredContent.events[].algorithm] | unique | .[]' 2>/dev/null || true
+}
+
+dh_device_tool() { # dh_device_tool <host> <tool> <json-args>
+    dh_device_mcp "$1" "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"$2\",\"arguments\":$3}}"
+}
