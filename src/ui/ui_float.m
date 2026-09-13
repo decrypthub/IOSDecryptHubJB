@@ -1,6 +1,9 @@
 // ui_float.m
 // 悬浮窗 - 只显示采集状态、Web 地址和基础控制，不承载日志正文。
 //
+// 产品决定（2026-09-13）：悬浮窗不带任何引流内容（曾有的"微信搜一搜"整行已移除）。
+// Web 面板里的公众号入口是渠道触达，保留，不要在"清理"时一起删掉。
+//
 // UIKit 隔离: macOS 纯 target 没有 UIKit, 整个文件编译为空, 提供 no-op stub.
 // iOS / Mac Catalyst / iOS Simulator 都有 UIKit, 正常走.
 
