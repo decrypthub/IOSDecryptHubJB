@@ -37,7 +37,6 @@ static UIWindowScene *dh_best_window_scene(void);
 @property (nonatomic, strong) UIImageView *collapsedIcon;   // 缩小态的圆形小图标
 @property (nonatomic, strong) UILabel     *statsLabel;
 @property (nonatomic, strong) UILabel     *urlLabel;
-@property (nonatomic, strong) UILabel     *wechatLabel;
 @property (nonatomic, strong) UIButton    *clearBtn;
 @property (nonatomic, strong) UIButton    *pauseBtn;
 @property (nonatomic, strong) NSTimer     *statsTimer;
@@ -68,7 +67,7 @@ static DHFloatingController *gFloat = nil;
 
 - (void)build {
     CGRect screen = [UIScreen mainScreen].bounds;
-    CGFloat W = 252, H = 226;
+    CGFloat W = 252, H = 202;
     // 初始贴右上, 顶部避开灵动岛/刘海 (保守安全值, 拖动后随用户)
     CGRect frame = CGRectMake(screen.size.width - W - 12, 64, W, H);
     self.expandedFrame = frame;
@@ -160,23 +159,8 @@ static DHFloatingController *gFloat = nil;
     [self.urlLabel addGestureRecognizer:tap];
     [root addSubview:self.urlLabel];
 
-    self.wechatLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 142, W - 28, 18)];
-    NSMutableAttributedString *wechat = [[NSMutableAttributedString alloc]
-        initWithString:@"微信搜一搜 DecryptHub"];
-    [wechat addAttribute:NSForegroundColorAttributeName value:DH_MUTED range:NSMakeRange(0, 5)];
-    [wechat addAttribute:NSForegroundColorAttributeName value:DH_INK range:NSMakeRange(6, 10)];
-    [wechat addAttribute:NSFontAttributeName
-                    value:[UIFont systemFontOfSize:11 weight:UIFontWeightMedium]
-                    range:NSMakeRange(0, wechat.length)];
-    self.wechatLabel.attributedText = wechat;
-    self.wechatLabel.userInteractionEnabled = YES;
-    UITapGestureRecognizer *wechatTap =
-        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onCopyWeChat)];
-    [self.wechatLabel addGestureRecognizer:wechatTap];
-    [root addSubview:self.wechatLabel];
-
     // App 内只保留基础控制，日志查看与分析统一在 Web 控制台完成。
-    CGFloat by = 166, bw = 109, bh = 40, bx = 12, gap = 10;
+    CGFloat by = 142, bw = 109, bh = 40, bx = 12, gap = 10;
     self.pauseBtn = [self makeButton:@"暂停" style:1
                                frame:CGRectMake(bx, by, bw, bh) action:@selector(onTogglePause)];
     self.clearBtn = [self makeButton:@"清空" style:2
@@ -280,23 +264,6 @@ static DHFloatingController *gFloat = nil;
     }
 }
 
-- (void)onCopyWeChat {
-    [UIPasteboard generalPasteboard].string = @"DecryptHub";
-    NSAttributedString *original = self.wechatLabel.attributedText;
-    self.wechatLabel.attributedText = [[NSAttributedString alloc]
-        initWithString:@"已复制 DecryptHub"
-            attributes:@{
-                NSForegroundColorAttributeName: DH_ACCENT,
-                NSFontAttributeName: [UIFont systemFontOfSize:11 weight:UIFontWeightMedium],
-            }];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        if ([self.wechatLabel.text isEqualToString:@"已复制 DecryptHub"]) {
-            self.wechatLabel.attributedText = original;
-        }
-    });
-}
-
 - (void)onCopyURL {
     NSString *u = dh_http_url();
     if (!u || ![u hasPrefix:@"http"]) return;
@@ -352,7 +319,6 @@ static DHFloatingController *gFloat = nil;
         self.minBtn.alpha     = col ? 0 : 1;
         self.statsLabel.alpha = col ? 0 : 1;
         self.urlLabel.alpha   = col ? 0 : 1;
-        self.wechatLabel.alpha = col ? 0 : 1;
         self.pauseBtn.alpha   = col ? 0 : 1;
         self.clearBtn.alpha   = col ? 0 : 1;
     } completion:nil];
