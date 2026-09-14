@@ -164,6 +164,58 @@ static NSString *dh_status_path(void) {
     return [dir stringByAppendingPathComponent:@"dh_status.json"];
 }
 
+// 权限自检：把"以什么身份跑、越狱路径能否读/写、失败的真实原因"写进状态文件。
+// 为什么需要它：产品里"保存失败"这类提示不带原因，只能靠猜；这里把 uid / 推导出的
+// 越狱根 / 逐项可读可写 / 原子写的 NSError 原样带回来。
+static NSDictionary *dh_selfcheck(void) {
+    NSMutableDictionary *out = [NSMutableDictionary dictionary];
+    out[@"uid"] = @(getuid());
+    out[@"euid"] = @(geteuid());
+
+    Dl_info info = {0};
+    NSString *root = nil;
+    if (dladdr((const void *)&dh_selfcheck, &info) != 0 && info.dli_fname) {
+        NSString *path = [NSString stringWithUTF8String:info.dli_fname];
+        for (int i = 0; i < 3; i++) path = [path stringByDeletingLastPathComponent];
+        root = path;
+    }
+    out[@"bootstrap_root"] = root.length ? root : @"(nil)";
+
+    NSMutableArray *probes = [NSMutableArray array];
+    NSArray<NSString *> *dirs = @[
+        root.length > 1 ? [root stringByAppendingPathComponent:@"usr/lib/IOSDecryptHub/config"] : @"/var/jb/usr/lib/IOSDecryptHub/config",
+        @"/var/jb/usr/lib/IOSDecryptHub/config",
+        @"/usr/lib/IOSDecryptHub/config",
+    ];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *dir in dirs) {
+        NSMutableDictionary *probe = [NSMutableDictionary dictionary];
+        probe[@"dir"] = dir;
+        probe[@"exists"] = @([fm fileExistsAtPath:dir]);
+        probe[@"writable"] = @([fm isWritableFileAtPath:dir]);
+        NSString *tmp = [dir stringByAppendingPathComponent:@".dh_selftest.plist"];
+        NSError *serErr = nil;
+        NSData *data = [NSPropertyListSerialization dataWithPropertyList:@{@"selftest": @YES}
+                                                                 format:NSPropertyListXMLFormat_v1_0
+                                                                options:0
+                                                                  error:&serErr];
+        NSError *writeErr = nil;
+        BOOL ok = NO;
+        if (data) ok = [data writeToFile:tmp options:NSDataWritingAtomic error:&writeErr];
+        probe[@"atomic_write_ok"] = @(ok);
+        if (ok) [fm removeItemAtPath:tmp error:nil];
+        if (!ok && writeErr) {
+            probe[@"write_error"] = [NSString stringWithFormat:@"%@ [%@ %ld, underlying=%@ %ld]",
+                writeErr.localizedDescription, writeErr.domain, (long)writeErr.code,
+                writeErr.userInfo[NSUnderlyingErrorKey] ? [(NSError *)writeErr.userInfo[NSUnderlyingErrorKey] domain] : @"-",
+                writeErr.userInfo[NSUnderlyingErrorKey] ? (long)[(NSError *)writeErr.userInfo[NSUnderlyingErrorKey] code] : 0];
+        }
+        [probes addObject:probe];
+    }
+    out[@"write_probes"] = probes;
+    return out;
+}
+
 static void dh_write_status(void) {
     @autoreleasepool {
         NSMutableDictionary *out = [NSMutableDictionary dictionary];
@@ -194,6 +246,7 @@ static void dh_write_status(void) {
         }
         out[@"engine_config_access"] = access;
         out[@"documents"] = test_file_path().stringByDeletingLastPathComponent;
+        out[@"selfcheck"] = dh_selfcheck();
 
         NSData *data = [NSJSONSerialization dataWithJSONObject:out
                                                        options:NSJSONWritingPrettyPrinted

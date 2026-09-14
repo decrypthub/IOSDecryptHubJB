@@ -83,15 +83,37 @@ if [[ "$DO_BUILD" -eq 1 ]]; then
     info "编译测试宿主 (iphoneos, arm64, min=${MIN_IOS})..."
     rm -rf "$BUILD_DIR"
     mkdir -p "$APP_BUNDLE"
-    # 不额外授予 entitlement：让它像普通 App 一样受沙盒约束，
-    # 这样 baseline.environment.probes / injection.visibility 的结论才有意义。
+    # 授予 platform-application：实测普通（无 entitlement）签名的 App 装进
+    # <jbroot>/Applications 后只被创建进程、不执行代码（Documents 空、构造函数探针不落盘），
+    # 无法用来做验收。沙盒状态差异记在报告里，结论按"平台化 App"口径解读。
     "$CC" -arch arm64 -isysroot "$SDK" -miphoneos-version-min="$MIN_IOS" \
         -fobjc-arc -ObjC -O1 \
         -framework UIKit -framework Foundation -framework Security -framework AdSupport \
         sim_uitest/main.m -o "$APP_BUNDLE/$APP_NAME"
     cp sim_uitest/Info.plist "$APP_BUNDLE/"
+    # sim_uitest/Info.plist 是给模拟器用的，里面写着 CFBundleSupportedPlatforms=[iPhoneSimulator]、
+    # DTPlatformName=iphonesimulator —— 真机上 LaunchServices 会因此直接拒绝启动（进程都不创建，
+    # uicache 却注册成功，表现为"怎么点都没反应"）。设备形态必须改写这两个键。
+    python3 - "$APP_BUNDLE/Info.plist" <<'PYEOF'
+import plistlib, sys
+path = sys.argv[1]
+with open(path, 'rb') as fh:
+    info = plistlib.load(fh)
+info['CFBundleSupportedPlatforms'] = ['iPhoneOS']
+info['DTPlatformName'] = 'iphoneos'
+with open(path, 'wb') as fh:
+    plistlib.dump(info, fh)
+print('    Info.plist 平台声明 → iPhoneOS')
+PYEOF
     [ -f sim_uitest/AppIcon60x60@2x.png ] && cp sim_uitest/AppIcon60x60@2x.png "$APP_BUNDLE/"
-    "$LDid" -S "$APP_BUNDLE/$APP_NAME"
+    # 用与产品 App（IOSDecryptHubManager）完全相同的 entitlement 签名：
+    # 只有这样，宿主里跑出来的"能否写越狱路径"结论才等于 App 的处境。
+    APP_ENT="$ROOT/../IOSDecryptHubJB/app/entitlements.plist"
+    if [ -f "$APP_ENT" ]; then
+        "$LDid" -S"$APP_ENT" "$APP_BUNDLE/$APP_NAME"
+    else
+        "$LDid" -S "$APP_BUNDLE/$APP_NAME"
+    fi
     info "✅ 宿主: $APP_BUNDLE ($(xcrun lipo -archs "$APP_BUNDLE/$APP_NAME"))"
 fi
 

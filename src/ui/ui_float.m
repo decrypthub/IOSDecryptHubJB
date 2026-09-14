@@ -45,6 +45,7 @@ static UIWindowScene *dh_best_window_scene(void);
 @property (nonatomic, strong) NSTimer     *statsTimer;
 @property (nonatomic, assign) BOOL         collapsed;
 @property (nonatomic, assign) CGRect       expandedFrame;
+- (void)attachToBestScene;
 @end
 
 static DHFloatingController *gFloat = nil;
@@ -66,6 +67,18 @@ static DHFloatingController *gFloat = nil;
     }
     // 旧 UIKit 无 Scene Manifest: 直接用 screen 创建
     return [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+}
+
+- (void)attachToBestScene {
+    if (!self.window) return;
+    if (@available(iOS 13.0, *)) {
+        UIWindowScene *scene = dh_best_window_scene();
+        if (scene && self.window.windowScene != scene) {
+            self.window.windowScene = scene;
+        }
+    }
+    self.window.hidden = NO;
+    // 不要 makeKeyAndVisible：会抢走宿主 key window，宿主恢复焦点后悬浮窗被盖住或丢掉
 }
 
 - (void)build {
@@ -172,6 +185,7 @@ static DHFloatingController *gFloat = nil;
     [root addSubview:self.clearBtn];
 
     w.hidden = NO;
+    [self attachToBestScene];
 
     // 定时刷新统计 (1 秒) — block + weak self, 避免 retain cycle; 缩小态不刷新
     __weak typeof(self) weakSelf = self;
@@ -440,7 +454,10 @@ static BOOL dh_can_show_floating(void) {
 // 尝试创建悬浮窗 (如果条件满足)
 static void dh_try_show_floating(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (gFloat) return;
+        if (gFloat) {
+            [gFloat attachToBestScene];
+            return;
+        }
         if (!dh_can_show_floating()) return;
         gFloat = [[DHFloatingController alloc] init];
     });
@@ -471,7 +488,9 @@ void dh_ui_install_floating(void) {
                 [nc addObserverForName:UISceneDidActivateNotification
                                 object:nil queue:[NSOperationQueue mainQueue]
                             usingBlock:^(NSNotification *note_) { dh_on_scene_activated(note_); }];
-
+                [nc addObserverForName:UISceneDidDisconnectNotification
+                                object:nil queue:[NSOperationQueue mainQueue]
+                            usingBlock:^(NSNotification *note_) { dh_on_scene_activated(note_); }];
             }
 
             // 旧 UIKit 无 Scene Manifest 的兜底
