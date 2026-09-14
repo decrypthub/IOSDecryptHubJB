@@ -150,9 +150,15 @@ BOOL dh_noise_matches_for_board(DHNoiseBoard board, NSString *text) {
     return NO;
 }
 
+// 只有"确实存在这类噪声语义"的分类才参与噪声判定：
+//   File / System → SYS 板块；加解密类 → CRYPTO 板块；
+//   其余（网络 / Keychain / 其它）返回 -1 = 不参与 —— 否则 CRYPTO 的规则列表
+//   名义上会管到网络条目（历史上 net 曾被归进 CRYPTO 板块）。
 DHNoiseBoard dh_noise_board_for_category(NSInteger category) {
     if (category == DHCategoryFile || category == DHCategorySystem) return DHNoiseBoardSys;
-    return DHNoiseBoardCrypto;
+    if (category == DHCategoryDigest || category == DHCategoryHMAC ||
+        category == DHCategorySymmetric || category == DHCategoryAsymmetric) return DHNoiseBoardCrypto;
+    return (DHNoiseBoard)-1;
 }
 
 NSDictionary *dh_noise_export(void) {

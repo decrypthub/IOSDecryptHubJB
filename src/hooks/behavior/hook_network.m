@@ -183,6 +183,8 @@ static id (*orig_upReq)(id, SEL, NSURLRequest *, NSData *) = NULL;
 typedef void (^DHDownloadCH)(NSURL *, NSURLResponse *, NSError *);
 static id (*orig_dlReqCH)(id, SEL, NSURLRequest *, DHDownloadCH) = NULL;
 static id (*orig_dlURLCH)(id, SEL, NSURL *, DHDownloadCH) = NULL;
+// 断点续传下载: 入参是 resume data(二进制 blob), 此刻拿不到 URLRequest。
+static id (*orig_dlResumeCH)(id, SEL, NSData *, DHDownloadCH) = NULL;
 // 文件上传: body 是磁盘文件, 建任务时读一段前缀当请求体快照 (完整文件可能是大视频, 必须限长)。
 static id (*orig_upFileCH)(id, SEL, NSURLRequest *, NSURL *, DHDataCH) = NULL;
 static id (*orig_upFile)(id, SEL, NSURLRequest *, NSURL *) = NULL;
@@ -371,6 +373,28 @@ static id swz_dlURLCH(id self, SEL _cmd, NSURL *url, DHDownloadCH ch) {
     return task;
 }
 
+// -[NSURLSession downloadTaskWithResumeData:completionHandler:] —— 断点续传下载。
+// 建任务时请求对象还没解析出来（入参是 resume data），所以只挂空快照 + 说明，
+// 真正的 METHOD/URL/Header 由 resume 时的兜底路径补上；响应照常配对为完整条目。
+static id swz_dlResumeCH(id self, SEL _cmd, NSData *resumeData, DHDownloadCH ch) {
+    if (!ch || !dh_capture_sub_enabled(DH_CAP_NETWORK)) return orig_dlResumeCH(self, _cmd, resumeData, ch);
+    DHNetSnap *snap = dh_snap_from_request(nil, self);
+    snap.bodyNote = @"[resume] 断点续传下载，请求体不适用";
+    __block __weak id weakTask = nil;
+    DHDownloadCH wrapped = ^(NSURL *location, NSURLResponse *resp, NSError *err) {
+        @try {
+            dh_snap_download_preview(snap, location, resp);
+            dh_net_enrich(weakTask, snap, snap.dlPreview, resp, err);
+        }
+        @catch (__unused NSException *e) {}
+        ch(location, resp, err);
+    };
+    id task = orig_dlResumeCH(self, _cmd, resumeData, wrapped);
+    weakTask = task;
+    dh_attach_snap(task, snap);
+    return task;
+}
+
 // -[NSURLSession uploadTaskWithRequest:fromFile:completionHandler:] —— 请求体取自磁盘文件前缀。
 static id swz_upFileCH(id self, SEL _cmd, NSURLRequest *req, NSURL *fileURL, DHDataCH ch) {
     if (!ch || !dh_capture_sub_enabled(DH_CAP_NETWORK)) return orig_upFileCH(self, _cmd, req, fileURL, ch);
@@ -496,6 +520,7 @@ static void install_urlsession_hook(void) {
     // 下载 / 文件上传 completion 建任务 (响应配对 + fromFile 请求体快照)
     swz_instance(sc, @selector(downloadTaskWithRequest:completionHandler:),      (IMP)swz_dlReqCH, (IMP *)&orig_dlReqCH);
     swz_instance(sc, @selector(downloadTaskWithURL:completionHandler:),          (IMP)swz_dlURLCH, (IMP *)&orig_dlURLCH);
+    swz_instance(sc, @selector(downloadTaskWithResumeData:completionHandler:),   (IMP)swz_dlResumeCH, (IMP *)&orig_dlResumeCH);
     swz_instance(sc, @selector(uploadTaskWithRequest:fromFile:completionHandler:),(IMP)swz_upFileCH, (IMP *)&orig_upFileCH);
     swz_instance(sc, @selector(uploadTaskWithRequest:fromFile:),                 (IMP)swz_upFile, (IMP *)&orig_upFile);
 
