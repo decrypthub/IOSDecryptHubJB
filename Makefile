@@ -225,6 +225,11 @@ test-mcp:
 	@chmod +x tests/mcp_test.sh
 	./tests/mcp_test.sh
 
+.PHONY: test-persistence
+test-persistence:
+	@chmod +x tests/persistence_test.sh
+	./tests/persistence_test.sh
+
 .PHONY: test-unit
 test-unit:
 	python3 -m unittest tests.test_patch_info_plist tests.test_scenarios
@@ -235,7 +240,7 @@ verify-architecture:
 	./tests/verify_architecture.sh
 
 .PHONY: test-audit-mac
-test-audit-mac: test-unit verify-architecture test-mcp
+test-audit-mac: test-unit verify-architecture test-mcp test-persistence
 
 .PHONY: test-audit-sim
 test-audit-sim: test-unit verify-architecture
@@ -243,7 +248,7 @@ test-audit-sim: test-unit verify-architecture
 	./tests/sim_test.sh
 
 .PHONY: verify-fast
-verify-fast: test-unit verify-architecture test-mcp
+verify-fast: test-unit verify-architecture test-mcp test-persistence
 
 $(TEST_BIN): tests/exercise_runner.m
 	@if [ -z "$(MAC_SDK)" ]; then echo "❌ 没找到 macOS SDK"; exit 1; fi

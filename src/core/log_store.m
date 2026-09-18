@@ -9,10 +9,10 @@
 #import <sys/time.h>
 #import <stdatomic.h>
 #import <mach/mach.h>
-#import <execinfo.h>
-#import <dlfcn.h>
 #import <pthread.h>
 #import <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 @implementation DHLogEntry
 @end
@@ -26,14 +26,22 @@
     uint64_t                      _seqCounter;
     NSString                     *_filePath;
     NSString                     *_cfgPath;     // .dh_logcfg.conf
+    NSString                     *_journalPath; // 结构化事件日志 (JSONL, 供重启回载)
+    NSString                     *_clearMarksPath;
     NSFileHandle                 *_logFH;       // 常开 append 句柄 (避免每条 open/close); 仅 _queue 内访问
+    NSFileHandle                 *_journalFH;
     unsigned long long            _logBytes;    // 当前段已写字节 (用于滚动判断); 仅 _queue 内访问
+    _Atomic unsigned long long    _journalBytes;
+    _Atomic unsigned long long    _restoredEvents;
+    unsigned long long            _journalMaxBytes;
     NSUInteger                    _maxPerCategory;   // 仅 _queue 内写, append 内读
     unsigned long long            _maxLogFileBytes;  // 仅 _queue 内写, _persist 内读
     _Atomic int64_t               _pendingEvents;    // 已派发但尚未处理的日志条数
     _Atomic uint64_t              _droppedEvents;    // 因积压主动丢弃的总条数
     _Atomic uint64_t              _droppedByCategory[DHCategoryOther + 1];
     NSMutableData                *_writeBuf;         // 落盘批量缓冲 (仅 _queue 内访问)
+    NSMutableData                *_journalBuf;
+    NSMutableDictionary<NSNumber *, NSNumber *> *_clearMarks;  // 分类清除标记: 回载时丢弃旧于标记的事件
     BOOL                          _flushScheduled;   // 仅 _queue 内访问
 }
 @end
@@ -50,6 +58,102 @@ static const int64_t  kSoftPendingLimit  = 1024;
 static const int64_t  kHardPendingLimit  = 4096;
 static const NSUInteger kFlushBufferBytes = 64 * 1024;     // 落盘批量阈值
 static const int64_t  kFlushIntervalMs   = 150;             // 最长 150ms 落盘一次, 兼顾崩溃取证
+// 结构化事件日志 (重启回载): 只记非噪点事件, 8MB/段、2 个备份, 回载时只读最后 2MB 尾部。
+static const unsigned long long kDefaultJournalMaxBytes = 8ULL * 1024 * 1024;
+static const int          kJournalRotatedBackups = 2;
+static const NSUInteger   kJournalTailBytes       = 512 * 1024;   // 只回载最近约 1~2 百条, 保证启动不卡
+static const NSUInteger   kJournalRestoreMaxEvents = 1000;
+static const NSUInteger   kJournalMaxDetailBytes  = 8 * 1024;
+static const NSUInteger   kJournalMaxStackBytes   = 16 * 1024;
+static char               kLogQueueKey;
+
+// ---- 结构化事件日志 (JSONL) 的序列化/反序列化 ----
+// 只记录非噪点事件; blob 与长文本有上限, 保证单行有界、回载快。完整文本仍在 decrypt_helper.log。
+static NSData *dh_journal_bounded(NSData *data, NSUInteger maxBytes) {
+    if (!data.length) return nil;
+    return data.length > maxBytes ? [data subdataWithRange:NSMakeRange(0, maxBytes)] : data;
+}
+
+static NSString *dh_journal_bounded_string(NSString *s, NSUInteger maxBytes) {
+    if (!s.length) return nil;
+    NSData *d = [s dataUsingEncoding:NSUTF8StringEncoding];
+    if (!d || d.length <= maxBytes) return s;
+    NSUInteger n = maxBytes;
+    while (n > 0) {
+        NSString *cut = [[NSString alloc] initWithData:[d subdataWithRange:NSMakeRange(0, n)]
+                                              encoding:NSUTF8StringEncoding];
+        if (cut) return cut;
+        n--;
+    }
+    return @"";
+}
+
+static NSData *dh_journal_line(DHLogEntry *e) {
+    NSMutableDictionary *m = [NSMutableDictionary dictionary];
+    m[@"s"] = @(e.seq);
+    m[@"c"] = @(e.category);
+    if (e.timestamp.length) m[@"t"] = e.timestamp;
+    m[@"m"] = @(e.timestampMs);
+    m[@"h"] = @(e.threadId);
+    if (e.algorithm.length) m[@"a"] = e.algorithm;
+    if (e.operation.length) m[@"o"] = e.operation;
+    NSData *key    = dh_journal_bounded(e.key,    kMaxBlobLogged);
+    NSData *iv     = dh_journal_bounded(e.iv,     kMaxBlobLogged);
+    NSData *input  = dh_journal_bounded(e.input,  kMaxBlobLogged);
+    NSData *output = dh_journal_bounded(e.output, kMaxBlobLogged);
+    if (key.length)    { m[@"k"] = DHHexFromData(key);    m[@"kl"] = @(e.key.length); }
+    if (iv.length)     { m[@"v"] = DHHexFromData(iv);     m[@"vl"] = @(e.iv.length); }
+    if (input.length)  { m[@"i"] = DHHexFromData(input);  m[@"il"] = @(e.input.length); }
+    if (output.length) { m[@"p"] = DHHexFromData(output); m[@"ol"] = @(e.output.length); }
+    if (e.publicKeyInfo.length) m[@"pk"] = dh_journal_bounded_string(e.publicKeyInfo, 2048);
+    if (e.detail.length)        m[@"d"]  = dh_journal_bounded_string(e.detail, kJournalMaxDetailBytes);
+    if (e.callStack.length)     m[@"l"]  = dh_journal_bounded_string(e.callStack, kJournalMaxStackBytes);
+    NSData *json = [NSJSONSerialization dataWithJSONObject:m options:0 error:nil];
+    if (!json) return nil;
+    NSMutableData *out = [NSMutableData dataWithData:json];
+    [out appendBytes:"\n" length:1];
+    return out;
+}
+
+static DHLogEntry *dh_entry_from_journal(NSDictionary *m) {
+    if (![m isKindOfClass:[NSDictionary class]]) return nil;
+    NSNumber *s = m[@"s"];
+    if (![s isKindOfClass:[NSNumber class]]) return nil;
+    DHLogEntry *e = [DHLogEntry new];
+    e.seq = s.unsignedLongLongValue;
+    NSInteger c = [m[@"c"] isKindOfClass:[NSNumber class]] ? [m[@"c"] integerValue] : DHCategoryOther;
+    if (c < 0 || c > DHCategoryOther) c = DHCategoryOther;
+    e.category = (DHCategory)c;
+    e.timestamp = [m[@"t"] isKindOfClass:[NSString class]] ? m[@"t"] : @"";
+    e.timestampMs = [m[@"m"] isKindOfClass:[NSNumber class]] ? [m[@"m"] unsignedLongLongValue] : 0;
+    e.threadId = [m[@"h"] isKindOfClass:[NSNumber class]] ? [m[@"h"] unsignedLongLongValue] : 0;
+    e.algorithm = [m[@"a"] isKindOfClass:[NSString class]] ? m[@"a"] : @"";
+    e.operation = [m[@"o"] isKindOfClass:[NSString class]] ? m[@"o"] : @"";
+    NSString *keyHex    = [m[@"k"] isKindOfClass:[NSString class]] ? m[@"k"] : nil;
+    NSString *ivHex     = [m[@"v"] isKindOfClass:[NSString class]] ? m[@"v"] : nil;
+    NSString *inputHex  = [m[@"i"] isKindOfClass:[NSString class]] ? m[@"i"] : nil;
+    NSString *outputHex = [m[@"p"] isKindOfClass:[NSString class]] ? m[@"p"] : nil;
+    if (keyHex.length)    e.key    = DHDataFromHex(keyHex);
+    if (ivHex.length)     e.iv     = DHDataFromHex(ivHex);
+    if (inputHex.length)  e.input  = DHDataFromHex(inputHex);
+    if (outputHex.length) e.output = DHDataFromHex(outputHex);
+    e.publicKeyInfo = [m[@"pk"] isKindOfClass:[NSString class]] ? m[@"pk"] : nil;
+    NSString *detail = [m[@"d"] isKindOfClass:[NSString class]] ? m[@"d"] : nil;
+    NSUInteger il = [m[@"il"] isKindOfClass:[NSNumber class]] ? [m[@"il"] unsignedIntegerValue] : e.input.length;
+    NSUInteger ol = [m[@"ol"] isKindOfClass:[NSNumber class]] ? [m[@"ol"] unsignedIntegerValue] : e.output.length;
+    NSMutableArray *notes = [NSMutableArray array];
+    if (e.input.length && il > e.input.length)
+        [notes addObject:[NSString stringWithFormat:@"input %lu/%lu", (unsigned long)e.input.length, (unsigned long)il]];
+    if (e.output.length && ol > e.output.length)
+        [notes addObject:[NSString stringWithFormat:@"output %lu/%lu", (unsigned long)e.output.length, (unsigned long)ol]];
+    if (notes.count) {
+        NSString *suffix = [NSString stringWithFormat:@" [journal truncated: %@]", [notes componentsJoinedByString:@", "]];
+        detail = detail.length ? [detail stringByAppendingString:suffix] : suffix;
+    }
+    e.detail = detail;
+    e.callStack = [m[@"l"] isKindOfClass:[NSString class]] ? m[@"l"] : @"";
+    return e;
+}
 
 + (instancetype)shared {
     static DHLogStore *s = nil;
@@ -66,18 +170,35 @@ static const int64_t  kFlushIntervalMs   = 150;             // 最长 150ms 落�
             _noiseCount[b] = 0;
         }
         _queue = dispatch_queue_create("com.decrypthelper.logstore", DISPATCH_QUEUE_SERIAL);
+        dispatch_queue_set_specific(_queue, &kLogQueueKey, &kLogQueueKey, NULL);
         _seqCounter = 0;
         memset(_categoryCounts, 0, sizeof(_categoryCounts));
-        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        _filePath = [[paths firstObject] stringByAppendingPathComponent:@"decrypt_helper.log"];
-        _cfgPath  = [[paths firstObject] stringByAppendingPathComponent:@".dh_logcfg.conf"];
+        // 测试/调试可用 DH_LOG_DIR 覆盖沙箱 Documents; 生产默认 Documents。
+        const char *envDir = getenv("DH_LOG_DIR");
+        NSString *baseDir = (envDir && envDir[0]) ? [NSString stringWithUTF8String:envDir]
+                                                  : [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+        if (baseDir.length == 0) baseDir = NSTemporaryDirectory();
+        [[NSFileManager defaultManager] createDirectoryAtPath:baseDir withIntermediateDirectories:YES attributes:nil error:nil];
+        _filePath    = [baseDir stringByAppendingPathComponent:@"decrypt_helper.log"];
+        _cfgPath     = [baseDir stringByAppendingPathComponent:@".dh_logcfg.conf"];
+        _journalPath = [baseDir stringByAppendingPathComponent:@"decrypt_helper.journal"];
+        _clearMarksPath = [baseDir stringByAppendingPathComponent:@".dh_clear_marks.plist"];
         _maxPerCategory  = kDefaultMaxPerCategory;
         _maxLogFileBytes = kDefaultMaxLogFileBytes;
+        _journalMaxBytes = kDefaultJournalMaxBytes;
         atomic_init(&_pendingEvents, 0);
         atomic_init(&_droppedEvents, 0);
         for (int c = 0; c <= DHCategoryOther; c++) atomic_init(&_droppedByCategory[c], 0);
+        atomic_init(&_journalBytes, 0);
+        atomic_init(&_restoredEvents, 0);
         _writeBuf = [NSMutableData dataWithCapacity:kFlushBufferBytes];
+        _journalBuf = [NSMutableData dataWithCapacity:32 * 1024];
+        _clearMarks = [NSMutableDictionary dictionary];
         [self _loadCfg];
+        [self _loadClearMarks];
+        // 回载放到日志队列: 不让大 journal 卡住宿主启动/看门狗。append 也走同一队列,
+        // dispatch 顺序保证先回载、后追加, 不会覆盖新事件。
+        dispatch_async(_queue, ^{ [self _restoreFromJournal]; });
     }
     return self;
 }
@@ -109,6 +230,184 @@ static const int64_t  kFlushIntervalMs   = 150;             // 最长 150ms 落�
     int saved = dh_in_hook; dh_in_hook = 1;
     [txt writeToFile:_cfgPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
     dh_in_hook = saved;
+}
+
+// ===== 结构化事件日志 (JSONL) 与回载 =====
+
+- (NSString *)journalFilePath { return _journalPath; }
+
+- (NSString *)_journalSegPath:(int)i {
+    return i == 0 ? _journalPath : [_journalPath stringByAppendingFormat:@".%d", i];
+}
+
+- (void)_loadClearMarks {
+    NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:_clearMarksPath];
+    if (![d isKindOfClass:[NSDictionary class]]) return;
+    for (id k in d) {
+        if ([k isKindOfClass:[NSNumber class]] && [d[k] isKindOfClass:[NSNumber class]])
+            _clearMarks[k] = d[k];
+    }
+}
+
+- (void)_saveClearMarksLocked {
+    int saved = dh_in_hook; dh_in_hook = 1;
+    [_clearMarks writeToFile:_clearMarksPath atomically:YES];
+    dh_in_hook = saved;
+}
+
+- (uint64_t)_clearMarkForCategory:(NSInteger)c {
+    NSNumber *n = _clearMarks[@(c)];
+    return n ? n.unsignedLongLongValue : 0;
+}
+
+// 只读文件尾部, 且丢弃可能被截断的第一行; 回载成本与文件大小无关。
+- (NSData *)_readTailOfFile:(NSString *)path maxBytes:(NSUInteger)maxBytes {
+    NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
+    if (!fh) return nil;
+    unsigned long long size = [fh seekToEndOfFile];
+    unsigned long long start = size > maxBytes ? size - maxBytes : 0;
+    [fh seekToFileOffset:start];
+    NSData *data = [fh readDataToEndOfFile];
+    [fh closeFile];
+    if (start > 0 && data.length) {
+        const uint8_t *b = data.bytes;
+        NSUInteger n = data.length, i = 0;
+        while (i < n && b[i] != '\n') i++;
+        data = (i < n) ? [data subdataWithRange:NSMakeRange(i + 1, n - i - 1)] : [NSData data];
+    }
+    return data;
+}
+
+- (void)_parseJournalData:(NSData *)data into:(NSMutableDictionary<NSNumber *, DHLogEntry *> *)bySeq {
+    if (!data.length) return;
+    const uint8_t *b = data.bytes;
+    NSUInteger n = data.length, start = 0;
+    for (NSUInteger i = 0; i < n; i++) {
+        if (b[i] != '\n') continue;   // 只处理完整行; 结尾的半行直接忽略
+        if (i > start) {
+            @try {
+                NSData *line = [data subdataWithRange:NSMakeRange(start, i - start)];
+                NSDictionary *m = [NSJSONSerialization JSONObjectWithData:line options:0 error:nil];
+                DHLogEntry *e = dh_entry_from_journal(m);
+                if (e) {
+                    uint64_t mark = [self _clearMarkForCategory:e.category];
+                    if (mark != 0 && e.timestampMs != 0 && e.timestampMs <= mark) {
+                        // 用户已清过该类, 重启后不复活旧事件
+                    } else {
+                        bySeq[@(e.seq)] = e;   // 同 seq 以最后一次为准 (网络响应补全会重写同一 seq)
+                    }
+                }
+            } @catch (__unused NSException *ex) {
+                // 单行损坏直接跳过, 不影响其余事件回载
+            }
+        }
+        start = i + 1;
+    }
+}
+
+- (void)_restoreFromJournal {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableDictionary<NSNumber *, DHLogEntry *> *bySeq = [NSMutableDictionary dictionary];
+    // 由新到旧读: 最近的事件最重要, 达到上限就不再读旧段。
+    int saved = dh_in_hook; dh_in_hook = 1;   // 回载读文件不能被 file hook 再记录/递归
+    @try {
+        for (int seg = 0; seg <= kJournalRotatedBackups; seg++) {
+            NSString *path = [self _journalSegPath:seg];
+            if (![fm fileExistsAtPath:path]) continue;
+            NSData *tail = [self _readTailOfFile:path maxBytes:kJournalTailBytes];
+            [self _parseJournalData:tail into:bySeq];
+            if (bySeq.count >= kJournalRestoreMaxEvents) break;
+        }
+    } @catch (__unused NSException *ex) {
+        [bySeq removeAllObjects];
+        dh_diag_append(DH_DIAG_GENERAL, "WARN", "journal 回载异常, 本次跳过回载");
+    } @finally {
+        dh_in_hook = saved;
+    }
+    if (bySeq.count == 0) return;
+
+    NSArray<DHLogEntry *> *all = [bySeq.allValues sortedArrayUsingComparator:^NSComparisonResult(DHLogEntry *a, DHLogEntry *b) {
+        return a.seq < b.seq ? NSOrderedAscending : (a.seq > b.seq ? NSOrderedDescending : NSOrderedSame);
+    }];
+    if (all.count > kJournalRestoreMaxEvents) {
+        all = [all subarrayWithRange:NSMakeRange(all.count - kJournalRestoreMaxEvents, kJournalRestoreMaxEvents)];
+    }
+
+    NSMutableArray *perCat[DHCategoryOther + 1];
+    for (int c = 0; c <= DHCategoryOther; c++) perCat[c] = [NSMutableArray array];
+    for (DHLogEntry *e in all) {
+        NSMutableArray *arr = perCat[e.category];
+        [arr addObject:e];
+        if (arr.count > _maxPerCategory) [arr removeObjectsInRange:NSMakeRange(0, arr.count - _maxPerCategory)];
+    }
+
+    NSUInteger restored = 0;
+    uint64_t maxSeq = 0;
+    for (int c = 0; c <= DHCategoryOther; c++) {
+        _buckets[c] = perCat[c];
+        _categoryCounts[c] = perCat[c].count;
+        restored += perCat[c].count;
+        DHLogEntry *last = [perCat[c] lastObject];
+        if (last && last.seq > maxSeq) maxSeq = last.seq;
+    }
+    _seqCounter = maxSeq;
+    atomic_store_explicit(&_restoredEvents, restored, memory_order_relaxed);
+    if (restored > 0) {
+        NSString *msg = [NSString stringWithFormat:@"journal 回载完成: %lu 条事件 (max seq %llu)",
+                         (unsigned long)restored, (unsigned long long)maxSeq];
+        dh_diag_append(DH_DIAG_GENERAL, "INFO", msg.UTF8String);
+    }
+}
+
+- (void)_journalOpenLocked {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:_journalPath]) {
+        [fm createFileAtPath:_journalPath contents:nil attributes:nil];
+        atomic_store_explicit(&_journalBytes, 0, memory_order_relaxed);
+    } else {
+        NSDictionary *a = [fm attributesOfItemAtPath:_journalPath error:nil];
+        atomic_store_explicit(&_journalBytes,
+                              a ? [(NSNumber *)a[NSFileSize] unsignedLongLongValue] : 0,
+                              memory_order_relaxed);
+    }
+    _journalFH = [NSFileHandle fileHandleForWritingAtPath:_journalPath];
+    [_journalFH seekToEndOfFile];
+}
+
+- (void)_journalRotateLocked {
+    [_journalFH closeFile]; _journalFH = nil;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath:[self _journalSegPath:kJournalRotatedBackups] error:nil];
+    for (int i = kJournalRotatedBackups - 1; i >= 0; i--) {
+        NSString *from = [self _journalSegPath:i], *to = [self _journalSegPath:i + 1];
+        if ([fm fileExistsAtPath:from]) [fm moveItemAtPath:from toPath:to error:nil];
+    }
+    atomic_store_explicit(&_journalBytes, 0, memory_order_relaxed);
+}
+
+// 须在 _flushLocked 内调用 (dh_in_hook 已置位)。
+- (void)_journalFlushLocked {
+    if (_journalBuf.length == 0) return;
+    if (!_journalFH) [self _journalOpenLocked];
+    if (!_journalFH) { [_journalBuf setLength:0]; return; }
+    @try {
+        NSUInteger n = _journalBuf.length;
+        [_journalFH writeData:_journalBuf];
+        atomic_fetch_add_explicit(&_journalBytes, n, memory_order_relaxed);
+    } @catch (__unused NSException *ex) {
+        [_journalFH closeFile]; _journalFH = nil;
+    }
+    [_journalBuf setLength:0];
+    if (atomic_load_explicit(&_journalBytes, memory_order_relaxed) >= _journalMaxBytes)
+        [self _journalRotateLocked];
+}
+
+- (void)flush {
+    if (dispatch_get_specific(&kLogQueueKey) == &kLogQueueKey) {
+        [self _flushLocked];
+        return;
+    }
+    dispatch_sync(_queue, ^{ [self _flushLocked]; });
 }
 
 - (NSUInteger)maxPerCategory {
@@ -157,6 +456,9 @@ static const int64_t  kFlushIntervalMs   = 150;             // 最长 150ms 落�
         @"dropped":           @(atomic_load_explicit(&_droppedEvents, memory_order_relaxed)),
         @"droppedByCategory": byCat,
         @"rss":               @(rss),
+        @"journalBytes":      @(atomic_load_explicit(&_journalBytes, memory_order_relaxed)),
+        @"journalMaxBytes":   @(_journalMaxBytes),
+        @"restoredEvents":    @(atomic_load_explicit(&_restoredEvents, memory_order_relaxed)),
         @"softLimit":         @(kSoftPendingLimit),
         @"hardLimit":         @(kHardPendingLimit),
     };
@@ -202,7 +504,7 @@ static BOOL dh_noise_entry_matches_board(DHLogEntry *entry, DHNoiseBoard board) 
                 [b removeObjectsInRange:NSMakeRange(0, b.count - self->_maxPerCategory)];
             if (noisy) self->_noiseCount[board]++;
             else       self->_categoryCounts[ci]++;
-            [self _persist:entry];   // 噪点条目仍照常落盘, 保持「崩溃可闭环取证」承诺
+            [self _persist:entry noisy:noisy];   // 噪点条目仍照常落盘, 保持「崩溃可闭环取证」承诺
         } @finally {
             atomic_fetch_sub_explicit(&self->_pendingEvents, 1, memory_order_relaxed);
         }
@@ -248,7 +550,7 @@ static BOOL dh_noise_entry_matches_board(DHLogEntry *entry, DHNoiseBoard board) 
             if (idx != NSNotFound) {
                 newEntry.seq = oldEntry.seq;
                 nb[idx] = newEntry;
-                [self _persist:newEntry];
+                [self _persist:newEntry noisy:NO];
                 return;
             }
             for (int b = 0; b < DHNoiseBoardCount; b++) {   // 也可能被路由进噪声桶
@@ -256,7 +558,7 @@ static BOOL dh_noise_entry_matches_board(DHLogEntry *entry, DHNoiseBoard board) 
                 if (ni != NSNotFound) {
                     newEntry.seq = oldEntry.seq;
                     self->_noiseBuckets[b][ni] = newEntry;
-                    [self _persist:newEntry];
+                    [self _persist:newEntry noisy:YES];
                     return;
                 }
             }
@@ -266,7 +568,7 @@ static BOOL dh_noise_entry_matches_board(DHLogEntry *entry, DHNoiseBoard board) 
             if (nb.count > self->_maxPerCategory)
                 [nb removeObjectsInRange:NSMakeRange(0, nb.count - self->_maxPerCategory)];
             self->_categoryCounts[DHCategoryNetwork]++;
-            [self _persist:newEntry];
+            [self _persist:newEntry noisy:NO];
         } @finally {
             atomic_fetch_sub_explicit(&self->_pendingEvents, 1, memory_order_relaxed);
         }
@@ -380,44 +682,60 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
 }
 
 - (void)_flushLocked {
-    if (_writeBuf.length == 0) return;
+    if (_writeBuf.length == 0 && _journalBuf.length == 0) return;
     // 关键: 落盘自身的 open/write(写 decrypt_helper.log) 不能被 file hook 再记录, 否则
     // write -> 记录 -> append -> _persist -> write 无限自我循环. 落盘期间置 dh_in_hook。
     int saved = dh_in_hook; dh_in_hook = 1;
     @try {
-        if (!_logFH) [self _openLogHandleLocked];
-        if (!_logFH) {
-            dh_health_persist_fail(errno);
-            DH_ERR(@"日志落盘失败: 无法打开 %@ (errno=%d)", _filePath, errno);
-            [_writeBuf setLength:0];   // 打不开就丢弃本批, 绝不让缓冲无限涨
-            return;
+        if (_writeBuf.length > 0) {
+            if (!_logFH) [self _openLogHandleLocked];
+            if (!_logFH) {
+                dh_health_persist_fail(errno);
+                DH_ERR(@"日志落盘失败: 无法打开 %@ (errno=%d)", _filePath, errno);
+                [_writeBuf setLength:0];   // 打不开就丢弃本批, 绝不让缓冲无限涨
+            } else {
+                @try {
+                    NSUInteger n = _writeBuf.length;
+                    [_logFH writeData:_writeBuf];
+                    _logBytes += n;
+                } @catch (NSException *ex) {
+                    dh_health_persist_fail(errno);
+                    DH_ERR(@"日志落盘失败(批量): %@", ex.reason);
+                    [_logFH closeFile]; _logFH = nil;   // 句柄可能已坏, 下批重开
+                }
+                [_writeBuf setLength:0];
+                if (_maxLogFileBytes > 0 && _logBytes >= _maxLogFileBytes) [self _rotateLocked];
+            }
         }
-        @try {
-            NSUInteger n = _writeBuf.length;
-            [_logFH writeData:_writeBuf];
-            _logBytes += n;
-        } @catch (NSException *ex) {
-            dh_health_persist_fail(errno);
-            DH_ERR(@"日志落盘失败(批量): %@", ex.reason);
-            [_logFH closeFile]; _logFH = nil;   // 句柄可能已坏, 下批重开
-        }
-        [_writeBuf setLength:0];
-        if (_maxLogFileBytes > 0 && _logBytes >= _maxLogFileBytes) [self _rotateLocked];
+        [self _journalFlushLocked];   // 结构化事件日志与文本日志同批落盘
     } @finally {
         dh_in_hook = saved;
     }
 }
 
-- (void)_persist:(DHLogEntry *)e {
+- (void)_persist:(DHLogEntry *)e noisy:(BOOL)noisy {
     NSMutableString *s = dh_entry_block(e);
     NSData *bytes = [s dataUsingEncoding:NSUTF8StringEncoding];
     if (!bytes) { DH_ERR(@"日志 UTF-8 编码失败, 丢弃 #%llu", (unsigned long long)e.seq); return; }
-    // 批量落盘: 先进 64KB 缓冲, 满缓冲或 150ms 到点再 write 一次。
-    // 相比旧的「每条 write 一次」, syscall 数量降两个数量级; 崩溃时最多丢 150ms 日志,
-    // 仍然满足「被检测杀掉后重启可取全量」的取证语义。
+    // 文本日志批量落盘: 先进 64KB 缓冲, 满缓冲或 150ms 到点再 write 一次。
     if (!_writeBuf) _writeBuf = [NSMutableData dataWithCapacity:kFlushBufferBytes];
     [_writeBuf appendData:bytes];
-    if (_writeBuf.length >= kFlushBufferBytes) {
+
+    // 结构化事件日志只记非噪点事件, 供重启回载; 与文本日志同批写入。
+    if (!noisy) {
+        NSData *journal = dh_journal_line(e);
+        if (journal.length) {
+            if (!_journalBuf) _journalBuf = [NSMutableData dataWithCapacity:32 * 1024];
+            [_journalBuf appendData:journal];
+        }
+    }
+
+    // 高价值事件(加解密/网络/Keychain)逐条落盘: 崩溃最多丢当前这一条;
+    // 低价值(文件/系统/其它)继续批量写, 把事件洪水下的 I/O 降下来。
+    BOOL highValue = (e.category == DHCategoryDigest || e.category == DHCategoryHMAC ||
+                      e.category == DHCategorySymmetric || e.category == DHCategoryAsymmetric ||
+                      e.category == DHCategoryNetwork || e.category == DHCategoryKeychain);
+    if (highValue || _writeBuf.length >= kFlushBufferBytes || _journalBuf.length >= kFlushBufferBytes) {
         [self _flushLocked];
     } else if (!_flushScheduled) {
         _flushScheduled = YES;
@@ -498,29 +816,47 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
         self->_seqCounter = 0;
         memset(self->_categoryCounts, 0, sizeof(self->_categoryCounts));
         int saved = dh_in_hook; dh_in_hook = 1;
-        [self->_writeBuf setLength:0];   // 清空时丢弃尚未落盘的旧数据
+        [self->_writeBuf setLength:0];    // 清空时丢弃尚未落盘的旧数据
+        [self->_journalBuf setLength:0];
         [self->_logFH closeFile]; self->_logFH = nil; self->_logBytes = 0;
+        [self->_journalFH closeFile]; self->_journalFH = nil;
+        atomic_store_explicit(&self->_journalBytes, 0, memory_order_relaxed);
+        atomic_store_explicit(&self->_restoredEvents, 0, memory_order_relaxed);
         NSFileManager *fm = [NSFileManager defaultManager];
         for (int i = 0; i <= kMaxRotatedBackups; i++)   // 当前段 + 所有滚动备份段
             [fm removeItemAtPath:[self _segPath:i] error:nil];
+        for (int i = 0; i <= kJournalRotatedBackups; i++)
+            [fm removeItemAtPath:[self _journalSegPath:i] error:nil];
+        [fm removeItemAtPath:self->_clearMarksPath error:nil];
+        [self->_clearMarks removeAllObjects];
         dh_in_hook = saved;
     });
 }
 
 - (void)clearCategory:(NSInteger)cat {
     dispatch_async(_queue, ^{
+        struct timeval tv; gettimeofday(&tv, NULL);
+        uint64_t nowMs = (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)(tv.tv_usec / 1000);
+        NSMutableArray<NSNumber *> *marked = [NSMutableArray array];
         if (cat == -2) {            // 加密组
             for (int c = DHCategoryDigest; c <= DHCategoryAsymmetric; c++) {
                 [self->_buckets[c] removeAllObjects]; self->_categoryCounts[c] = 0;
+                [marked addObject:@(c)];
             }
         } else if (cat == -3) {     // 系统组(文件+模块)
             [self->_buckets[DHCategoryFile] removeAllObjects];
             [self->_buckets[DHCategorySystem] removeAllObjects];
             self->_categoryCounts[DHCategoryFile] = 0;
             self->_categoryCounts[DHCategorySystem] = 0;
+            [marked addObject:@(DHCategoryFile)];
+            [marked addObject:@(DHCategorySystem)];
         } else if (cat >= 0 && cat <= DHCategoryOther) {
             [self->_buckets[cat] removeAllObjects]; self->_categoryCounts[cat] = 0;
+            [marked addObject:@(cat)];
         }
+        // 记录清除时间点: 重启回载时同类的旧事件不再复活; 新事件仍会正常持久化。
+        for (NSNumber *n in marked) self->_clearMarks[n] = @(nowMs);
+        if (marked.count) [self _saveClearMarksLocked];
         // 仅清该类内存(落盘文件混所有类, 不动; 整体清空走 clearAll)
     });
 }
@@ -669,98 +1005,24 @@ NSString *DHUTF8FromData(NSData *d) {
     return s ?: @"(非UTF-8)";
 }
 
-// ---- 调用栈采集: backtrace() + PC 级符号缓存 ----
-// 旧实现每条事件调用 [NSThread callStackSymbols], 内部对每一帧做 backtrace_symbols/dladdr;
-// 高频 App 上这是最大的 CPU / 分配来源。新实现只 unwind 一次, 每个 PC 的 dladdr 结果缓存复用,
-// 输出格式仍与 parse_callstack_frames 兼容: "  [ 0] 0   image   0xaddr symbol + offset"。
-#define DH_STACK_CACHE_SIZE  1024
-#define DH_STACK_CACHE_PROBES 8
-#define DH_STACK_MAX_FRAMES  48
-#define DH_STACK_MAX_KEEP    20
-
-typedef struct {
-    uintptr_t pc;
-    uint64_t  offset;
-    char      image[64];
-    char      symbol[160];
-} DHStackCacheEntry;
-
-static DHStackCacheEntry g_stackCache[DH_STACK_CACHE_SIZE];
-static pthread_mutex_t g_stackCacheLock = PTHREAD_MUTEX_INITIALIZER;
-
-static NSUInteger dh_stack_slot(uintptr_t pc) {
-    return (NSUInteger)((pc >> 4) & (DH_STACK_CACHE_SIZE - 1));
-}
-
-static BOOL dh_stack_cache_get(uintptr_t pc, DHStackCacheEntry *out) {
-    BOOL found = NO;
-    pthread_mutex_lock(&g_stackCacheLock);
-    NSUInteger slot = dh_stack_slot(pc);
-    for (int i = 0; i < DH_STACK_CACHE_PROBES; i++) {
-        NSUInteger idx = (slot + i) & (DH_STACK_CACHE_SIZE - 1);
-        if (g_stackCache[idx].pc == 0) break;
-        if (g_stackCache[idx].pc == pc) { *out = g_stackCache[idx]; found = YES; break; }
-    }
-    pthread_mutex_unlock(&g_stackCacheLock);
-    return found;
-}
-
-static void dh_stack_cache_put(const DHStackCacheEntry *e) {
-    pthread_mutex_lock(&g_stackCacheLock);
-    NSUInteger slot = dh_stack_slot(e->pc);
-    for (int i = 0; i < DH_STACK_CACHE_PROBES; i++) {
-        NSUInteger idx = (slot + i) & (DH_STACK_CACHE_SIZE - 1);
-        if (g_stackCache[idx].pc == 0 || g_stackCache[idx].pc == e->pc) {
-            g_stackCache[idx] = *e;
-            pthread_mutex_unlock(&g_stackCacheLock);
-            return;
-        }
-    }
-    g_stackCache[slot] = *e;   // 缓存满时覆盖首槽, 保证内存有界
-    pthread_mutex_unlock(&g_stackCacheLock);
-}
-
-static BOOL dh_stack_image_skipped(const char *nameOrPath) {
-    if (!nameOrPath || !nameOrPath[0]) return YES;
-    const char *base = strrchr(nameOrPath, '/');
-    base = base ? base + 1 : nameOrPath;
-    static const char *skip[] = {
-        "decrypt_helper", "fishhook", "libsystem", "libdispatch",
-        "CoreFoundation", "Foundation", "UIKitCore", NULL
-    };
-    for (int i = 0; skip[i]; i++) if (strstr(base, skip[i])) return YES;
-    return NO;
-}
-
 NSString *DHCallStackFiltered(void) {
-    void *frames[DH_STACK_MAX_FRAMES];
-    int n = backtrace(frames, DH_STACK_MAX_FRAMES);
+    NSArray *symbols = [NSThread callStackSymbols];
     NSMutableString *cs = [NSMutableString string];
+    NSArray *filterOut = @[
+        @"fishhook", @"decrypt_helper", @"DHLogStore",
+        @"CoreFoundation", @"libsystem", @"libdispatch",
+        @"UIKitCore", @"Foundation`",
+    ];
     int kept = 0;
-    for (int i = 0; i < n && kept < DH_STACK_MAX_KEEP; i++) {
-        uintptr_t pc = (uintptr_t)frames[i];
-        if (!pc) continue;
-        DHStackCacheEntry e;
-        if (!dh_stack_cache_get(pc, &e)) {
-            Dl_info info = {0};
-            if (dladdr((const void *)pc, &info) == 0 || !info.dli_fname) continue;
-            const char *base = strrchr(info.dli_fname, '/');
-            base = base ? base + 1 : info.dli_fname;
-            memset(&e, 0, sizeof(e));
-            e.pc = pc;
-            snprintf(e.image, sizeof(e.image), "%s", base);
-            if (info.dli_sname && info.dli_saddr) {
-                snprintf(e.symbol, sizeof(e.symbol), "%s", info.dli_sname);
-                e.offset = (uint64_t)(pc - (uintptr_t)info.dli_saddr);
-            } else {
-                snprintf(e.symbol, sizeof(e.symbol), "%s", base);
-                e.offset = (uint64_t)(pc - (uintptr_t)info.dli_fbase);
-            }
-            dh_stack_cache_put(&e);
+    for (NSUInteger i = 0; i < symbols.count; i++) {
+        NSString *sym = symbols[i];
+        BOOL skip = NO;
+        for (NSString *bad in filterOut) {
+            if ([sym containsString:bad]) { skip = YES; break; }
         }
-        if (dh_stack_image_skipped(e.image)) continue;
-        [cs appendFormat:@"  [%2d] 0   %s   0x%llx %s + %llu\n",
-         kept++, e.image, (unsigned long long)pc, e.symbol, (unsigned long long)e.offset];
+        if (skip) continue;
+        [cs appendFormat:@"  [%2d] %@\n", kept++, sym];
+        if (kept >= 20) break;
     }
     if (kept == 0) [cs appendString:@"  (无应用相关栈帧)\n"];
     return cs;

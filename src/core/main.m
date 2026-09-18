@@ -78,6 +78,15 @@ static void dh_bootstrap(void) {
                                                        object:nil queue:nil usingBlock:^(NSNotification *_) {
         dh_ui_install_floating();
     }];
+    // 进入后台/退出前把批量缓冲刷盘, 避免 App 被挂起/终止时丢掉最后一批低价值事件。
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification
+                                                       object:nil queue:nil usingBlock:^(NSNotification *_) {
+        [[DHLogStore shared] flush];
+    }];
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillTerminateNotification
+                                                       object:nil queue:nil usingBlock:^(NSNotification *_) {
+        [[DHLogStore shared] flush];
+    }];
     // 一些 app 加载 dylib 时 UIApplication 已经存在, 直接尝试创建一次, 失败也无所谓.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         dh_ui_install_floating();

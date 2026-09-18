@@ -94,8 +94,15 @@ typedef NS_ENUM(NSInteger, DHCategory) {
 // 当前落盘总字节 = 当前段 + 所有滚动备份段之和 (供 /api/stats 与设置页展示)。
 - (unsigned long long)totalLogBytes;
 
+// 结构化事件日志路径: 每条非噪点事件追加一行 JSON, 重启/重注入后用于把最近事件回载到内存。
+- (NSString *)journalFilePath;
+
+// 立即把文本日志 + 结构化事件日志的缓冲落盘 (进入后台/退出前调用; 线程安全)。
+- (void)flush;
+
 // 事件管线健康指标: pending(已派发未处理条数)、dropped(因积压丢弃条数)、
-// droppedByCategory(按分类丢弃明细)、rss(宿主进程常驻内存字节)、soft/hardLimit。
+// droppedByCategory(按分类丢弃明细)、rss(宿主进程常驻内存字节)、soft/hardLimit、
+// journalBytes(结构化日志大小)、restoredEvents(本次启动回载的事件数)。
 // 用于验证「长时间运行不积累」并让上层看到背压发生在什么时候。
 - (NSDictionary<NSString *, id> *)pipelineStats;
 
