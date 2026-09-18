@@ -49,6 +49,8 @@
 | 1.27.2 | **扩展 WebKit JS 探针 P1.1**：新增 `EventSource`、`console`、localStorage/sessionStorage 和 WebCrypto 元数据观测；相对 URL 统一解析为绝对 URL；simulator 场景覆盖 fetch/XHR/WebSocket/SSE/存储/WebCrypto |
 | 1.27.3 | **新增 `capture_memory` 参数内存快照**：`hook_import` / `hook_method` 可在命中瞬间按寄存器参数抓一段内存（`{ptr_arg, len_arg, max_bytes}`，上限 8KB）写入事件 `input`。解决「缓冲区在函数返回后被释放/复用，事后回读只剩零」的结构性盲区（如 CryptoSwift AES 的 key buffer 经 `mlock` 锁定后立即释放）；仍只改 GOT/IMP 指针，不引入 inline hook 或可执行内存 |
 | 1.27.3 | **修复 TrollStore/TrollFools 注入下的 WebKit 递归崩溃**：宿主 App 若先 swizzle 了 `-[WKWebView loadRequest:]` 等系统方法（bilibili 实测），我们再把该 IMP 当 original 叠加，会形成「我们 → 宿主实现 → `objc_msgSend(_cmd)` → 我们」的无限递归，主线程栈溢出（SIGSEGV KERN_PROTECTION_FAILURE）。现在系统类上的方法若已被非系统镜像占用则跳过该 hook，把行为完整交还宿主；App 自定义类（scheme handler / delegate）不受影响 |
+| 1.27.4 | **事件管线稳定性加固（保守版）**：日志落盘改批量写（64KB / 150ms 上限），队列加背压（soft 1024 只丢系统/文件/其它低价值事件，hard 4096 才丢全部；加解密/网络/Keychain 优先保留并计数），`DHCallStackFiltered` 改为 `backtrace()` + PC 级符号缓存，时间戳改用 `localtime_r`；`/api/stats` 与 `get_stats` 暴露 `pending/dropped/rss`。真机 bilibili 8 分钟导航 soak：pending/dropped 全程 0，RSS 稳定，无崩溃 |
+| 1.27.4 | **修复 WebKit 反递归守卫漏网**：宿主自定义 WKWebView 子类（bilibili `BFCWKWebViewV2`）覆写/二次 swizzle 了 `loadRequest:` 等系统 API 时，仅按类镜像判断会漏掉；现改为 WebKit API 按 selector 强制要求系统 IMP，实测命中 20 条 skip 日志且递归不再发生。同时修正模拟器系统路径识别（`RuntimeRoot/System/Library/...`），模拟器 WebKit 用例 37/37 恢复 |
 
 ## 四、已知结构性边界（不是缺陷，是模型限制）
 
