@@ -13,13 +13,25 @@
 #import <objc/message.h>
 #import <mach-o/dyld.h>
 #import <pthread.h>
+#include <stdatomic.h>
 #import "log_store.h"
 #import "dh_capture.h"
+#import "dh_health.h"
 #import "hook_webkit.h"
 
 #define DH_WK_MAX_BODY (32 * 1024)
 
 static _Thread_local int g_dh_wk_log_depth = 0;
+
+// ---- P1 可选 JS 网络探针 (默认关闭) ----
+static NSString *const kDHWKProbeName = @"__iosdecrypthub_net_probe_v1";
+static const void *kDHWKProbeMarker = &kDHWKProbeMarker;
+static _Atomic int g_dh_wk_probe_enabled = 0;
+static _Atomic int g_dh_wk_probe_redact = 1;
+static NSArray<NSString *> *g_dh_wk_probe_allow = nil;
+static NSArray<NSString *> *g_dh_wk_probe_deny = nil;
+static NSString *g_dh_wk_probe_conf_path = nil;
+static NSRecursiveLock *g_dh_wk_probe_lock = nil;
 
 // ============================================================
 // 数据转换 / 记录
@@ -46,13 +58,13 @@ static NSData *dh_wk_data(id object) {
     return data;
 }
 
-static void dh_wk_log(NSString *operation, NSString *detail, id body) {
+static void dh_wk_log_algo(NSString *algorithm, NSString *operation, NSString *detail, id body) {
     if (g_dh_wk_log_depth || !dh_capture_sub_enabled(DH_CAP_NETWORK)) return;
     g_dh_wk_log_depth++;
     @try {
         DHLogEntry *entry = [DHLogEntry new];
         entry.category = DHCategoryNetwork;
-        entry.algorithm = @"WEBKIT";
+        entry.algorithm = algorithm ?: @"WEBKIT";
         entry.operation = operation ?: @"";
         entry.detail = detail ?: @"";
         entry.input = dh_wk_data(body);
@@ -62,6 +74,90 @@ static void dh_wk_log(NSString *operation, NSString *detail, id body) {
     } @finally {
         g_dh_wk_log_depth--;
     }
+}
+
+static void dh_wk_log(NSString *operation, NSString *detail, id body) {
+    dh_wk_log_algo(@"WEBKIT", operation, detail, body);
+}
+
+static void dh_wk_probe_ensure_lock(void) {
+    if (!g_dh_wk_probe_lock) g_dh_wk_probe_lock = [NSRecursiveLock new];
+}
+
+// 必须在锁内调用。
+static void dh_wk_probe_save_locked(void) {
+    if (!g_dh_wk_probe_conf_path) return;
+    NSDictionary *root = @{
+        @"enabled": atomic_load_explicit(&g_dh_wk_probe_enabled, memory_order_relaxed) != 0 ? @YES : @NO,
+        @"redact":  atomic_load_explicit(&g_dh_wk_probe_redact, memory_order_relaxed) != 0 ? @YES : @NO,
+        @"allow":   g_dh_wk_probe_allow ?: @[],
+        @"deny":    g_dh_wk_probe_deny ?: @[],
+    };
+    NSData *data = [NSJSONSerialization dataWithJSONObject:root
+                                                   options:NSJSONWritingPrettyPrinted
+                                                     error:nil];
+    if (!data) return;
+    int saved = dh_in_hook; dh_in_hook = 1;
+    [data writeToFile:g_dh_wk_probe_conf_path atomically:YES];
+    dh_in_hook = saved;
+}
+
+static void dh_wk_probe_apply_locked(NSDictionary *root) {
+    if (![root isKindOfClass:[NSDictionary class]]) return;
+    if (root[@"enabled"]) atomic_store(&g_dh_wk_probe_enabled, [root[@"enabled"] boolValue] ? 1 : 0);
+    if (root[@"redact"])  atomic_store(&g_dh_wk_probe_redact,  [root[@"redact"] boolValue] ? 1 : 0);
+    if ([root[@"allow"] isKindOfClass:[NSArray class]]) g_dh_wk_probe_allow = [root[@"allow"] copy];
+    if ([root[@"deny"]  isKindOfClass:[NSArray class]]) g_dh_wk_probe_deny  = [root[@"deny"] copy];
+}
+
+void dh_webkit_probe_load(NSString *confPath) {
+    dh_wk_probe_ensure_lock();
+    [g_dh_wk_probe_lock lock];
+    atomic_store(&g_dh_wk_probe_enabled, 0);   // 默认关闭
+    atomic_store(&g_dh_wk_probe_redact, 1);
+    g_dh_wk_probe_allow = @[];
+    g_dh_wk_probe_deny  = @[];
+    g_dh_wk_probe_conf_path = [confPath copy];
+    if (g_dh_wk_probe_conf_path) {
+        int saved = dh_in_hook; dh_in_hook = 1;
+        NSData *data = [NSData dataWithContentsOfFile:g_dh_wk_probe_conf_path];
+        dh_in_hook = saved;
+        if (data.length) {
+            NSDictionary *root = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            dh_wk_probe_apply_locked(root);
+        }
+    }
+    // 仅供自动化测试/临时诊断使用: 环境变量优先于持久化配置。
+    const char *env = getenv("DH_WEBKIT_PROBE");
+    if (env && *env) atomic_store(&g_dh_wk_probe_enabled, (strcmp(env, "0") != 0) ? 1 : 0);
+    [g_dh_wk_probe_lock unlock];
+}
+
+BOOL dh_webkit_probe_enabled(void) {
+    return atomic_load_explicit(&g_dh_wk_probe_enabled, memory_order_relaxed) != 0;
+}
+
+NSDictionary *dh_webkit_probe_snapshot(void) {
+    dh_wk_probe_ensure_lock();
+    [g_dh_wk_probe_lock lock];
+    NSDictionary *out = @{
+        @"enabled": dh_webkit_probe_enabled() ? @YES : @NO,
+        @"redact":  atomic_load_explicit(&g_dh_wk_probe_redact, memory_order_relaxed) != 0 ? @YES : @NO,
+        @"allow":   g_dh_wk_probe_allow ?: @[],
+        @"deny":    g_dh_wk_probe_deny ?: @[],
+        @"note":    @"JS 网络探针仅对新创建的 WKWebView 生效；修改配置后需重新加载页面/重建 WebView。",
+    };
+    [g_dh_wk_probe_lock unlock];
+    return out;
+}
+
+void dh_webkit_probe_set_config(NSDictionary *changes) {
+    if (![changes isKindOfClass:[NSDictionary class]]) return;
+    dh_wk_probe_ensure_lock();
+    [g_dh_wk_probe_lock lock];
+    dh_wk_probe_apply_locked(changes);
+    dh_wk_probe_save_locked();
+    [g_dh_wk_probe_lock unlock];
 }
 
 static NSString *dh_wk_url_of(id object) {
@@ -101,6 +197,158 @@ static NSDictionary *dh_wk_cookie_dict(id cookie) {
         } @catch (__unused NSException *e) {}
     }
     return dict;
+}
+
+// ============================================================
+// P1 可选 JS 网络探针
+// ============================================================
+
+static BOOL dh_wk_probe_host_matches(NSString *host, NSArray<NSString *> *patterns) {
+    if (!host.length || !patterns.count) return NO;
+    host = [host lowercaseString];
+    for (NSString *raw in patterns) {
+        NSString *pattern = [[raw stringByTrimmingCharactersInSet:
+                              [NSCharacterSet whitespaceAndNewlineCharacterSet]] lowercaseString];
+        if (!pattern.length) continue;
+        if ([host isEqualToString:pattern] ||
+            [host hasSuffix:[@"." stringByAppendingString:pattern]]) return YES;
+    }
+    return NO;
+}
+
+static BOOL dh_wk_probe_should_report(NSString *urlString) {
+    if (!urlString.length) return YES;
+    dh_wk_probe_ensure_lock();
+    [g_dh_wk_probe_lock lock];
+    NSArray *allow = [g_dh_wk_probe_allow copy];
+    NSArray *deny = [g_dh_wk_probe_deny copy];
+    [g_dh_wk_probe_lock unlock];
+    NSString *host = nil;
+    @try { host = [NSURL URLWithString:urlString].host; }
+    @catch (__unused NSException *e) {}
+    if (dh_wk_probe_host_matches(host, deny)) return NO;
+    if (allow.count) return dh_wk_probe_host_matches(host, allow);
+    return YES;
+}
+
+static BOOL dh_wk_probe_is_sensitive_header(NSString *key) {
+    NSString *k = [key lowercaseString];
+    NSArray<NSString *> *needles = @[@"cookie", @"authorization", @"token", @"sign",
+                                     @"password", @"secret", @"x-token", @"x-sign"];
+    for (NSString *n in needles) if ([k containsString:n]) return YES;
+    return NO;
+}
+
+static NSDictionary *dh_wk_probe_sanitize(NSDictionary *payload) {
+    if (!payload || atomic_load_explicit(&g_dh_wk_probe_redact, memory_order_relaxed) == 0)
+        return payload;
+    NSMutableDictionary *out = [payload mutableCopy];
+    for (NSString *field in @[@"headers", @"responseHeaders"]) {
+        NSDictionary *headers = payload[field];
+        if (![headers isKindOfClass:[NSDictionary class]]) continue;
+        NSMutableDictionary *safe = [headers mutableCopy];
+        for (NSString *key in headers) {
+            if ([key isKindOfClass:[NSString class]] && dh_wk_probe_is_sensitive_header(key))
+                safe[key] = @"<redacted>";
+        }
+        out[field] = safe;
+    }
+    return out;
+}
+
+@interface DHWKProbeBridge : NSObject
++ (instancetype)shared;
+@end
+
+@implementation DHWKProbeBridge
++ (instancetype)shared {
+    static DHWKProbeBridge *bridge = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ bridge = [DHWKProbeBridge new]; });
+    return bridge;
+}
+
+- (void)userContentController:(id)userContentController
+      didReceiveScriptMessage:(id)message {
+    (void)userContentController;
+    NSString *name = nil;
+    NSDictionary *body = nil;
+    @try {
+        name = [message valueForKey:@"name"];
+        id payload = [message valueForKey:@"body"];
+        if ([payload isKindOfClass:[NSDictionary class]]) body = payload;
+    } @catch (__unused NSException *e) {}
+    if (![name isEqualToString:kDHWKProbeName] || !body) return;
+
+    NSString *url = [body[@"url"] isKindOfClass:[NSString class]] ? body[@"url"] : nil;
+    if (!dh_wk_probe_should_report(url)) return;
+    NSString *kind = [body[@"kind"] isKindOfClass:[NSString class]] ? body[@"kind"] : @"unknown";
+    dh_wk_log_algo(@"WEBKIT-PROBE", kind, kind, dh_wk_probe_sanitize(body));
+}
+@end
+
+static _Thread_local int g_dh_wk_probe_installing = 0;
+
+static NSString *dh_wk_probe_js(void) {
+    NSArray *allow = nil, *deny = nil;
+    dh_wk_probe_ensure_lock();
+    [g_dh_wk_probe_lock lock];
+    allow = [g_dh_wk_probe_allow copy] ?: @[];
+    deny  = [g_dh_wk_probe_deny copy] ?: @[];
+    [g_dh_wk_probe_lock unlock];
+    NSData *allowData = [NSJSONSerialization dataWithJSONObject:allow options:0 error:nil];
+    NSData *denyData = [NSJSONSerialization dataWithJSONObject:deny options:0 error:nil];
+    NSData *nameData = [NSJSONSerialization dataWithJSONObject:@[kDHWKProbeName] options:0 error:nil];
+    NSString *allowJSON = allowData ? [[NSString alloc] initWithData:allowData encoding:NSUTF8StringEncoding] : @"[]";
+    NSString *denyJSON = denyData ? [[NSString alloc] initWithData:denyData encoding:NSUTF8StringEncoding] : @"[]";
+    NSString *nameJSON = nameData ? [[NSString alloc] initWithData:nameData encoding:NSUTF8StringEncoding] : @"[\"probe\"]";
+    if (nameJSON.length >= 2) nameJSON = [nameJSON substringWithRange:NSMakeRange(1, nameJSON.length - 2)];
+
+    static const char *body =
+        "function clip(v,n){try{if(v==null)return null;if(typeof v==='string')return v.length>n?v.slice(0,n)+'...':v;if(typeof v==='object')return JSON.stringify(v).slice(0,n);return String(v).slice(0,n);}catch(e){return null;}}\n"
+        "function hdrs(h){var o={};try{if(!h)return o;if(h.forEach)h.forEach(function(v,k){o[k]=String(v);});else for(var k in h)o[k]=String(h[k]);}catch(e){}return o;}\n"
+        "function shouldReport(u){try{var h=new URL(u,location.href).hostname.toLowerCase();var i;if(DENY.length)for(i=0;i<DENY.length;i++){var d=String(DENY[i]).toLowerCase();if(h===d||h.slice(-(d.length+1))==='.'+d)return false;}if(ALLOW.length){for(i=0;i<ALLOW.length;i++){var a=String(ALLOW[i]).toLowerCase();if(h===a||h.slice(-(a.length+1))==='.'+a)return true;}return false;}return true;}catch(e){return true;}}\n"
+        "function report(kind,data){try{data=Object.assign({kind:kind,ts:Date.now()},data||{});if(data.url)data.url=new URL(data.url,location.href).href;if(!shouldReport(data.url))return;window.webkit.messageHandlers[NAME].postMessage(data);}catch(e){}}\n"
+        "var MAX=8192;\n"
+        "var of=window.fetch;if(of)window.fetch=function(input,init){var url=(typeof input==='string')?input:(input&&input.url)||'';var method=(init&&init.method)||(input&&input.method)||'GET';var hs={};try{if(input&&input.headers)hs=hdrs(input.headers);if(init&&init.headers){var ih=hdrs(init.headers);for(var k in ih)hs[k]=ih[k];}}catch(e){}var body=(init&&init.body);if(body!=null&&typeof body!=='string')try{body=String(body);}catch(e){body=null;}report('fetch.request',{url:url,method:method,headers:hs,body:clip(body,MAX)});return of.apply(this,arguments).then(function(r){try{var rh=hdrs(r.headers);if(r.clone)r.clone().text().then(function(t){report('fetch.response',{url:r.url||url,status:r.status,headers:rh,body:clip(t,MAX)});});else report('fetch.response',{url:r.url||url,status:r.status,headers:rh});}catch(e){}return r;});};\n"
+        "var oo=XMLHttpRequest.prototype.open,os=XMLHttpRequest.prototype.send,oh=XMLHttpRequest.prototype.setRequestHeader;\n"
+        "XMLHttpRequest.prototype.open=function(m,u){this.__dh={method:m,url:u,headers:{}};return oo.apply(this,arguments);};\n"
+        "XMLHttpRequest.prototype.setRequestHeader=function(k,v){try{if(this.__dh)this.__dh.headers[k]=v;}catch(e){}return oh.apply(this,arguments);};\n"
+        "XMLHttpRequest.prototype.send=function(b){var x=this;try{var d=x.__dh||{};report('xhr.request',{url:d.url,method:d.method||'GET',headers:d.headers||{},body:clip(typeof b==='string'?b:null,MAX)});x.addEventListener('load',function(){try{var rt=(x.responseType===''||x.responseType==='text')?x.responseText:null;var hs={};var raw=x.getAllResponseHeaders()||'';raw.split(/\\r?\\n/).forEach(function(l){var i=l.indexOf(':');if(i>0)hs[l.slice(0,i).trim()]=l.slice(i+1).trim();});report('xhr.response',{url:d.url,status:x.status,headers:hs,body:clip(rt,MAX)});}catch(e){}});}catch(e){}return os.apply(this,arguments);};\n"
+        "var OW=window.WebSocket;if(OW){var DW=function(u,p){var w=p===undefined?new OW(u):new OW(u,p);try{report('websocket.open',{url:String(u)});w.addEventListener('message',function(e){try{report('websocket.recv',{url:String(u),data:clip(typeof e.data==='string'?e.data:'[binary]',MAX)});}catch(x){}});var s=w.send;w.send=function(d){try{report('websocket.send',{url:String(u),data:clip(typeof d==='string'?d:'[binary]',MAX)});}catch(x){}return s.apply(w,arguments);};}catch(e){}return w;};DW.prototype=OW.prototype;['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k){try{DW[k]=OW[k];}catch(e){}});window.WebSocket=DW;}\n"
+        "if(navigator.sendBeacon){var ob=navigator.sendBeacon;navigator.sendBeacon=function(u,d){try{report('beacon',{url:String(u),body:clip(typeof d==='string'?d:null,MAX)});}catch(e){}return ob.apply(navigator,arguments);};}\n";
+    return [NSString stringWithFormat:@"(function(){var ALLOW=%@;var DENY=%@;var NAME=%@;%s})();",
+            allowJSON, denyJSON, nameJSON, body];
+}
+
+static void dh_wk_probe_install_configuration(id configuration) {
+    if (!configuration || !dh_webkit_probe_enabled()) return;
+    id controller = nil;
+    @try { controller = [configuration valueForKey:@"userContentController"]; }
+    @catch (__unused NSException *e) {}
+    if (!controller || objc_getAssociatedObject(controller, kDHWKProbeMarker)) return;
+
+    Protocol *proto = objc_getProtocol("WKScriptMessageHandler");
+    if (proto) class_addProtocol([DHWKProbeBridge class], proto);
+    g_dh_wk_probe_installing++;
+    @try {
+        SEL addHandler = @selector(addScriptMessageHandler:name:);
+        if ([controller respondsToSelector:addHandler])
+            ((void (*)(id, SEL, id, id))objc_msgSend)(controller, addHandler,
+                                                      [DHWKProbeBridge shared], kDHWKProbeName);
+        Class scriptClass = NSClassFromString(@"WKUserScript");
+        SEL initScript = @selector(initWithSource:injectionTime:forMainFrameOnly:);
+        if (scriptClass && [scriptClass instancesRespondToSelector:initScript]) {
+            id script = ((id (*)(id, SEL, id, NSInteger, BOOL))objc_msgSend)(
+                [scriptClass alloc], initScript, dh_wk_probe_js(), (NSInteger)0, NO);
+            SEL addScript = @selector(addUserScript:);
+            if (script && [controller respondsToSelector:addScript])
+                ((void (*)(id, SEL, id))objc_msgSend)(controller, addScript, script);
+        }
+        objc_setAssociatedObject(controller, kDHWKProbeMarker, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } @finally {
+        g_dh_wk_probe_installing--;
+    }
 }
 
 // ============================================================
@@ -364,6 +612,11 @@ static void swz_wk_scriptMessage(id self, SEL _cmd, id userContentController, id
 
 static void (*orig_wk_addScriptHandler)(id, SEL, id, id) = NULL;
 static void swz_wk_addScriptHandler(id self, SEL _cmd, id handler, id name) {
+    if (g_dh_wk_probe_installing ||
+        [NSStringFromClass([handler class]) isEqualToString:@"DHWKProbeBridge"]) {
+        if (orig_wk_addScriptHandler) orig_wk_addScriptHandler(self, _cmd, handler, name);
+        return;
+    }
     dh_wk_log(@"jsBridge", [NSString stringWithFormat:@"addScriptMessageHandler name=%@ class=%@",
                             name ?: @"(nil)", NSStringFromClass([handler class]) ?: @"(nil)"], nil);
     if (handler)
@@ -375,6 +628,11 @@ static void swz_wk_addScriptHandler(id self, SEL _cmd, id handler, id name) {
 
 static void (*orig_wk_addScriptHandlerWorld)(id, SEL, id, id, id) = NULL;
 static void swz_wk_addScriptHandlerWorld(id self, SEL _cmd, id handler, id world, id name) {
+    if (g_dh_wk_probe_installing ||
+        [NSStringFromClass([handler class]) isEqualToString:@"DHWKProbeBridge"]) {
+        if (orig_wk_addScriptHandlerWorld) orig_wk_addScriptHandlerWorld(self, _cmd, handler, world, name);
+        return;
+    }
     dh_wk_log(@"jsBridge", [NSString stringWithFormat:@"addScriptMessageHandler(contentWorld) name=%@ class=%@",
                             name ?: @"(nil)", NSStringFromClass([handler class]) ?: @"(nil)"], nil);
     if (handler)
@@ -386,6 +644,10 @@ static void swz_wk_addScriptHandlerWorld(id self, SEL _cmd, id handler, id world
 
 static void (*orig_wk_addUserScript)(id, SEL, id) = NULL;
 static void swz_wk_addUserScript(id self, SEL _cmd, id userScript) {
+    if (g_dh_wk_probe_installing) {
+        if (orig_wk_addUserScript) orig_wk_addUserScript(self, _cmd, userScript);
+        return;
+    }
     NSString *source = nil;
     NSNumber *injectionTime = nil;
     NSNumber *mainFrameOnly = nil;
@@ -573,6 +835,7 @@ static id swz_wk_initWithFrameConfiguration(id self, SEL _cmd, CGRect frame, id 
                 if (cookieStore) dh_wk_install_cookie_methods(object_getClass(cookieStore));
             }
         } @catch (__unused NSException *e) {}
+        dh_wk_probe_install_configuration(configuration);
     }
     return result;
 }

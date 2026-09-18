@@ -788,8 +788,15 @@ static NSString *chk_device_info(void) {
     NSString *html =
         @"<html><head><title>DH_WK_TITLE</title></head><body>DH_WK_BODY"
          "<script>window.webkit.messageHandlers.dh.postMessage("
-         "{fixture:'DH_WK_MSG_001',href:location.href});</script></body></html>";
-    [wk loadHTMLString:html baseURL:[NSURL URLWithString:@"https://dh.test/"]];
+         "{fixture:'DH_WK_MSG_001',href:location.href});"
+         "fetch('/echo?case=webkit-fetch').then(function(r){return r.text();});"
+         "var xhr=new XMLHttpRequest();xhr.open('POST','/echo?case=webkit-xhr');"
+         "xhr.setRequestHeader('X-WK-Fixture','DH_WK_XHR_001');xhr.send('DH_WK_XHR_BODY_001');"
+         "var ws=new WebSocket('ws://127.0.0.1:8099/ws');"
+         "ws.onopen=function(){ws.send('DH_WK_WS_001');};"
+         "if(navigator.sendBeacon)navigator.sendBeacon('/echo?case=webkit-beacon','DH_WK_BEACON_001');"
+         "</script></body></html>";
+    [wk loadHTMLString:html baseURL:[NSURL URLWithString:@"http://127.0.0.1:8099/"]];
     [wk evaluateJavaScript:@"document.title" completionHandler:^(id result, NSError *error) {
         NSLog(@"[webkit] eval title result=%@ error=%@", result, error);
     }];

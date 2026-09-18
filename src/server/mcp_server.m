@@ -23,6 +23,7 @@
 #include "dh_spoof.h"
 #include "dh_files.h"
 #include "dump_manager.h"
+#include "hook_webkit.h"
 #include <string.h>
 
 #define MCP_SERVER_NAME     "ios-decrypt-helper"
@@ -2383,6 +2384,24 @@ static NSArray *tool_definitions(void) {
             @"description": @"抓包/加密覆盖自检: 逐层检查本进程导入表, 报告哪些 hook 层真正可用(NSURLSession / OpenSSL TLS / Apple SecureTransport / BSD socket / Network.framework / Security RSA / OpenSSL RSA / CommonCrypto), 并列出 blind_spots —— 那些『未被本 App 使用或已静态链接』因而抓不到的层。用于回答「为什么抓不到这个请求/这段加密」。",
             @"inputSchema": @{@"type": @"object", @"properties": @{}},
         },
+        @{
+            @"name": @"get_webkit_probe",
+            @"description": @"Get the optional WKWebView JS network probe config. Default disabled. When enabled, newly created WKWebViews get a document-start script that reports fetch/XHR/WebSocket/sendBeacon to the host event feed as algorithm WEBKIT-PROBE.",
+            @"inputSchema": @{@"type": @"object", @"properties": @{}},
+        },
+        @{
+            @"name": @"set_webkit_probe",
+            @"description": @"Configure the optional WKWebView JS network probe. Changes affect newly created WKWebViews; reload the page or recreate the WebView. Domain allow/deny entries match hostname or subdomains. redact=true replaces Cookie/Authorization/token-like header values.",
+            @"inputSchema": @{
+                @"type": @"object",
+                @"properties": @{
+                    @"enabled": @{@"type": @"boolean", @"description": @"Enable document-start JS probe"},
+                    @"redact":  @{@"type": @"boolean", @"description": @"Redact sensitive header values (default true)"},
+                    @"allow":   @{@"type": @"array", @"items": @{@"type": @"string"}, @"description": @"Optional allowlist of hostnames; empty means all"},
+                    @"deny":    @{@"type": @"array", @"items": @{@"type": @"string"}, @"description": @"Optional denylist of hostnames"},
+                },
+            },
+        },
         // ===== 动态 hook (一期: record-only) — 能力见 get_capabilities.capabilities =====
         @{
             @"name": @"hook_import",
@@ -2503,6 +2522,30 @@ static NSDictionary *tool_get_capture_coverage(NSDictionary *args) {
     });
 }
 
+static NSDictionary *tool_get_webkit_probe(NSDictionary *args) {
+    (void)args;
+    return tool_ok(dh_webkit_probe_snapshot());
+}
+
+static NSDictionary *tool_set_webkit_probe(NSDictionary *args) {
+    if (![args isKindOfClass:[NSDictionary class]]) return tool_err(@"missing arguments");
+    NSMutableDictionary *changes = [NSMutableDictionary dictionary];
+    if (args[@"enabled"] != nil) changes[@"enabled"] = [args[@"enabled"] boolValue] ? @YES : @NO;
+    if (args[@"redact"] != nil)  changes[@"redact"]  = [args[@"redact"] boolValue] ? @YES : @NO;
+    for (NSString *field in @[@"allow", @"deny"]) {
+        id value = args[field];
+        if (![value isKindOfClass:[NSArray class]]) continue;
+        NSMutableArray<NSString *> *items = [NSMutableArray array];
+        for (id item in value)
+            if ([item isKindOfClass:[NSString class]] && [item length])
+                [items addObject:item];
+        changes[field] = items;
+    }
+    if (!changes.count) return tool_err(@"missing one of: enabled, redact, allow, deny");
+    dh_webkit_probe_set_config(changes);
+    return tool_ok(dh_webkit_probe_snapshot());
+}
+
 static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"get_capabilities"])      return tool_get_capabilities(args);
     if ([name isEqualToString:@"disassemble"])           return tool_disassemble(args);
@@ -2548,6 +2591,8 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"set_config"])            return tool_set_config(args);
     if ([name isEqualToString:@"get_diag"])              return tool_get_diag(args);
     if ([name isEqualToString:@"get_capture_coverage"])  return tool_get_capture_coverage(args);
+    if ([name isEqualToString:@"get_webkit_probe"])      return tool_get_webkit_probe(args);
+    if ([name isEqualToString:@"set_webkit_probe"])      return tool_set_webkit_probe(args);
     // 动态 hook (一期: record-only)
     if ([name isEqualToString:@"hook_import"])           return tool_hook_import(args);
     if ([name isEqualToString:@"hook_method"])           return tool_hook_method(args);

@@ -3,7 +3,8 @@
 > 目标：把 IDH 的观测面从原生网络栈扩展到 WKWebView，同时保持 fishhook + ObjC swizzle
 > 的边界，不把 WebKit 分析做成某个 App 的地址/类名特判。
 >
-> 当前状态：P0 已在 `1.27.0` 实现并通过 iOS Simulator 20/20 场景验证；P1/P2 仍为规划。
+> 当前状态：P0 已在 `1.27.0` 实现，P1 已在 `1.27.1` 实现；两者均通过 iOS Simulator
+> 31/31 场景验证。P2 仍为规划。
 
 ## 一、先分清三个进程边界
 
@@ -39,7 +40,7 @@ WKWebView 不是一个单纯运行在宿主 App 进程里的控件：
 交付价值：能回答“这个 App 加载了哪些页面、注入了哪些 JS、JS 调了哪些 native 消息、
 用了哪些 cookie/存储、有没有开启 inspectable”，但不承诺看到 WebKit 内部的完整网络报文。
 
-### B. 可选 JavaScript 网络探针（P1，宿主 App 侧，主动注入）
+### B. 可选 JavaScript 网络探针（P1，宿主 App 侧，主动注入，已实现）
 
 在 `documentStart` 注入一个 `WKUserScript`，包装页面可见的网络与存储 API：
 
@@ -58,6 +59,11 @@ WKWebView 不是一个单纯运行在宿主 App 进程里的控件：
 - 这是主动改写页面环境，必须显式开启，不能默认注入。
 - 需要域白名单/黑名单、请求体大小上限、Cookie/Authorization 脱敏策略。
 - 页面可能检测到 `fetch`/`XMLHttpRequest` 被包装，因此不能把它宣称为透明观测。
+
+实现开关：MCP `get_webkit_probe` / `set_webkit_probe`。默认关闭；`allow` / `deny`
+按 hostname 或子域名匹配；`redact=true` 时 Cookie、Authorization、token/sign 一类 Header
+值替换为 `<redacted>`。探针只注入到新建的 `WKWebView`，修改配置后需要重新加载页面或重建
+WebView。
 
 ### C. Web Inspector / WebContent / Networking 进程（P2，高保真 / 高复杂度）
 

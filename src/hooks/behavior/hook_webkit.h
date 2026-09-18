@@ -11,6 +11,12 @@ extern "C" {
 // 只使用 ObjC runtime swizzle，不进入 WebContent/Networking 进程。
 void dh_install_webkit_hooks(void);
 
+// P1 可选 JS 网络探针配置 (默认关闭)。confPath = Documents/.dh_webkit_probe.conf。
+void dh_webkit_probe_load(NSString *confPath);
+NSDictionary *dh_webkit_probe_snapshot(void);
+void dh_webkit_probe_set_config(NSDictionary *changes);
+BOOL dh_webkit_probe_enabled(void);
+
 #ifdef __cplusplus
 }
 #endif

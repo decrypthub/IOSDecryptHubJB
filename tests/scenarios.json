@@ -69,7 +69,7 @@
       "id": "baseline.webkit",
       "platforms": ["sim"],
       "trigger": "webkit",
-      "expected_events": ["WEBKIT"],
+      "expected_events": ["WEBKIT", "WEBKIT-PROBE"],
       "timeout_ms": 10000
     }
   ]

@@ -44,6 +44,7 @@
 | 1.26.3 | **修复** `describe_args` 在 arm64e/Apple Silicon 上失效并可能段错误：isa 是 PAC 签名 + 低位标志，改为「多候选剥离 → 必须命中运行时类表」的双层校验，裸缓冲/出参指针(NSError**)一律跳过；**新增** import hook 的 C 字符串反引用（getaddrinfo 域名 / dlopen 路径） |
 | 1.26.4 | **通用化网络补面**：BSD socket 全家族（`socket/accept/close/send/sendto/sendmsg/recv/recvfrom/recvmsg/read/write`）+ fd 生命周期跟踪；Network.framework 明文 `send/receive`；`NSURLSessionWebSocketTask` 发送/接收/心跳帧；所有新增 payload 限长 8KB，并排除 dylib 自身 HTTP 服务 fd，避免污染业务证据 |
 | 1.27.0 | **新增 WebKit 宿主侧观测 P0**：`WKWebView` 导航与 `evaluateJavaScript`、`WKUserContentController` / `WKScriptMessage` bridge、`WKHTTPCookieStore` 与 `WKWebsiteDataStore`、`WKURLSchemeHandler`、`WKWebView.inspectable`；只走 ObjC swizzle，WebKit 晚加载时自动安装，TrollStore / Jailbreak 共用 |
+| 1.27.1 | **新增 WebKit JS 网络探针 P1（默认关闭）**：`set_webkit_probe` 可开启 document-start JS 探针，记录 `fetch` / `XMLHttpRequest` / `WebSocket` / `sendBeacon` 的 URL、Header、请求/响应体（默认 8KB 截断）；支持域名 allow/deny 和敏感 Header 默认脱敏；仅对新创建的 WKWebView 生效 |
 
 ## 四、已知结构性边界（不是缺陷，是模型限制）
 

@@ -99,7 +99,8 @@ mc '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' > "$RESULT_DIR/tools.json"
 eq "$(jq -r '[.result.tools[].name] as $names |
     ["get_capabilities","disassemble","objc_resolve_imp","find_objc_methods","list_loaded_images","find_xrefs","find_string_refs",
      "find_selector_refs","find_function_refs","list_functions","get_stats","query_events",
-     "correlate_request","get_event","export_events","get_diag","get_capture_coverage","hook_import","hook_method","unhook"] |
+     "correlate_request","get_event","export_events","get_diag","get_capture_coverage",
+     "get_webkit_probe","set_webkit_probe","hook_import","hook_method","unhook"] |
     all(. as $name | $names | index($name) != null)' "$RESULT_DIR/tools.json")" \
     "true" "tools/list 包含关键兼容工具集合"
 mc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"fd7bbfa9","arch":"arm64"}}}' > "$RESULT_DIR/dh_disasm_stp.json"
@@ -397,6 +398,15 @@ mc '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"get_capture
 eq "$(jq -r '.result.structuredContent.layers|type' "$RESULT_DIR/coverage.json")" "array" "覆盖自检返回 layers 数组"
 eq "$(jq -r '.result.structuredContent.blind_spots|type' "$RESULT_DIR/coverage.json")" "array" "覆盖自检返回 blind_spots 数组"
 eq "$(jq -r '[.result.structuredContent.layers[].layer]|index("NSURLSession (ObjC)")!=null' "$RESULT_DIR/coverage.json")" "true" "覆盖自检包含 NSURLSession 层"
+mc '{"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"get_webkit_probe","arguments":{}}}' > "$RESULT_DIR/webkit_probe_get.json"
+eq "$(jq -r '.result.structuredContent.enabled' "$RESULT_DIR/webkit_probe_get.json")" "false" "WebKit JS 探针默认关闭"
+mc '{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"set_webkit_probe","arguments":{"enabled":true,"redact":true,"allow":["example.com"]}}}' > "$RESULT_DIR/webkit_probe_set.json"
+eq "$(jq -r '.result.structuredContent.enabled' "$RESULT_DIR/webkit_probe_set.json")" "true" "WebKit JS 探针可开启"
+eq "$(jq -r '.result.structuredContent.allow[0]' "$RESULT_DIR/webkit_probe_set.json")" "example.com" "WebKit JS 探针 allowlist 生效"
+mc '{"jsonrpc":"2.0","id":72,"method":"tools/call","params":{"name":"set_webkit_probe","arguments":{"redact":false,"deny":["127.0.0.1"]}}}' > "$RESULT_DIR/webkit_probe_filter.json"
+eq "$(jq -r '.result.structuredContent.redact' "$RESULT_DIR/webkit_probe_filter.json")" "false" "WebKit JS 探针 redact 可关闭"
+eq "$(jq -r '.result.structuredContent.deny[0]' "$RESULT_DIR/webkit_probe_filter.json")" "127.0.0.1" "WebKit JS 探针 denylist 生效"
+mc '{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"name":"set_webkit_probe","arguments":{"enabled":false,"redact":true,"allow":[],"deny":[]}}}' >/dev/null
 mc '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"get_diag","arguments":{"board":"sys"}}}' > "$RESULT_DIR/diag_sys.json"
 eq "$(jq -r '.result.structuredContent.diag|test("heavy tool")' "$RESULT_DIR/diag_sys.json")" "true" "get_diag(sys) 含重活审计(崩溃可归因)"
 

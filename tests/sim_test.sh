@@ -14,13 +14,20 @@ BUNDLE_ID="com.taisuii.cryptotesthost"
 DEVICE="${DH_SIM_DEVICE:-booted}"
 PASS=0
 FAIL=0
+ECHO_PID=""
 
 ok(){ printf '  [PASS] %s\n' "$1"; PASS=$((PASS + 1)); }
 ng(){ printf '  [FAIL] %s\n' "$1"; FAIL=$((FAIL + 1)); }
 eq(){ if [[ "$1" = "$2" ]]; then ok "$3"; else ng "$3 (期望=$2 实得=$1)"; fi; }
 ge(){ if [[ "${1:-x}" -ge "$2" ]] 2>/dev/null; then ok "$3"; else ng "$3 (期望>=$2 实得=${1:-空})"; fi; }
 
-cleanup(){ xcrun simctl terminate "$DEVICE" "$BUNDLE_ID" >/dev/null 2>&1 || true; }
+cleanup(){
+    xcrun simctl terminate "$DEVICE" "$BUNDLE_ID" >/dev/null 2>&1 || true
+    if [[ -n "$ECHO_PID" ]]; then
+        kill "$ECHO_PID" >/dev/null 2>&1 || true
+        wait "$ECHO_PID" 2>/dev/null || true
+    fi
+}
 finalize(){
     local exit_code="$1"
     trap - EXIT
@@ -43,8 +50,16 @@ echo "[build] 编译并安装模拟器测试 App"
 }
 
 cleanup
+echo "[echo] 启动本地 HTTP/WebSocket 回显服务"
+python3 tests/net_echo_server.py --port 8099 --ws >"$RESULT_DIR/echo.log" 2>&1 &
+ECHO_PID=$!
+for _ in $(seq 1 50); do
+    curl -sf --max-time 1 http://127.0.0.1:8099/echo >/dev/null 2>&1 && break
+    sleep 0.1
+done
 echo "[launch] 使用 DH_AUTOTEST=1 启动 $BUNDLE_ID"
-SIMCTL_CHILD_DH_AUTOTEST=1 xcrun simctl launch "$DEVICE" "$BUNDLE_ID" >"$RESULT_DIR/launch.log" 2>&1 || exit 1
+SIMCTL_CHILD_DH_AUTOTEST=1 SIMCTL_CHILD_DH_WEBKIT_PROBE=1 \
+    xcrun simctl launch "$DEVICE" "$BUNDLE_ID" >"$RESULT_DIR/launch.log" 2>&1 || exit 1
 
 PORT=$(dh_find_http_for_bundle "$BUNDLE_ID" 30) || {
     echo "未找到 $BUNDLE_ID 的 HTTP 服务"
@@ -101,6 +116,30 @@ for op in navigate evaluateJavaScript jsBridge message cookie.set cookie.get sch
     eq "$(jq -r --arg op "$op" '[.result.structuredContent.events[] | select(.algorithm=="WEBKIT" and .operation==$op)] | length > 0' "$RESULT_DIR/webkit-events.json")" \
         "true" "WebKit 事件包含 $op"
 done
+
+echo "[webkit-probe] 轮询 JS 网络探针事件"
+probe_ready=0
+for ((i = 0; i < 100; i++)); do
+    mc '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"net","query":"WEBKIT-PROBE","limit":100}}}' \
+        > "$RESULT_DIR/webkit-probe-events.json" || true
+    if jq -e '[.result.structuredContent.events[] | select(.algorithm=="WEBKIT-PROBE") | .operation] as $ops |
+        ["fetch.request","fetch.response","xhr.request","xhr.response","websocket.open",
+         "websocket.send","websocket.recv","beacon"] |
+        all(. as $op | $ops | index($op) != null)' "$RESULT_DIR/webkit-probe-events.json" >/dev/null 2>&1; then
+        probe_ready=1
+        break
+    fi
+    sleep 0.2
+done
+eq "$probe_ready" "1" "WebKit JS 网络探针事件已产生"
+for op in fetch.request fetch.response xhr.request xhr.response websocket.open websocket.send websocket.recv beacon; do
+    eq "$(jq -r --arg op "$op" '[.result.structuredContent.events[] | select(.algorithm=="WEBKIT-PROBE" and .operation==$op)] | length > 0' "$RESULT_DIR/webkit-probe-events.json")" \
+        "true" "WebKit JS 探针包含 $op"
+done
+eq "$(jq -r '[.result.structuredContent.events[] | select(.algorithm=="WEBKIT-PROBE" and ((.preview // "") | contains("DH_WK_XHR_BODY_001")))] | length > 0' "$RESULT_DIR/webkit-probe-events.json")" \
+    "true" "XHR 请求体进入探针事件"
+eq "$(jq -r '[.result.structuredContent.events[] | select(.algorithm=="WEBKIT-PROBE" and ((.preview // "") | contains("DH_WK_WS_001")))] | length > 0' "$RESULT_DIR/webkit-probe-events.json")" \
+    "true" "WebSocket 帧进入探针事件"
 
 mc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_diag","arguments":{}}}' \
     > "$RESULT_DIR/diagnostics.json"
