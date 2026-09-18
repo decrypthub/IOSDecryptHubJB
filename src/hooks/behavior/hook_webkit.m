@@ -410,7 +410,11 @@ static IMP dh_wk_original_imp(id receiver, SEL sel) {
 // 系统框架/库都在 dyld 共享缓存路径下；宿主 App、第三方 framework、越狱插件分别
 // 落在 /var/containers、/var/jb、/usr/lib/TweakInject 等路径，据此区分。
 static BOOL dh_wk_path_is_system(NSString *path) {
-    return [path hasPrefix:@"/System/Library/"] || [path hasPrefix:@"/usr/lib/"];
+    if (!path.length) return NO;
+    // 真机系统路径: /System/Library/...、/usr/lib/...
+    // 模拟器系统路径: <Xcode>/.../RuntimeRoot/System/Library/...，所以用「包含」而不是前缀。
+    return [path rangeOfString:@"/System/Library/"].location != NSNotFound ||
+           [path rangeOfString:@"/usr/lib/"].location != NSNotFound;
 }
 
 static BOOL dh_wk_class_is_system(Class cls) {
@@ -425,6 +429,37 @@ static BOOL dh_wk_imp_is_system(IMP imp) {
     if (!imp || dladdr((const void *)imp, &info) == 0 || !info.dli_fname) return NO;
     NSString *path = [NSString stringWithUTF8String:info.dli_fname];
     return path ? dh_wk_path_is_system(path) : NO;
+}
+
+// 这些是 WebKit 自己实现的 API。即使宿主用自定义 WKWebView 子类覆写/二次 swizzle，
+// 只要当前 IMP 不是系统实现，就绝不能再叠加 —— 否则会形成
+// 「我们 → 宿主实现 → objc_msgSend(_cmd) → 我们」的无限递归。
+static BOOL dh_wk_selector_requires_system_imp(SEL sel) {
+    SEL apis[] = {
+        @selector(loadRequest:),
+        @selector(loadHTMLString:baseURL:),
+        @selector(loadFileURL:allowingReadAccessToURL:),
+        @selector(loadData:MIMEType:characterEncodingName:baseURL:),
+        @selector(evaluateJavaScript:completionHandler:),
+        @selector(evaluateJavaScript:inFrame:inContentWorld:completionHandler:),
+        @selector(callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:),
+        @selector(setNavigationDelegate:),
+        @selector(setInspectable:),
+        @selector(initWithFrame:configuration:),
+        @selector(addScriptMessageHandler:name:),
+        @selector(addScriptMessageHandler:contentWorld:name:),
+        @selector(addUserScript:),
+        @selector(getAllCookies:),
+        @selector(setCookie:completionHandler:),
+        @selector(deleteCookie:completionHandler:),
+        @selector(fetchDataRecordsOfTypes:completionHandler:),
+        @selector(removeDataOfTypes:modifiedSince:completionHandler:),
+        @selector(setURLSchemeHandler:forURLScheme:),
+    };
+    for (size_t i = 0; i < sizeof(apis) / sizeof(apis[0]); i++) {
+        if (sel_isEqual(sel, apis[i])) return YES;
+    }
+    return NO;
 }
 
 static BOOL dh_wk_swizzle_once(Class cls, SEL sel, IMP replacement, IMP *originalOut) {
@@ -454,7 +489,8 @@ static BOOL dh_wk_swizzle_once(Class cls, SEL sel, IMP replacement, IMP *origina
     // 实测 bilibili + TrollFools(注入晚于宿主 swizzle) 100% 复现。
     // 遇到这种已占用的系统方法直接跳过，把行为完整交还给宿主自己的实现。
     // App 自定义类(URL scheme handler / delegate)不受此限制，我们本来就该挂它们。
-    if (dh_wk_class_is_system(implClass) && !dh_wk_imp_is_system(original)) {
+    BOOL requireSystemIMP = dh_wk_selector_requires_system_imp(sel);
+    if ((requireSystemIMP || dh_wk_class_is_system(implClass)) && !dh_wk_imp_is_system(original)) {
         const char *clsName = class_getName(implClass);
         const char *selName = sel_getName(sel);
         NSString *msg = [NSString stringWithFormat:
