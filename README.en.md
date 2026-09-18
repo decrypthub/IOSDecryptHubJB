@@ -8,8 +8,6 @@ IOSDecryptHub is a runtime-analysis dylib injected into iOS app processes. It ca
 
 For the full feature set and a live demo, visit: [ios.decrypthub.com](https://ios.decrypthub.com/)
 
-> For your own apps or authorized security testing and research only.
-
 ## Getting the dylib
 
 Download `decrypt_helper.dylib` from [GitHub Releases](https://github.com/taisuii/IOSDecryptHub/releases), or build it yourself:

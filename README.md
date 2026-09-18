@@ -9,8 +9,6 @@ IOSDecryptHub 是一个注入到 iOS App 进程中的运行时分析 dylib，可
 
 完整能力与效果演示请访问：[ios.decrypthub.com](https://ios.decrypthub.com/)
 
-> 仅限自有 App 或已获授权的安全测试与研究。
-
 ## 获取 dylib
 
 从 [官网首页](https://ios.decrypthub.com/) 或 [GitHub Releases](https://github.com/taisuii/IOSDecryptHub/releases) 下载 `decrypt_helper.dylib`，或自行编译：
