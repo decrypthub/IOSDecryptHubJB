@@ -26,19 +26,45 @@ static void spoof_set_defaults_locked(void) {
     gJbPaths = [@[
         @"/Applications/Cydia.app", @"/Applications/Sileo.app", @"/Applications/Zebra.app",
         @"/Applications/Filza.app", @"/Applications/WinterBoard.app", @"/Applications/SBSettings.app",
+        // 巨魔/多巴胺生态 + 常见检测写法(注意 B站等 App 会同时查带 s 与不带 s 的 /Application(s))
+        @"/Applications/TrollStore.app", @"/Applications/Dopamine.app",
+        @"/Application/Cydia.app", @"/Application/Sileo.app", @"/Application/Dopamine.app",
+        @"/var/mobile/.installed_trollstore",
         @"/Library/MobileSubstrate", @"/Library/MobileSubstrate/MobileSubstrate.dylib",
         @"/Library/MobileSubstrate/DynamicLibraries",
-        @"/usr/sbin/sshd", @"/usr/bin/ssh", @"/usr/libexec/cydia", @"/usr/libexec/sftp-server",
+        @"/System/Library/LaunchDaemons/com.saurik.Cydia.Startup.plist",
+        @"/System/Library/LaunchDaemons/com.ikey.bbot.plist",
+        @"/usr/sbin/sshd", @"/usr/bin/ssh", @"/usr/sbin/frida-server",
+        @"/usr/bin/cycript", @"/usr/local/bin/cycript", @"/usr/libexec/cydia", @"/usr/libexec/cydia/",
+        @"/usr/libexec/sftp-server",
         @"/usr/lib/libjailbreak.dylib", @"/bin/bash", @"/bin/sh",
         @"/etc/apt", @"/private/var/lib/apt", @"/private/var/lib/cydia", @"/private/var/stash",
         @"/private/var/tmp/cydia.log", @"/var/jb", @"/var/binpack",
+        // 以下条目取自实测的第三方风控 SDK 检测清单(中国移动 BCE/everisk RiskManage):
+        // 它逐条 stat 这些路径, 漏掉任何一条都会被记为「已越狱」。
+        @"/.cydia_no_stash", @"/TweakInject/",
+        @"/Applications/FlyJB.app", @"/Library/PreferenceBundles/FlyJBPrefs.bundle",
+        @"/Library/MobileSubstrate/CydiaSubstrate.dylib",
+        @"/Library/MobileSubstrate/DynamicLibraries/Flex.dylib",
+        @"/Library/MobileSubstrate/DynamicLibraries/xCon.dylib",
+        @"/Library/MobileSubstrate/DynamicLibraries/OTRLocation.dylib",
+        @"/etc/ssh/sshd_config", @"/private/etc/ssh/sshd_config",
+        @"/etc/apt/sources.list.d/electra.list", @"/etc/apt/sources.list.d/sileo.sources",
+        @"/etc/apt/undecimus/undecimus.list",
+        @"/private/var/log/syslog", @"/private/var/mobile/Library/SBSettings/Themes",
+        @"/jb/", @"/jb/amfid_payload.dylib", @"/jb/jailbreakd.plist",
+        @"/jb/libjailbreak.dylib", @"/jb/lzma", @"/jb/offsets.plist",
     ] mutableCopy];
     gJbSchemes = [@[@"cydia", @"sileo", @"zbra", @"filza", @"undecimus", @"activator", @"apt-repo"] mutableCopy];
     // 注入痕迹: 自身 dylib 名 + 常见注入框架/越狱 tweak 加载器标记(image 全路径子串匹配)。
     gJbImages = [@[
-        @"decrypt_helper", @"MobileSubstrate", @"SubstrateLoader", @"SubstrateInserter", @"substrate",
+        @"decrypt_helper", @"IOSDecryptHub", @"MobileSubstrate", @"SubstrateLoader", @"SubstrateInserter", @"substrate",
         @"TweakInject", @"libhooker", @"libsubstitute", @"substitute", @"ellekit", @"RocketBootstrap",
         @"cynject", @"libjailbreak", @"Cephei", @"Choicy", @"DynamicLibraries",
+        @"CydiaSubstrate", @"FlyJB", @"xCon", @"OTRLocation", @"Veency",
+        // 常见检测名单(实测 B站会查这些): 注入框架 / 伪装类 / 抓包与脚本工具
+        @"AppSyncUnified", @"Shadow", @"FridaGadget", @"frida", @"libcycript",
+        @"dopamine", @"TrollStore", @"IPAPatch",
     ] mutableCopy];
     gDevice = [NSMutableDictionary dictionary];
     for (NSString *k in kDeviceKeys()) gDevice[k] = @"";
@@ -112,16 +138,31 @@ void dh_spoof_jb_set_on(BOOL on) {
 
 BOOL dh_spoof_jb_should_hide_path(const char *path) {
     if (!gJbOn || !path || !*path || !gLock) return NO;
+    // 热路径守卫: 这个函数在每次 open/stat/access 里都会被调用(宿主启动阶段几千次),
+    // 原实现每次都建 NSString + 拿锁 + 35 条模式 × (isEqual + hasPrefix + 子串) 且逐条
+    // stringByAppendingString 分配 —— 启动期开销可观。先用纯 C 的锚点子串快速拒绝,
+    // 命中不了任何锚点的普通路径直接返回, 不进 Objective-C 层。
+    static const char *anchors[] = {
+        "/Applications/", "/Application/", "Substrate", "/System/Library/LaunchDaemons",
+        "/usr/", "/bin/", "/etc/apt", "/private/var/", "/var/jb", "/var/binpack",
+        "installed_trollstore",
+        // 风控 SDK 实测检测项对应的锚点(见下方 gJbPaths 注释), 漏一个就会让预过滤误杀。
+        ".cydia", "/TweakInject", "/jb/", "/etc/ssh", "PreferenceBundles",
+    };
+    BOOL maybe = NO;
+    for (size_t i = 0; i < sizeof(anchors) / sizeof(anchors[0]); i++) {
+        if (strstr(path, anchors[i])) { maybe = YES; break; }
+    }
+    if (!maybe) return NO;
+
     NSString *p = [NSString stringWithUTF8String:path];
     if (!p) return NO;
     [gLock lock];
     BOOL hit = NO;
     for (NSString *e in gJbPaths) {
         if (e.length == 0) continue;
-        // 精确匹配, 或探测路径落在配置目录下(前缀 + '/'), 或配置项作为子串出现。
-        if ([p isEqualToString:e] ||
-            [p hasPrefix:[e hasSuffix:@"/"] ? e : [e stringByAppendingString:@"/"]] ||
-            [p rangeOfString:e].location != NSNotFound) { hit = YES; break; }
+        // 子串匹配已经覆盖「精确相等」和「落在配置目录下」两种情况, 少两次字符串操作和一次分配。
+        if ([p rangeOfString:e].location != NSNotFound) { hit = YES; break; }
     }
     [gLock unlock];
     return hit;

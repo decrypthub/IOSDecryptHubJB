@@ -65,6 +65,14 @@ echo "[build] mac dylib + exercise_runner"
 make mac >"$RESULT_DIR/build.log" 2>&1 || { echo "mac dylib 构建失败, 见 "$RESULT_DIR/build.log""; exit 1; }
 make tests/exercise_runner >>"$RESULT_DIR/build.log" 2>&1 || { echo "runner 构建失败"; exit 1; }
 
+echo "[echo] 启动本地 WebSocket 回显服务"
+python3 tests/net_echo_server.py --port 8099 --ws >"$RESULT_DIR/echo.log" 2>&1 &
+HOST2=$!
+for _ in $(seq 1 50); do
+  curl -sf --max-time 1 http://127.0.0.1:8099/echo >/dev/null 2>&1 && break
+  sleep 0.1
+done
+
 DYLD_INSERT_LIBRARIES=./decrypt_helper.mac.dylib ./tests/exercise_runner --all --timeout 180 >"$RESULT_DIR/host.log" 2>&1 &
 HOST=$!
 echo "[host] PID $HOST, 轮询服务与场景完成标记"
@@ -91,7 +99,7 @@ mc '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' > "$RESULT_DIR/tools.json"
 eq "$(jq -r '[.result.tools[].name] as $names |
     ["get_capabilities","disassemble","objc_resolve_imp","find_objc_methods","list_loaded_images","find_xrefs","find_string_refs",
      "find_selector_refs","find_function_refs","list_functions","get_stats","query_events",
-     "correlate_request","get_event","export_events","get_diag","hook_import","hook_method","unhook"] |
+     "correlate_request","get_event","export_events","get_diag","get_capture_coverage","hook_import","hook_method","unhook"] |
     all(. as $name | $names | index($name) != null)' "$RESULT_DIR/tools.json")" \
     "true" "tools/list 包含关键兼容工具集合"
 mc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"fd7bbfa9","arch":"arm64"}}}' > "$RESULT_DIR/dh_disasm_stp.json"
@@ -161,7 +169,7 @@ ge "$(jq '.result.structuredContent.matched' "$RESULT_DIR/dh_rev.json")" 1 "outp
 eq "$(jq --arg s "$DSEQ" 'any(.result.structuredContent.events[]; (.seq|tostring)==$s)' "$RESULT_DIR/dh_rev.json")" "true" "反查结果含原 seq"
 
 echo ""; echo "== correlate_request 闭环 (X-Validator=base64(SHA256)) =="
-mc '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"net","limit":1}}}' > "$RESULT_DIR/dh_net.json"
+mc '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"net","query":"X-Validator","limit":1}}}' > "$RESULT_DIR/dh_net.json"
 NSEQ=$(jq -r '.result.structuredContent.events[0].seq // empty' "$RESULT_DIR/dh_net.json")
 if [ -n "$NSEQ" ]; then
   mc "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"correlate_request\",\"arguments\":{\"net_seq\":$NSEQ,\"window_ms\":3000}}}" > "$RESULT_DIR/dh_cor.json"
@@ -171,6 +179,21 @@ if [ -n "$NSEQ" ]; then
 else
   ng "无 net 事件, correlate 无法测 (网络探针可能未落库)"
 fi
+
+echo ""; echo "== 通用 BSD socket 明文抓取 =="
+mc '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"net","query":"/api/stats","limit":50}}}' > "$RESULT_DIR/dh_socket.json"
+eq "$(jq -r '[.result.structuredContent.events[] | select(.algorithm=="SOCKET" and ((.preview // "") | contains("GET /api/stats")))] | length > 0' "$RESULT_DIR/dh_socket.json")" "true" "raw socket send 被通用层记录"
+eq "$(jq -r '[.result.structuredContent.events[] | select(.algorithm=="SOCKET" and .operation=="send" and ((.preview // "") | contains("GET /api/stats")))] | length > 0' "$RESULT_DIR/dh_socket.json")" "true" "raw socket 请求行进入 input 预览"
+
+echo ""; echo "== WebSocket 帧抓取 =="
+mc '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"net","query":"DH_WS_FIXTURE_001","limit":20}}}' > "$RESULT_DIR/dh_ws.json"
+eq "$(jq -r '[.result.structuredContent.events[] | select(.algorithm=="WS" and .operation=="send")] | length > 0' "$RESULT_DIR/dh_ws.json")" "true" "WebSocket send 帧被记录"
+eq "$(jq -r '[.result.structuredContent.events[] | select(.algorithm=="WS" and .operation=="recv")] | length > 0' "$RESULT_DIR/dh_ws.json")" "true" "WebSocket recv 帧被记录"
+
+echo ""; echo "== Network.framework 明文抓取 =="
+mc '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"net","query":"/echo","limit":50}}}' > "$RESULT_DIR/dh_nw.json"
+eq "$(jq -r '[.result.structuredContent.events[] | select(.algorithm=="NW" and .operation=="send")] | length > 0' "$RESULT_DIR/dh_nw.json")" "true" "nw_connection_send 明文被记录"
+eq "$(jq -r '[.result.structuredContent.events[] | select(.algorithm=="NW" and .operation=="recv" and ((.preview // "") | contains("HTTP/")))] | length > 0' "$RESULT_DIR/dh_nw.json")" "true" "nw_connection_receive 明文被记录"
 
 echo ""; echo "== find_xrefs (tier-1 直接 BL 调用引用) =="
 # import stub 正例: runner 直接调 printf 多次, 应经 __stubs → GOT → dladdr 还原成 printf
@@ -339,7 +362,7 @@ echo ""; echo "== find_string_refs indirect (经典 selref → SEL) =="
 CLSDK=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)
 xcrun --find clang >/dev/null 2>&1 && "$(xcrun --find clang)" -arch arm64 -isysroot "$CLSDK" \
   -mmacosx-version-min=11.0 -ObjC -fobjc-arc -O0 -fno-objc-msgsend-selector-stubs \
-  -framework Foundation -framework CoreFoundation -framework Security \
+  -framework Foundation -framework CoreFoundation -framework Security -framework Network \
   tests/exercise_runner.m -o "$RESULT_DIR/dh_er_classic" >"$RESULT_DIR/dh_classic_build.log" 2>&1
 if [ -x "$RESULT_DIR/dh_er_classic" ]; then
   eq "$(otool -l "$RESULT_DIR/dh_er_classic" 2>/dev/null | grep -c 'sectname __objc_stubs')" "0" "classic 变体无 __objc_stubs"
@@ -370,6 +393,24 @@ fi
 echo ""; echo "== 诊断 =="
 mc '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_diag","arguments":{"board":"general"}}}' > "$RESULT_DIR/diagnostics.json"
 eq "$(jq -r '.result.structuredContent.diag|test("hook")' "$RESULT_DIR/diagnostics.json")" "true" "get_diag 含 hook 时间线"
+mc '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"get_capture_coverage","arguments":{}}}' > "$RESULT_DIR/coverage.json"
+eq "$(jq -r '.result.structuredContent.layers|type' "$RESULT_DIR/coverage.json")" "array" "覆盖自检返回 layers 数组"
+eq "$(jq -r '.result.structuredContent.blind_spots|type' "$RESULT_DIR/coverage.json")" "array" "覆盖自检返回 blind_spots 数组"
+eq "$(jq -r '[.result.structuredContent.layers[].layer]|index("NSURLSession (ObjC)")!=null' "$RESULT_DIR/coverage.json")" "true" "覆盖自检包含 NSURLSession 层"
+mc '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"get_diag","arguments":{"board":"sys"}}}' > "$RESULT_DIR/diag_sys.json"
+eq "$(jq -r '.result.structuredContent.diag|test("heavy tool")' "$RESULT_DIR/diag_sys.json")" "true" "get_diag(sys) 含重活审计(崩溃可归因)"
+
+echo ""; echo "== 动态 hook + 参数反引用 =="
+# import 侧: 只验证能装 + describe_args 生效(是否命中取决于宿主是否真的调这个符号)
+mc '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"hook_import","arguments":{"symbol":"getenv","label":"t-cstr","describe_args":true}}}' > "$RESULT_DIR/hook_import.json"
+eq "$(jq -r '.result.structuredContent.slot>=0 and .result.structuredContent.describe_args' "$RESULT_DIR/hook_import.json")" "true" "hook_import(describe_args) 安装并启用"
+# method 侧: 挂 NSFileManager 的目录列举, 再用 list_files 主动触发 —— 确定性验证「参数内容被记录」
+mc '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"hook_method","arguments":{"class":"NSFileManager","selector":"contentsOfDirectoryAtPath:error:","describe_args":true}}}' > "$RESULT_DIR/hook_method.json"
+eq "$(jq -r '.result.structuredContent.slot>=0 and .result.structuredContent.describe_args' "$RESULT_DIR/hook_method.json")" "true" "hook_method(describe_args) 安装并启用"
+mc '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"list_files","arguments":{"path":"Documents"}}}' > /dev/null
+sleep 1
+mc '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"other","limit":50}}}' > "$RESULT_DIR/hook_events.json"
+eq "$(jq -r '[.result.structuredContent.events[].detail // ""] | any(contains("arg0 ="))' "$RESULT_DIR/hook_events.json")" "true" "method hook 记录了参数内容(反引用生效)"
 
 if grep -Eq '^(jq:|curl:)' "$RESULT_DIR/stderr.log"; then
   ng "测试过程中没有 jq/curl 执行错误"

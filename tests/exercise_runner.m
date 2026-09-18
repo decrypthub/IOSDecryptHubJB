@@ -30,11 +30,15 @@
 #include <Security/Security.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <errno.h>
 #include <mach-o/dyld.h>
+#import <Network/Network.h>
 extern int ptrace(int, pid_t, caddr_t, int);
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 
@@ -350,6 +354,91 @@ static void test_network(void) {
     [t resume];
     dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)));
     printf("[exercise] network: X-Validator = base64(SHA256(body)) 已发\n");
+
+    // 通用 socket 路径: 不经 NSURLSession, 直接用 BSD socket 发一条可读 HTTP 请求。
+    // 用于验证 socket/send/recv/read/write 家族 hook 不是只对某个 App 生效。
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd >= 0) {
+        struct sockaddr_in addr = {0};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(8088);
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+            const char *rawReq = "GET /api/stats HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+            ssize_t sent = send(fd, rawReq, strlen(rawReq), 0);
+            char resp[2048] = {0};
+            ssize_t got = recv(fd, resp, sizeof(resp) - 1, 0);
+            printf("[exercise] network: raw socket send=%zd recv=%zd\n", sent, got);
+        }
+        close(fd);
+    }
+}
+
+// WebSocket 帧场景: 连接本地 net_echo_server.py --ws, 发一条哨兵消息并读回显。
+// 用于验证 NSURLSessionWebSocketTask 的 send/receive swizzle 真的记录业务帧。
+static void test_websocket(void) {
+    NSURL *url = [NSURL URLWithString:@"ws://127.0.0.1:8099/ws"];
+    NSURLSessionWebSocketTask *task = [[NSURLSession sharedSession] webSocketTaskWithURL:url];
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    [task resume];
+    NSURLSessionWebSocketMessage *message =
+        [[NSURLSessionWebSocketMessage alloc] initWithString:@"DH_WS_FIXTURE_001"];
+    [task sendMessage:message completionHandler:^(NSError *sendError) {
+        if (sendError) {
+            printf("[exercise] websocket send error: %s\n", sendError.localizedDescription.UTF8String);
+            dispatch_semaphore_signal(done);
+            return;
+        }
+        [task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *reply, NSError *recvError) {
+            NSString *text = reply.string;
+            if (!text.length && reply.data.length)
+                text = [[NSString alloc] initWithData:reply.data encoding:NSUTF8StringEncoding];
+            printf("[exercise] websocket recv=%s error=%s\n", text.UTF8String ?: "",
+                   recvError.localizedDescription.UTF8String ?: "");
+            dispatch_semaphore_signal(done);
+        }];
+    }];
+    long timedOut = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)));
+    if (timedOut) printf("[exercise] websocket timeout\n");
+    [task cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
+}
+
+// Network.framework 明文收发场景: 用 nw_connection 访问本地 HTTP 回显服务。
+// 验证 hook_network 里的 nw_connection_send/receive 不是只在覆盖报告里存在。
+static void test_network_framework(void) {
+    nw_endpoint_t endpoint = nw_endpoint_create_host("127.0.0.1", "8099");
+    nw_parameters_t params =
+        nw_parameters_create_secure_tcp(NW_PARAMETERS_DISABLE_PROTOCOL,
+                                        NW_PARAMETERS_DEFAULT_CONFIGURATION);
+    nw_connection_t conn = nw_connection_create(endpoint, params);
+    dispatch_queue_t queue = dispatch_queue_create("dh.nw.test", DISPATCH_QUEUE_SERIAL);
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    nw_connection_set_queue(conn, queue);
+    nw_connection_set_state_changed_handler(conn, ^(nw_connection_state_t state, nw_error_t error) {
+        (void)error;
+        if (state != nw_connection_state_ready) return;
+        const char *req = "GET /echo HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+        dispatch_data_t data = dispatch_data_create(req, strlen(req), queue, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+        nw_connection_send(conn, data, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true, ^(nw_error_t sendError) {
+            if (sendError) {
+                printf("[exercise] nw send error: %d\n", nw_error_get_error_code(sendError));
+                dispatch_semaphore_signal(done);
+                return;
+            }
+            nw_connection_receive(conn, 1, 65535, ^(dispatch_data_t content, nw_content_context_t context,
+                                                   bool complete, nw_error_t recvError) {
+                (void)context; (void)complete;
+                size_t len = content ? dispatch_data_get_size(content) : 0;
+                printf("[exercise] nw recv=%zu error=%d\n", len,
+                       recvError ? nw_error_get_error_code(recvError) : 0);
+                dispatch_semaphore_signal(done);
+            });
+        });
+    });
+    nw_connection_start(conn);
+    long timedOut = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)));
+    if (timedOut) printf("[exercise] nw timeout\n");
+    nw_connection_cancel(conn);
 }
 
 // ============================================================
@@ -366,6 +455,8 @@ typedef struct {
 static void scenario_rsa(void) { @autoreleasepool { test_rsa(); } }
 static void scenario_keychain(void) { @autoreleasepool { test_keychain(); } }
 static void scenario_network(void) { @autoreleasepool { test_network(); } }
+static void scenario_websocket(void) { @autoreleasepool { test_websocket(); } }
+static void scenario_nw(void) { @autoreleasepool { test_network_framework(); } }
 
 static const DHScenario kScenarios[] = {
     { "baseline.crypto.digest",       test_digests },
@@ -377,6 +468,8 @@ static const DHScenario kScenarios[] = {
     { "baseline.environment.probes",  test_env },
     { "baseline.injection.visibility",test_inject },
     { "baseline.network.request",     scenario_network },
+    { "baseline.network.websocket",   scenario_websocket },
+    { "baseline.network.nw",          scenario_nw },
 };
 
 static const size_t kScenarioCount = sizeof(kScenarios) / sizeof(kScenarios[0]);
@@ -459,6 +552,10 @@ int main(int argc, char **argv) {
         printf("[scenario] DONE baseline.injection.visibility\n");
         printf("[scenario] START baseline.network.request\n"); @autoreleasepool { test_network(); }
         printf("[scenario] DONE baseline.network.request\n");
+        printf("[scenario] START baseline.network.websocket\n"); @autoreleasepool { test_websocket(); }
+        printf("[scenario] DONE baseline.network.websocket\n");
+        printf("[scenario] START baseline.network.nw\n"); @autoreleasepool { test_network_framework(); }
+        printf("[scenario] DONE baseline.network.nw\n");
     }
 
     printf("\n[exercise] SCENARIOS_COMPLETE\n");

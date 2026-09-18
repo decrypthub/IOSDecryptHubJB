@@ -127,24 +127,34 @@ static BOOL swz_canOpenURL(id self, SEL _cmd, id url) {
 }
 
 void dh_install_spoof_objc_hooks(void) {
-    // 用单例实例的真实类做 swizzle(处理类簇/私有子类覆盖同名方法的情形)。
-    Class uidev = dh_singleton_class(@"UIDevice", @selector(currentDevice));
-    BOOL a = dh_swizzle(uidev, @selector(systemVersion),       (IMP)swz_systemVersion, (IMP *)&orig_systemVersion);
-    dh_swizzle(uidev, @selector(name),                (IMP)swz_deviceName,    (IMP *)&orig_deviceName);
-    dh_swizzle(uidev, @selector(identifierForVendor), (IMP)swz_idfv,          (IMP *)&orig_idfv);
+    BOOL a = NO, b = NO, c = NO, d = NO;
+    // 设备伪装默认关闭时「不装」这些 swizzle —— App 的反注入检测会按 IMP 归属判断方法是否被换过
+    // (实测中国移动 BCE 的 doSwizzlingHookCheck / methodsForMainImage 就是这类检查), 装了就会被打标记。
+    // 关闭时不装, 检测面最小; 真正要用改机时再打开。
+    if (dh_spoof_device_on()) {
+        // 用单例实例的真实类做 swizzle(处理类簇/私有子类覆盖同名方法的情形)。
+        Class uidev = dh_singleton_class(@"UIDevice", @selector(currentDevice));
+        a = dh_swizzle(uidev, @selector(systemVersion),       (IMP)swz_systemVersion, (IMP *)&orig_systemVersion);
+        dh_swizzle(uidev, @selector(name),                (IMP)swz_deviceName,    (IMP *)&orig_deviceName);
+        dh_swizzle(uidev, @selector(identifierForVendor), (IMP)swz_idfv,          (IMP *)&orig_idfv);
 
-    Class pinfo = dh_singleton_class(@"NSProcessInfo", @selector(processInfo));
-    BOOL b = dh_swizzle(pinfo, @selector(operatingSystemVersion), (IMP)swz_osv, (IMP *)&orig_osv);
+        Class pinfo = dh_singleton_class(@"NSProcessInfo", @selector(processInfo));
+        b = dh_swizzle(pinfo, @selector(operatingSystemVersion), (IMP)swz_osv, (IMP *)&orig_osv);
 
-    // AdSupport 可能未加载: 类为 nil 时安全跳过(多数用 IDFA 的 App 会早链 AdSupport)。
-    Class asim = dh_singleton_class(@"ASIdentifierManager", @selector(sharedManager));
-    BOOL c = dh_swizzle(asim, @selector(advertisingIdentifier), (IMP)swz_idfa, (IMP *)&orig_idfa);
+        // AdSupport 可能未加载: 类为 nil 时安全跳过(多数用 IDFA 的 App 会早链 AdSupport)。
+        Class asim = dh_singleton_class(@"ASIdentifierManager", @selector(sharedManager));
+        c = dh_swizzle(asim, @selector(advertisingIdentifier), (IMP)swz_idfa, (IMP *)&orig_idfa);
+    }
 
-    // UIApplication.canOpenURL: —— 越狱 URL scheme 隐藏 + 观测。
-    Class uiapp = dh_singleton_class(@"UIApplication", @selector(sharedApplication));
-    BOOL d = dh_swizzle(uiapp, @selector(canOpenURL:), (IMP)swz_canOpenURL, (IMP *)&orig_canOpenURL);
+    // UIApplication.canOpenURL: 越狱 URL scheme 隐藏 —— 只在 jb 开关打开时安装。
+    if (dh_spoof_jb_on()) {
+        Class uiapp = dh_singleton_class(@"UIApplication", @selector(sharedApplication));
+        d = dh_swizzle(uiapp, @selector(canOpenURL:), (IMP)swz_canOpenURL, (IMP *)&orig_canOpenURL);
+    }
 
-    char dbg[128];
-    snprintf(dbg, sizeof(dbg), "spoof-objc swizzle: UIDevice=%d NSProcessInfo=%d ASIdentifierManager=%d canOpenURL=%d", a, b, c, d);
+    char dbg[192];
+    snprintf(dbg, sizeof(dbg),
+             "spoof-objc swizzle(device=%d jb=%d): UIDevice=%d NSProcessInfo=%d ASIdentifierManager=%d canOpenURL=%d",
+             dh_spoof_device_on(), dh_spoof_jb_on(), a, b, c, d);
     dh_diag_append(DH_DIAG_GENERAL, "INFO", dbg);
 }

@@ -36,6 +36,7 @@
 #import "dh_files.h"
 #import "dh_log_json.h"
 #import "mcp_server.h"
+#import "hook_network.h"
 
 #define DH_HTTP_PORT_FIRST  8088
 #define DH_HTTP_PORT_LAST   8108
@@ -967,6 +968,7 @@ static void handle_connection(int fd) {
 static int try_bind(uint16_t port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
+    dh_net_mark_internal_fd(fd);
     int yes = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     struct sockaddr_in addr = {0};
@@ -996,6 +998,7 @@ static void accept_loop(void) {
             }
             continue;
         }
+        dh_net_mark_internal_fd(cfd);
         backoff = 0;
         int yes = 1;
         setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));

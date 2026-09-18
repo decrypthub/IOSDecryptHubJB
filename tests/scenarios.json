@@ -64,6 +64,13 @@
       "trigger": "network",
       "expected_events": ["SHA256", "HTTP"],
       "timeout_ms": 10000
+    },
+    {
+      "id": "baseline.webkit",
+      "platforms": ["sim"],
+      "trigger": "webkit",
+      "expected_events": ["WEBKIT"],
+      "timeout_ms": 10000
     }
   ]
 }

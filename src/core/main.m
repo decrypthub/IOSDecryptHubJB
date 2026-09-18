@@ -27,6 +27,7 @@ extern void dh_install_env_hooks(void);
 extern void dh_install_spoof_objc_hooks(void);
 extern void dh_install_dyld_hooks(void);
 extern void dh_install_network_hooks(void);
+extern void dh_install_webkit_hooks(void);
 
 static void dh_install_all_hooks(void) {
     dh_install_digest_hooks();
@@ -42,6 +43,7 @@ static void dh_install_all_hooks(void) {
     dh_install_spoof_objc_hooks();
     dh_install_dyld_hooks();
     dh_install_network_hooks();
+    dh_install_webkit_hooks();
 }
 
 __attribute__((constructor))
@@ -62,8 +64,11 @@ static void dh_bootstrap(void) {
     dh_diag_append(DH_DIAG_GENERAL, "INFO", "hook 安装完成 (Digest/HMAC/对称/非对称/KDF/EVP/文件/系统)");
     NSLog(@"[IOSDecryptHub] hook 已全部安装 (Digest / HMAC / 对称 / 非对称 / KDF / EVP / 文件 / 系统 / dlsym)");
 
-    // 启动本地 HTTP 服务 - 不依赖 UIApplication, 可以立刻起.
-    dh_http_start();
+    // 本地 HTTP 服务放到后台起: constructor 处在宿主 launch 的看门狗预算里
+    // (实测 B站 launch 阶段被 0x8badf00d 杀掉), 起 socket/线程不该抢这段时间。
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        dh_http_start();
+    });
 
 #if __has_include(<UIKit/UIKit.h>)
     // UI 必须等 UIApplication 实例化后再做; 用 didFinishLaunching 通知做后置初始化.

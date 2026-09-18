@@ -9,7 +9,7 @@
 #       export CROSS_CC=/path/to/theos/toolchain/linux/iphone/bin/clang
 #       make linux                 -> decrypt_helper.dylib
 
-VERSION := 1.25.6
+VERSION := 1.27.0
 TARGET  := decrypt_helper.dylib
 
 # Capstone 反汇编库源文件（仅 ARM/ARM64 架构）
@@ -58,6 +58,7 @@ SRC     := src/core/fishhook.c \
            src/hooks/behavior/hook_spoof_objc.m \
            src/hooks/behavior/hook_dyld.m \
            src/hooks/behavior/hook_network.m \
+           src/hooks/behavior/hook_webkit.m \
            src/server/http_server.m \
            src/server/mcp_server.m \
            src/server/dh_log_json.m \
@@ -250,7 +251,7 @@ $(TEST_BIN): tests/exercise_runner.m
 	$(CC) -arch $(MAC_ARCH) -isysroot $(MAC_SDK) -mmacosx-version-min=$(MAC_MIN) \
 	      -ObjC -fobjc-arc -Wall -Wno-deprecated-declarations -O0 -g \
 	      $(TEST_OPENSSL_CFLAGS) \
-	      -framework Foundation -framework CoreFoundation -framework Security \
+	      -framework Foundation -framework CoreFoundation -framework Security -framework Network \
 	      tests/exercise_runner.m -o $(TEST_BIN) $(TEST_OPENSSL_LIBS)
 	@echo "✅ test runner: $(TEST_BIN)"
 

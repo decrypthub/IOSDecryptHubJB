@@ -15,9 +15,32 @@
 #include "analysis.h"
 #include "macho_dump.h"
 
+#include <os/proc.h>
+#include <TargetConditionals.h>
+
 #define ANALYSIS_MAX_READ   (64 * 1024)          // 单次读内存上限
 #define ANALYSIS_MAX_SEARCH (256 * 1024 * 1024)  // search_memory 范围上限
 #define ANALYSIS_MAX_XREF_SCAN (48ULL * 1024 * 1024)
+// xref 默认窗口: 之前默认就是上限 48MB, 在 2~3GB 内存设备上单次 calloc 48MB 很容易把宿主顶到
+// jetsam 阈值(实测单次 256MB 扫描会让系统可用内存掉 56MB)。默认降到 8MB, 需要更大窗口时显式传
+// scan_size, 并受下面的可用内存检查约束。
+#define ANALYSIS_DEFAULT_XREF_SCAN (8ULL * 1024 * 1024)
+// 分配快照前必须留出的安全余量: 宿主 App 自身、系统与并发 hook 都需要内存。
+#define ANALYSIS_SNAPSHOT_RESERVE  (64ULL * 1024 * 1024)
+
+// 宿主进程剩余可用内存 (iOS 13+)。0 表示未知(不拦截)。
+// 注意: os_proc_available_memory 在 macOS 上被标记为 unavailable, 不能只在运行时判断,
+// 必须用编译期分支 —— 否则 mac 变体 / test-mcp 直接编译失败。
+static uint64_t analysis_available_memory(void) {
+#if TARGET_OS_OSX
+    return 0;   // macOS: 无此 API, 视为未知
+#else
+    if (__builtin_available(iOS 13.0, *)) {
+        return (uint64_t)os_proc_available_memory();
+    }
+    return 0;
+#endif
+}
 
 // ============================================================
 // Capstone 反汇编
@@ -894,6 +917,15 @@ static uint8_t *snapshot_text(uint64_t lo, uint64_t hi, size_t *out_len,
     if (out_len) *out_len = 0;
     if (hi <= lo) return NULL;
     size_t len = (size_t)(hi - lo);
+    // 内存闸门: 宿主可用内存不够(快照 + 64MB 余量)时直接拒绝, 不尝试分配。
+    // 在 2~3GB 设备上, 盲目 calloc 48MB 会把被注入的宿主 App 推到 jetsam 阈值,
+    // 表现为「App 闪退、系统无崩溃报告」。
+    uint64_t avail = analysis_available_memory();
+    if (scan) scan->available_memory = avail;
+    if (avail > 0 && (uint64_t)len + ANALYSIS_SNAPSHOT_RESERVE > avail) {
+        if (scan) scan->insufficient_memory = 1;
+        return NULL;
+    }
     uint8_t *buf = calloc(1, len);
     if (!buf) return NULL;
     const size_t PG = 16 * 1024;   // iOS 页 16KB; 某页不可读只丢这一页, 其余照读
@@ -914,7 +946,7 @@ static uint8_t *snapshot_text(uint64_t lo, uint64_t hi, size_t *out_len,
     return buf;
 }
 
-// 计算一次有界扫描窗口。scan_size=0 使用 48MB 默认上限；显式更大值仍截到 48MB。
+// 计算一次有界扫描窗口。scan_size=0 使用 8MB 默认窗口；显式更大值截到 48MB 上限。
 // 返回 -4 表示 offset 已越过 __text。
 static int prepare_scan(uint64_t text_lo, uint64_t text_hi,
                         uint64_t scan_offset, uint64_t scan_size,
@@ -923,7 +955,8 @@ static int prepare_scan(uint64_t text_lo, uint64_t text_hi,
     memset(scan, 0, sizeof(*scan));
     uint64_t total = text_hi - text_lo;
     if (scan_offset >= total) return -4;
-    uint64_t size = scan_size ? scan_size : ANALYSIS_MAX_XREF_SCAN;
+    scan->available_memory = analysis_available_memory();
+    uint64_t size = scan_size ? scan_size : ANALYSIS_DEFAULT_XREF_SCAN;
     if (size > ANALYSIS_MAX_XREF_SCAN) {
         size = ANALYSIS_MAX_XREF_SCAN;
         scan->scan_size_capped = 1;

@@ -128,12 +128,122 @@ static CFDataRef hooked_SecKeyCreateDecryptedData(SecKeyRef key, SecKeyAlgorithm
     return out;
 }
 
+// ============================================================
+// 旧版 Security.framework 非对称 API (SecKeyEncrypt/Decrypt/RawSign/RawVerify)
+// 不少国内 SDK(实测: 中国移动 12.5.2 进程里这些符号在导入表里)仍走这套老接口,
+// 而上面四个新接口覆盖不到它们 —— 漏掉就会看到「RSA 计数为 0 但报文里明明有 128 字节密文」。
+// ============================================================
+static NSString *dh_padding_name(SecPadding padding) {
+    switch (padding) {
+        case kSecPaddingNone:      return @"None";
+        case kSecPaddingPKCS1:     return @"PKCS1";
+#ifdef kSecPaddingOAEP
+        case kSecPaddingOAEP:      return @"OAEP";
+#endif
+        case kSecPaddingPKCS1MD5:  return @"PKCS1MD5";
+        case kSecPaddingPKCS1SHA1: return @"PKCS1SHA1";
+        case kSecPaddingPKCS1SHA224: return @"PKCS1SHA224";
+        case kSecPaddingPKCS1SHA256: return @"PKCS1SHA256";
+        case kSecPaddingPKCS1SHA384: return @"PKCS1SHA384";
+        case kSecPaddingPKCS1SHA512: return @"PKCS1SHA512";
+        default: return [NSString stringWithFormat:@"padding(%d)", (int)padding];
+    }
+}
+
+static OSStatus (*orig_SecKeyEncrypt)(SecKeyRef, SecPadding, const uint8_t *, size_t, uint8_t *, size_t *);
+static OSStatus hooked_SecKeyEncrypt(SecKeyRef key, SecPadding padding,
+                                     const uint8_t *plain, size_t plainLen,
+                                     uint8_t *cipher, size_t *cipherLen) {
+    OSStatus st = orig_SecKeyEncrypt ? orig_SecKeyEncrypt(key, padding, plain, plainLen, cipher, cipherLen) : errSecUnimplemented;
+    if (dh_capture_sub_enabled(DH_CAP_ASYMMETRIC) && plain && plainLen > 0) {
+        DHLogEntry *e = [DHLogEntry new];
+        e.category   = DHCategoryAsymmetric;
+        e.algorithm  = [NSString stringWithFormat:@"ENC-legacy:%@", dh_padding_name(padding)];
+        e.operation  = @"encrypt";
+        e.publicKeyInfo = describe_key(key);
+        e.input      = [NSData dataWithBytes:plain length:plainLen];
+        if (st == errSecSuccess && cipher && cipherLen && *cipherLen > 0)
+            e.output = [NSData dataWithBytes:cipher length:*cipherLen];
+        e.timestamp  = DHTimestampNow();
+        e.callStack  = DHCallStackFiltered();
+        [[DHLogStore shared] append:e];
+    }
+    return st;
+}
+
+static OSStatus (*orig_SecKeyDecrypt)(SecKeyRef, SecPadding, const uint8_t *, size_t, uint8_t *, size_t *);
+static OSStatus hooked_SecKeyDecrypt(SecKeyRef key, SecPadding padding,
+                                     const uint8_t *cipher, size_t cipherLen,
+                                     uint8_t *plain, size_t *plainLen) {
+    OSStatus st = orig_SecKeyDecrypt ? orig_SecKeyDecrypt(key, padding, cipher, cipherLen, plain, plainLen) : errSecUnimplemented;
+    if (dh_capture_sub_enabled(DH_CAP_ASYMMETRIC) && cipher && cipherLen > 0) {
+        DHLogEntry *e = [DHLogEntry new];
+        e.category   = DHCategoryAsymmetric;
+        e.algorithm  = [NSString stringWithFormat:@"DEC-legacy:%@", dh_padding_name(padding)];
+        e.operation  = @"decrypt";
+        e.publicKeyInfo = describe_key(key);
+        e.input      = [NSData dataWithBytes:cipher length:cipherLen];
+        if (st == errSecSuccess && plain && plainLen && *plainLen > 0)
+            e.output = [NSData dataWithBytes:plain length:*plainLen];
+        e.timestamp  = DHTimestampNow();
+        e.callStack  = DHCallStackFiltered();
+        [[DHLogStore shared] append:e];
+    }
+    return st;
+}
+
+static OSStatus (*orig_SecKeyRawSign)(SecKeyRef, SecPadding, const uint8_t *, size_t, uint8_t *, size_t *);
+static OSStatus hooked_SecKeyRawSign(SecKeyRef key, SecPadding padding,
+                                     const uint8_t *data, size_t dataLen,
+                                     uint8_t *sig, size_t *sigLen) {
+    OSStatus st = orig_SecKeyRawSign ? orig_SecKeyRawSign(key, padding, data, dataLen, sig, sigLen) : errSecUnimplemented;
+    if (dh_capture_sub_enabled(DH_CAP_ASYMMETRIC) && data && dataLen > 0) {
+        DHLogEntry *e = [DHLogEntry new];
+        e.category   = DHCategoryAsymmetric;
+        e.algorithm  = [NSString stringWithFormat:@"SIGN-legacy:%@", dh_padding_name(padding)];
+        e.operation  = @"sign";
+        e.publicKeyInfo = describe_key(key);
+        e.input      = [NSData dataWithBytes:data length:dataLen];
+        if (st == errSecSuccess && sig && sigLen && *sigLen > 0)
+            e.output = [NSData dataWithBytes:sig length:*sigLen];
+        e.timestamp  = DHTimestampNow();
+        e.callStack  = DHCallStackFiltered();
+        [[DHLogStore shared] append:e];
+    }
+    return st;
+}
+
+static OSStatus (*orig_SecKeyRawVerify)(SecKeyRef, SecPadding, const uint8_t *, size_t, const uint8_t *, size_t);
+static OSStatus hooked_SecKeyRawVerify(SecKeyRef key, SecPadding padding,
+                                       const uint8_t *data, size_t dataLen,
+                                       const uint8_t *sig, size_t sigLen) {
+    OSStatus st = orig_SecKeyRawVerify ? orig_SecKeyRawVerify(key, padding, data, dataLen, sig, sigLen) : errSecUnimplemented;
+    if (dh_capture_sub_enabled(DH_CAP_ASYMMETRIC) && data && dataLen > 0) {
+        DHLogEntry *e = [DHLogEntry new];
+        e.category   = DHCategoryAsymmetric;
+        e.algorithm  = [NSString stringWithFormat:@"VERIFY-legacy:%@", dh_padding_name(padding)];
+        e.operation  = @"verify";
+        e.publicKeyInfo = describe_key(key);
+        e.input      = [NSData dataWithBytes:data length:dataLen];
+        e.output     = sig ? [NSData dataWithBytes:sig length:sigLen] : nil;
+        e.timestamp  = DHTimestampNow();
+        e.callStack  = DHCallStackFiltered();
+        [[DHLogStore shared] append:e];
+    }
+    return st;
+}
+
 void dh_install_asymmetric_hooks(void) {
     struct rebinding r[] = {
         {"SecKeyCreateSignature",     hooked_SecKeyCreateSignature,     (void **)&orig_SecKeyCreateSignature},
         {"SecKeyVerifySignature",     hooked_SecKeyVerifySignature,     (void **)&orig_SecKeyVerifySignature},
         {"SecKeyCreateEncryptedData", hooked_SecKeyCreateEncryptedData, (void **)&orig_SecKeyCreateEncryptedData},
         {"SecKeyCreateDecryptedData", hooked_SecKeyCreateDecryptedData, (void **)&orig_SecKeyCreateDecryptedData},
+        // 旧版接口: 未导入的进程里 fishhook 不会绑定, orig 保持 NULL, hook 也不会被调用。
+        {"SecKeyEncrypt",             hooked_SecKeyEncrypt,             (void **)&orig_SecKeyEncrypt},
+        {"SecKeyDecrypt",             hooked_SecKeyDecrypt,             (void **)&orig_SecKeyDecrypt},
+        {"SecKeyRawSign",             hooked_SecKeyRawSign,             (void **)&orig_SecKeyRawSign},
+        {"SecKeyRawVerify",           hooked_SecKeyRawVerify,           (void **)&orig_SecKeyRawVerify},
     };
     rebind_symbols(r, sizeof(r)/sizeof(r[0]));
     dh_dlsym_register_rebindings(r, sizeof(r)/sizeof(r[0]));

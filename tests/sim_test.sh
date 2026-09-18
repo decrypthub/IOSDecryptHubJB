@@ -82,6 +82,26 @@ mc "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\"
 eq "$(jq -r '(.result.structuredContent.detail // "")|contains("127.0.0.1")' "$RESULT_DIR/network-event-detail.json")" \
     "true" "网络测试只访问本机回环地址"
 
+echo "[webkit] 轮询 WKWebView 宿主侧事件"
+webkit_ready=0
+for ((i = 0; i < 80; i++)); do
+    mc '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"net","query":"WEBKIT","limit":100}}}' \
+        > "$RESULT_DIR/webkit-events.json" || true
+    if jq -e '[.result.structuredContent.events[] | select(.algorithm=="WEBKIT") | .operation] as $ops |
+        ["navigate","evaluateJavaScript","jsBridge","message","cookie.set","cookie.get",
+         "scheme.register","scheme.start"] |
+        all(. as $op | $ops | index($op) != null)' "$RESULT_DIR/webkit-events.json" >/dev/null 2>&1; then
+        webkit_ready=1
+        break
+    fi
+    sleep 0.2
+done
+eq "$webkit_ready" "1" "WebKit 宿主侧事件已产生"
+for op in navigate evaluateJavaScript jsBridge message cookie.set cookie.get scheme.register scheme.start; do
+    eq "$(jq -r --arg op "$op" '[.result.structuredContent.events[] | select(.algorithm=="WEBKIT" and .operation==$op)] | length > 0' "$RESULT_DIR/webkit-events.json")" \
+        "true" "WebKit 事件包含 $op"
+done
+
 mc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_diag","arguments":{}}}' \
     > "$RESULT_DIR/diagnostics.json"
 eq "$(jq -r '.result.isError' "$RESULT_DIR/diagnostics.json")" "false" "诊断信息可导出"

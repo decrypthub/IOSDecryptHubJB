@@ -45,6 +45,11 @@ int  dh_thunk_install_import(const char *symbol, const char *label);
 // 装 ObjC 方法 hook。classMethod!=0 走类方法。返回 slot(>=0); -1 槽位耗尽; -3 类/方法不存在。
 int  dh_thunk_install_method(const char *className, const char *selector, int classMethod);
 
+// 打开某个 hook 的「参数反引用」(默认关闭, 返回 0 成功 / -1 槽位无效):
+//   - DH_HOOK_METHOD: 前几个参数当 ObjC 对象读 (NSData → hex 前缀, NSString → 文本, 其它 → description)
+//   - DH_HOOK_IMPORT: 前几个参数当「可打印 C 字符串」尝试 (如 getaddrinfo 的域名、dlopen 的路径)
+int  dh_thunk_set_describe(int slot, int on);
+
 // 原子关闭一个 hook(停止记录, 仍透明转发)。越界/未用返回 -1, 成功返回 0。
 int  dh_thunk_disable(int slot);
 

@@ -12,6 +12,7 @@
 #import <CommonCrypto/CommonKeyDerivation.h>
 #import <Security/Security.h>
 #import <AdSupport/AdSupport.h>
+#import <WebKit/WebKit.h>
 #import <dlfcn.h>
 #import <sys/socket.h>
 #import <netinet/in.h>
@@ -509,14 +510,17 @@ static NSString *chk_device_info(void) {
 }
 
 // ==================== 测试台 VC ====================
-@interface TestVC : UIViewController
+@interface TestVC : UIViewController <WKNavigationDelegate, WKScriptMessageHandler, WKURLSchemeHandler>
 @property (nonatomic, strong) UILabel *status;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, UIButton *> *btnMap;
 @property (nonatomic, strong) NSMutableArray<UIScrollView *> *tabScrolls;
 @property (nonatomic, strong) UISegmentedControl *seg;
 @property (nonatomic, strong) UITextView *checkOut;
+@property (nonatomic, strong) WKWebView *wkWebView;
+@property (nonatomic, assign) BOOL wkMessageSeen;
 - (BOOL)triggerByKey:(NSString *)key;
 - (BOOL)triggerScenarioById:(NSString *)scenarioId;
+- (void)runWebKitSuite;
 @end
 
 @implementation TestVC
@@ -592,6 +596,8 @@ static NSString *chk_device_info(void) {
     [self addGroup:t1 title:@"动态库" color:purple buttons:@[@"dlopen 模块", @"dlsym 符号"]
               sels:@[@"onDlopen",@"onDlsym"] keys:@[@"dlopen",@"dlsym"]];
     [self addGroup:t1 title:@"网络矩阵" color:mint buttons:@[@"全部请求跑一遍"] sels:@[@"onNetAll"] keys:@[@"netall"]];
+    [self addGroup:t1 title:@"WebKit 宿主侧观测" color:blue buttons:@[@"WKWebView 全链路"]
+              sels:@[@"onWebKit"] keys:@[@"webkit"]];
 
     // --- tab 2: 伪装自检(验证越狱绕过 / 改机 / 注入隐藏是否生效) ---
     UIStackView *t2 = [self addTabStack];
@@ -641,6 +647,7 @@ static NSString *chk_device_info(void) {
             for (NSString *k in @[@"md5",@"sha1",@"sha256",@"sha512",@"hmac",@"aes",@"3des",@"des",@"rc4",
                                   @"rsasign",@"rsaenc",@"pbkdf",@"big",
                                   @"fwrite",@"fread",@"fdel",@"frename",@"dlopen",@"dlsym",
+                                  @"webkit",
                                   @"chkjb",@"chkurl",@"chkdyld",@"chkanti",@"chkdevice"])
                 [ws triggerByKey:k];
         });
@@ -714,6 +721,7 @@ static NSString *chk_device_info(void) {
     dh_write_status();
     if ([key hasPrefix:@"baseline."]) return [self triggerScenarioById:key];
     if ([key isEqualToString:@"netall"]) { do_net_matrix(); [self flash:@"网络矩阵"]; return YES; }
+    if ([key isEqualToString:@"webkit"]) { [self runWebKitSuite]; [self flash:@"WKWebView 全链路"]; return YES; }
     UIButton *b = self.btnMap[key.lowercaseString];
     if (!b) return NO;
     [b sendActionsForControlEvents:UIControlEventTouchUpInside];
@@ -743,6 +751,8 @@ static NSString *chk_device_info(void) {
         do_network();
     } else if ([scenarioId isEqualToString:@"baseline.network.matrix"]) {
         do_net_matrix();
+    } else if ([scenarioId isEqualToString:@"baseline.webkit"]) {
+        [self runWebKitSuite];
     } else {
         NSLog(@"[scenario] UNKNOWN %@", scenarioId);
         return NO;
@@ -750,6 +760,119 @@ static NSString *chk_device_info(void) {
     NSLog(@"[scenario] DONE %@", scenarioId);
     [self flash:scenarioId];
     return YES;
+}
+
+// WKWebView 宿主侧确定性场景:
+//   navigation -> userScript -> JS message -> evaluateJavaScript -> cookie -> custom scheme
+// 网络和 DOM 仍在 WebContent/Networking 进程；这里验证的是 App 进程可见的 Objective-C 边界。
+- (void)runWebKitSuite {
+    self.wkMessageSeen = NO;
+    WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
+    WKUserContentController *ucc = [WKUserContentController new];
+    [ucc addScriptMessageHandler:self name:@"dh"];
+    NSString *source =
+        @"window.webkit.messageHandlers.dh.postMessage({fixture:'DH_WK_MSG_001',href:location.href});";
+    WKUserScript *script = [[WKUserScript alloc] initWithSource:source
+                                                     injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                                  forMainFrameOnly:NO];
+    [ucc addUserScript:script];
+    cfg.userContentController = ucc;
+    [cfg setURLSchemeHandler:self forURLScheme:@"dhcustom"];
+
+    WKWebView *wk = [[WKWebView alloc] initWithFrame:CGRectMake(0, 0, 320, 180) configuration:cfg];
+    wk.navigationDelegate = self;
+    if (@available(iOS 16.4, *)) wk.inspectable = YES;
+    [self.view addSubview:wk];
+    self.wkWebView = wk;
+
+    NSString *html =
+        @"<html><head><title>DH_WK_TITLE</title></head><body>DH_WK_BODY"
+         "<script>window.webkit.messageHandlers.dh.postMessage("
+         "{fixture:'DH_WK_MSG_001',href:location.href});</script></body></html>";
+    [wk loadHTMLString:html baseURL:[NSURL URLWithString:@"https://dh.test/"]];
+    [wk evaluateJavaScript:@"document.title" completionHandler:^(id result, NSError *error) {
+        NSLog(@"[webkit] eval title result=%@ error=%@", result, error);
+    }];
+
+    WKHTTPCookieStore *store = cfg.websiteDataStore.httpCookieStore;
+    NSHTTPCookie *cookie = [NSHTTPCookie cookieWithProperties:@{
+        NSHTTPCookieName:   @"dh_cookie",
+        NSHTTPCookieValue:  @"DH_WK_COOKIE_001",
+        NSHTTPCookieDomain: @"dh.test",
+        NSHTTPCookiePath:   @"/",
+    }];
+    __weak WKHTTPCookieStore *weakStore = store;
+    [store setCookie:cookie completionHandler:^{
+        [weakStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
+            NSLog(@"[webkit] cookies=%lu", (unsigned long)cookies.count);
+            [weakStore deleteCookie:cookie completionHandler:^{
+                NSLog(@"[webkit] cookie deleted");
+            }];
+        }];
+    }];
+    [cfg.websiteDataStore fetchDataRecordsOfTypes:[NSSet setWithObject:WKWebsiteDataTypeCookies]
+                                completionHandler:^(NSArray<WKWebsiteDataRecord *> *records) {
+        NSLog(@"[webkit] data records=%lu", (unsigned long)records.count);
+    }];
+
+    // 让 HTML 先完成一次 documentEnd message/evaluate，再走自定义 scheme handler。
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [wk loadRequest:[NSURLRequest requestWithURL:
+            [NSURL URLWithString:@"dhcustom://fixture/page?case=webkit-scheme"]]];
+    });
+}
+
+#pragma mark - WKNavigationDelegate
+
+- (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
+    NSLog(@"[webkit] didStart %@", webView.URL.absoluteString);
+}
+- (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
+    NSLog(@"[webkit] didCommit %@", webView.URL.absoluteString);
+}
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    NSLog(@"[webkit] didFinish %@", webView.URL.absoluteString);
+    [webView evaluateJavaScript:@"document.title" completionHandler:^(id result, NSError *error) {
+        NSLog(@"[webkit] finish title=%@ error=%@", result, error);
+    }];
+}
+- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    NSLog(@"[webkit] didFail %@", error.localizedDescription);
+}
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    NSLog(@"[webkit] didFailProvisional %@", error.localizedDescription);
+}
+- (void)webView:(WKWebView *)webView
+    decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
+                    decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    NSLog(@"[webkit] decide %@", navigationAction.request.URL.absoluteString);
+    decisionHandler(WKNavigationActionPolicyAllow);
+}
+
+#pragma mark - WKScriptMessageHandler
+
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"dh"]) self.wkMessageSeen = YES;
+    NSLog(@"[webkit] message name=%@ body=%@", message.name, message.body);
+}
+
+#pragma mark - WKURLSchemeHandler
+
+- (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
+    NSHTTPURLResponse *response =
+        [[NSHTTPURLResponse alloc] initWithURL:urlSchemeTask.request.URL
+                                    statusCode:200
+                                   HTTPVersion:@"HTTP/1.1"
+                                  headerFields:@{@"Content-Type": @"text/html"}];
+    [urlSchemeTask didReceiveResponse:response];
+    [urlSchemeTask didReceiveData:[@"DH_WK_SCHEME_BODY" dataUsingEncoding:NSUTF8StringEncoding]];
+    [urlSchemeTask didFinish];
+}
+
+- (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
+    NSLog(@"[webkit] scheme stop %@", urlSchemeTask.request.URL.absoluteString);
 }
 
 - (void)flash:(NSString *)name {
@@ -796,6 +919,10 @@ static NSString *chk_device_info(void) {
 - (void)onNetAll {
     [self flash:@"网络矩阵 (约 30 秒…)"];
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ do_net_matrix(); dispatch_async(dispatch_get_main_queue(), ^{ [self flash:@"网络矩阵完成"]; }); });
+}
+- (void)onWebKit {
+    [self runWebKitSuite];
+    [self flash:@"WKWebView 全链路"];
 }
 // 伪装自检
 - (void)appendCheck:(NSString *)text {

@@ -187,6 +187,9 @@ typedef struct {
     int      has_more;
     int      result_limit_reached;
     int      scan_size_capped;
+    // 快照分配前的宿主可用内存检查: 不足时拒绝扫描(不分配), 避免把宿主 App 顶到 jetsam 阈值。
+    int      insufficient_memory;
+    uint64_t available_memory;   // os_proc_available_memory() 读数, 0=未知
 } AnalysisScanInfo;
 
 // ============================================================

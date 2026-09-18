@@ -87,7 +87,7 @@ if [[ "$DO_BUILD" -eq 1 ]]; then
 
     "$CC" $TARGET -isysroot "$SIM_SDK" \
         -fobjc-arc -ObjC \
-        -framework UIKit -framework Foundation -framework Security -framework AdSupport \
+        -framework UIKit -framework Foundation -framework Security -framework AdSupport -framework WebKit \
         sim_uitest/main.m -o "$APP_BUNDLE/$APP_NAME"
 
     cp sim_uitest/Info.plist "$APP_BUNDLE/"

@@ -6,6 +6,9 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <setjmp.h>
+#import <signal.h>
+#import "dh_symtab.h"
 #include <dlfcn.h>
 #include "mcp_server.h"
 #include "analysis.h"
@@ -658,6 +661,54 @@ static BOOL objc_name_matches(NSString *value, NSString *query, NSString *mode) 
 }
 
 // find_objc_methods —— 基于 ObjC runtime 的实体查询，只列类自身声明的方法。
+// ---- 运行时枚举的崩溃兜底 ----
+// iOS 16 上对某些 Swift 泛型类调用 class_getName() 会走进
+// objc_class::installMangledNameForLazilyNamedClass → Swift demangler 的 C++ 断言 → abort()。
+// 这是 C++ 层 fatal, @try/@catch 抓不住, 会直接把宿主 App 打死(实测中国移动 10086 崩溃)。
+// 处理: 枚举期间临时接管 SIGABRT, 单个类炸了就跳过它继续, 保证「读运行时信息」永不杀宿主。
+// 线程局部: 只有「正在做危险调用」的那个线程才被兜住; 其它线程/其它位置的 abort
+// 原样交回原处理器(宿主自己的 BCE_signalExceptHandler 等), 不做全局行为劫持。
+static __thread sigjmp_buf gDHObjcAbortJmp;
+static __thread volatile sig_atomic_t gDHObjcAbortGuard = 0;
+static struct sigaction gDHObjcPrevAbrt;
+static BOOL gDHObjcPrevValid = NO;
+
+static void dh_objc_abort_handler(int sig) {
+    if (gDHObjcAbortGuard) {
+        gDHObjcAbortGuard = 0;
+        siglongjmp(gDHObjcAbortJmp, 1);
+    }
+    // 保护范围之外: 链回原处理器, 保持宿主原有行为。
+    if (gDHObjcPrevValid) {
+        if (gDHObjcPrevAbrt.sa_flags & SA_SIGINFO) {
+            if (gDHObjcPrevAbrt.sa_sigaction) gDHObjcPrevAbrt.sa_sigaction(sig, NULL, NULL);
+            return;
+        }
+        if (gDHObjcPrevAbrt.sa_handler == SIG_IGN) return;
+        if (gDHObjcPrevAbrt.sa_handler && gDHObjcPrevAbrt.sa_handler != SIG_DFL) {
+            gDHObjcPrevAbrt.sa_handler(sig);
+            return;
+        }
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+// 安全取类名: 失败(含 abort)返回 NULL 并置 *aborted。
+static const char *dh_safe_class_getName(Class cls, int *aborted) {
+    if (aborted) *aborted = 0;
+    if (!cls) return NULL;
+    if (sigsetjmp(gDHObjcAbortJmp, 1) != 0) {
+        gDHObjcAbortGuard = 0;
+        if (aborted) *aborted = 1;
+        return NULL;
+    }
+    gDHObjcAbortGuard = 1;
+    const char *cn = class_getName(cls);
+    gDHObjcAbortGuard = 0;
+    return cn;
+}
+
 static NSDictionary *tool_find_objc_methods(NSDictionary *args) {
     NSString *exactClass = [args[@"class"] isKindOfClass:NSString.class] ? args[@"class"] : nil;
     NSString *classQuery = [args[@"class_query"] isKindOfClass:NSString.class] ? args[@"class_query"] : nil;
@@ -701,11 +752,21 @@ static NSDictionary *tool_find_objc_methods(NSDictionary *args) {
     NSMutableArray *rows = [NSMutableArray arrayWithCapacity:(NSUInteger)limit];
     NSInteger total = 0;
     NSUInteger scannedClasses = 0;
+    NSInteger skippedLazyNames = 0;
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = dh_objc_abort_handler;
+    sigemptyset(&sa.sa_mask);
+    BOOL abrtHooked = (sigaction(SIGABRT, &sa, &gDHObjcPrevAbrt) == 0);
+    gDHObjcPrevValid = abrtHooked;
 
     for (unsigned int ci = 0; ci < classCount; ci++) {
         Class cls = classes[ci];
-        const char *cn = class_getName(cls);
-        if (!cls || !cn) continue;
+        int aborted = 0;
+        const char *cn = dh_safe_class_getName(cls, &aborted);
+        if (aborted) { skippedLazyNames++; continue; }
+        if (!cn) continue;
         NSString *className = @(cn);
         if (classNeedle.length &&
             [className.lowercaseString rangeOfString:classNeedle].location == NSNotFound) continue;
@@ -766,10 +827,13 @@ static NSDictionary *tool_find_objc_methods(NSDictionary *args) {
             free(methods);
         }
     }
+    if (abrtHooked) { sigaction(SIGABRT, &gDHObjcPrevAbrt, NULL); gDHObjcPrevValid = NO; }
     if (ownsClasses) free(classes);
     return tool_ok(@{
         @"total": @(total), @"offset": @(offset), @"shown": @(rows.count),
-        @"scanned_classes": @(scannedClasses), @"methods": rows,
+        @"scanned_classes": @(scannedClasses),
+        @"skipped_lazy_names": @(skippedLazyNames),
+        @"methods": rows,
         @"note": @"runtime-declared methods only; imp_outside_class_image is an observation, not proof of swizzling",
     });
 }
@@ -884,6 +948,7 @@ static NSDictionary *scan_info_dict(const AnalysisScanInfo *s) {
     if (s->has_more) [reasons addObject:@"scan_range_incomplete"];
     if (s->result_limit_reached) [reasons addObject:@"max_results"];
     if (s->scan_size_capped) [reasons addObject:@"scan_size_capped"];
+    if (s->insufficient_memory) [reasons addObject:@"insufficient_memory"];
     if (s->unreadable_pages) [reasons addObject:@"unreadable_pages"];
     if (s->partial_pages) [reasons addObject:@"partial_pages"];
     BOOL complete = !s->has_more && !s->result_limit_reached &&
@@ -906,6 +971,8 @@ static NSDictionary *scan_info_dict(const AnalysisScanInfo *s) {
         @"has_more": s->has_more ? @YES : @NO,
         @"result_limit_reached": s->result_limit_reached ? @YES : @NO,
         @"scan_size_capped": s->scan_size_capped ? @YES : @NO,
+        @"insufficient_memory": s->insufficient_memory ? @YES : @NO,
+        @"available_memory": @(s->available_memory),
         @"coverage_complete": complete ? @YES : @NO,
         @"incomplete_reasons": reasons,
     };
@@ -942,7 +1009,7 @@ static NSDictionary *tool_find_xrefs(NSDictionary *args) {
     if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
     if (n == -3) { free(rows); return tool_err([NSString stringWithFormat:@"symbol not resolvable via dlsym: %@ (try passing 'address' instead)", sym]); }
     if (n == -4) { free(rows); return tool_err(@"scan_offset is outside the selected image's __text"); }
-    if (n == -5) { free(rows); return tool_err(@"unable to allocate bounded __text snapshot"); }
+    if (n == -5) { free(rows); return tool_err(@"insufficient memory for __text snapshot (host app under memory pressure); retry later or pass a smaller scan_size"); }
 
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
     for (int i = 0; i < n; i++) {
@@ -1010,7 +1077,7 @@ static NSDictionary *tool_find_string_refs(NSDictionary *args) {
     if (n == -1) { free(rows); return tool_err(@"invalid arguments"); }
     if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
     if (n == -4) { free(rows); return tool_err(@"scan_offset is outside the selected image's __text"); }
-    if (n == -5) { free(rows); return tool_err(@"unable to allocate bounded __text snapshot"); }
+    if (n == -5) { free(rows); return tool_err(@"insufficient memory for __text snapshot (host app under memory pressure); retry later or pass a smaller scan_size"); }
 
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
     for (int i = 0; i < n; i++) {
@@ -1075,7 +1142,7 @@ static NSDictionary *tool_find_selector_refs(NSDictionary *args) {
     if (n == -1) { free(rows); return tool_err(@"invalid arguments"); }
     if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
     if (n == -4) { free(rows); return tool_err(@"scan_offset is outside the selected image's __text"); }
-    if (n == -5) { free(rows); return tool_err(@"unable to allocate bounded __text snapshot"); }
+    if (n == -5) { free(rows); return tool_err(@"insufficient memory for __text snapshot (host app under memory pressure); retry later or pass a smaller scan_size"); }
 
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
     for (int i = 0; i < n; i++) {
@@ -1143,7 +1210,7 @@ static NSDictionary *tool_find_function_refs(NSDictionary *args) {
     if (n == -2) { free(rows); return tool_err(@"image or __text section not found"); }
     if (n == -3) { free(rows); return tool_err([NSString stringWithFormat:@"target 0x%llx not attributable to a function (no symbol / LC_FUNCTION_STARTS)", targetAddr]); }
     if (n == -4) { free(rows); return tool_err(@"scan_offset is outside the selected image's __text"); }
-    if (n == -5) { free(rows); return tool_err(@"unable to allocate bounded __text snapshot"); }
+    if (n == -5) { free(rows); return tool_err(@"insufficient memory for __text snapshot (host app under memory pressure); retry later or pass a smaller scan_size"); }
 
     NSMutableArray *arr = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
     for (int i = 0; i < n; i++) {
@@ -1300,8 +1367,13 @@ static NSDictionary *tool_hook_import(NSDictionary *args) {
     if (slot == -1) return tool_err(@"thunk slots exhausted (max 128)");
     if (slot == -2) return tool_err([NSString stringWithFormat:
         @"symbol '%@' not found in any image's import table — it is statically linked or not imported, so fishhook cannot rebind it. Try list_imports to confirm the symbol is an external import.", sym]);
+    BOOL describe = [args[@"describe_args"] boolValue];
+    if (describe && dh_thunk_set_describe(slot, 1) != 0) describe = NO;
     return tool_ok(@{@"slot": @(slot), @"symbol": sym, @"kind": @"import", @"enabled": @YES,
-                     @"note": @"record-only; events land in category 'other' as algorithm 'import-hook'. Query with query_events category=other."});
+                     @"describe_args": describe ? @YES : @NO,
+                     @"note": describe
+                        ? @"record-only + C 字符串参数反引用(前 4 个参数里像可打印字符串的会被记内容); events land in category 'other' as algorithm 'import-hook'."
+                        : @"record-only; events land in category 'other' as algorithm 'import-hook'. 传 describe_args:true 可尝试记录字符串参数(如 getaddrinfo 域名/dlopen 路径)。"});
 }
 
 // hook_method — 对 ObjC 方法装只读 hook (method_setImplementation swizzle)。同一套 thunk, x0=self x1=_cmd。
@@ -1315,10 +1387,15 @@ static NSDictionary *tool_hook_method(NSDictionary *args) {
     if (slot == -1) return tool_err(@"thunk slots exhausted (max 128)");
     if (slot == -3) return tool_err([NSString stringWithFormat:@"class '%@' or its %@ method '%@' not found",
                                      cls, classMethod ? @"class" : @"instance", sel]);
+    BOOL describe = [args[@"describe_args"] boolValue];
+    if (describe && dh_thunk_set_describe(slot, 1) != 0) describe = NO;
     return tool_ok(@{@"slot": @(slot),
                      @"target": [NSString stringWithFormat:@"%@[%@ %@]", classMethod ? @"+" : @"-", cls, sel],
                      @"kind": @"method", @"enabled": @YES,
-                     @"note": @"record-only; events land in category 'other' as algorithm 'objc-hook'."});
+                     @"describe_args": describe ? @YES : @NO,
+                     @"note": describe
+                        ? @"record-only + 参数反引用(NSData→hex, NSString→文本, 其它→description); events land in category 'other' as algorithm 'objc-hook'."
+                        : @"record-only; events land in category 'other' as algorithm 'objc-hook'. 传 describe_args:true 可直接记录参数内容。"});
 }
 
 // list_hooks — 枚举当前所有动态 hook (含命中次数与启用状态)。
@@ -2006,7 +2083,7 @@ static NSArray *tool_definitions(void) {
                     @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
                     @"max_results": @{@"type": @"number", @"description": @"Max call sites returned (default 256, max 2000)"},
                     @"scan_offset": @{@"type": @"number", @"description": @"Byte offset into __text (default 0; use scan.next_scan_offset to continue large images)"},
-                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default/max 48MB)"},
+                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default 8MB, max 48MB; refused when host memory is low)"},
                 },
             },
         },
@@ -2021,7 +2098,7 @@ static NSArray *tool_definitions(void) {
                     @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
                     @"max_results": @{@"type": @"number", @"description": @"Max ref sites returned (default 256, max 2000)"},
                     @"scan_offset": @{@"type": @"number", @"description": @"Byte offset into __text (default 0; use scan.next_scan_offset to continue)"},
-                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default/max 48MB)"},
+                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default 8MB, max 48MB; refused when host memory is low)"},
                 },
             },
         },
@@ -2036,7 +2113,7 @@ static NSArray *tool_definitions(void) {
                     @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
                     @"max_results": @{@"type": @"number", @"description": @"Max call sites returned (default 256, max 2000)"},
                     @"scan_offset": @{@"type": @"number", @"description": @"Byte offset into __text (default 0; use scan.next_scan_offset to continue)"},
-                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default/max 48MB)"},
+                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default 8MB, max 48MB; refused when host memory is low)"},
                 },
                 @"required": @[@"selector"],
             },
@@ -2052,7 +2129,7 @@ static NSArray *tool_definitions(void) {
                     @"image": @{@"type": @"string", @"description": @"Image name substring to scan (default: main executable)"},
                     @"max_results": @{@"type": @"number", @"description": @"Max edges returned (default 256, max 2000)"},
                     @"scan_offset": @{@"type": @"number", @"description": @"Byte offset into __text (default 0; use scan.next_scan_offset to continue)"},
-                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default/max 48MB)"},
+                    @"scan_size": @{@"type": @"number", @"description": @"Bytes to scan in this page (default 8MB, max 48MB; refused when host memory is low)"},
                 },
                 @"required": @[@"target"],
             },
@@ -2301,6 +2378,11 @@ static NSArray *tool_definitions(void) {
                 @"properties": @{@"board": @{@"type": @"string", @"enum": @[@"general", @"crypto", @"file", @"sys", @"dump"], @"description": @"Diag board (default all)"}},
             },
         },
+        @{
+            @"name": @"get_capture_coverage",
+            @"description": @"抓包/加密覆盖自检: 逐层检查本进程导入表, 报告哪些 hook 层真正可用(NSURLSession / OpenSSL TLS / Apple SecureTransport / BSD socket / Network.framework / Security RSA / OpenSSL RSA / CommonCrypto), 并列出 blind_spots —— 那些『未被本 App 使用或已静态链接』因而抓不到的层。用于回答「为什么抓不到这个请求/这段加密」。",
+            @"inputSchema": @{@"type": @"object", @"properties": @{}},
+        },
         // ===== 动态 hook (一期: record-only) — 能力见 get_capabilities.capabilities =====
         @{
             @"name": @"hook_import",
@@ -2310,6 +2392,7 @@ static NSArray *tool_definitions(void) {
                 @"properties": @{
                     @"symbol": @{@"type": @"string", @"description": @"Imported symbol name, no leading underscore, e.g. \"SSL_write\""},
                     @"label":  @{@"type": @"string", @"description": @"Optional note appended to the event name"},
+                    @"describe_args": @{@"type": @"boolean", @"description": @"true 时尝试把前 4 个参数里「像可打印 C 字符串」的读出来(如 getaddrinfo 的域名、dlopen 的路径); 默认 false"},
                 },
                 @"required": @[@"symbol"],
             },
@@ -2323,6 +2406,7 @@ static NSArray *tool_definitions(void) {
                     @"class":       @{@"type": @"string", @"description": @"ObjC class name, e.g. \"NSURLSession\""},
                     @"selector":    @{@"type": @"string", @"description": @"Selector, e.g. \"dataTaskWithRequest:completionHandler:\""},
                     @"classMethod": @{@"type": @"boolean", @"description": @"true for a class (+) method; default false (instance -)"},
+                    @"describe_args": @{@"type": @"boolean", @"description": @"true 时反引用前几个参数内容(NSData→hex 前缀 / NSString→文本 / 其它→description), 直接看明文、密钥、密文; 默认 false"},
                 },
                 @"required": @[@"class", @"selector"],
             },
@@ -2342,6 +2426,81 @@ static NSArray *tool_definitions(void) {
             },
         },
     ];
+}
+
+// ============================================================
+// get_capture_coverage —— 「为什么抓不到」自检
+//
+// 逐层检查本进程的导入表: 符号出现在任何镜像的导入表里 → fishhook 可拦截(该层可用);
+// 全都没有 → 该层要么没被这个 App 用, 要么已被静态链接进二进制(不可 hook)。
+// 这正是分析 B站/中国移动时反复要手工试的事情, 固化成一条工具调用。
+// ObjC 层(NSURLSession/NSURLConnection)不看导入表, 运行时 swizzle 恒可用。
+// ============================================================
+static NSDictionary *tool_get_capture_coverage(NSDictionary *args) {
+    (void)args;
+    NSArray *items = @[
+        @[@"NSURLSession (ObjC)", @"", @"运行时 swizzle, 恒可用"],
+        @[@"NSURLConnection (ObjC)", @"", @"运行时 swizzle, 恒可用"],
+        @[@"OpenSSL/BoringSSL TLS", @"SSL_write", @"App 自带 TLS 才走这里"],
+        @[@"OpenSSL/BoringSSL TLS", @"SSL_write_ex", @""],
+        @[@"Apple SecureTransport", @"SSLWrite", @"Apple 命名无下划线: SSLWrite/SSLRead"],
+        @[@"Apple SecureTransport", @"SSLRead", @""],
+        @[@"BSD socket", @"socket", @"fd 生命周期跟踪"],
+        @[@"BSD socket", @"accept", @"服务端连接登记"],
+        @[@"BSD socket", @"connect", @"自研网络栈入口(可拿 ip:port)"],
+        @[@"BSD socket", @"send", @"TLS 密文; 仅能解 ClientHello SNI"],
+        @[@"BSD socket", @"sendto", @""],
+        @[@"BSD socket", @"sendmsg", @""],
+        @[@"BSD socket", @"recv", @""],
+        @[@"BSD socket", @"recvfrom", @""],
+        @[@"BSD socket", @"recvmsg", @""],
+        @[@"BSD socket", @"read", @"仅对已跟踪 socket fd 记录"],
+        @[@"BSD socket", @"write", @"仅对已跟踪 socket fd 记录"],
+        @[@"BSD socket", @"getaddrinfo", @"域名解析"],
+        @[@"Network.framework", @"nw_connection_send", @"NW 栈的明文入口"],
+        @[@"Network.framework", @"nw_connection_receive", @"NW 栈的明文接收"],
+        @[@"WebSocket (ObjC)", @"", @"NSURLSessionWebSocketTask 真实子类 send/recv/ping"],
+        @[@"WebKit (ObjC)", @"", @"宿主侧 WKWebView 导航/JS bridge/Cookie/Scheme；不含 WebContent/Networking 进程"],
+        @[@"Security RSA (modern)", @"SecKeyCreateEncryptedData", @""],
+        @[@"Security RSA (legacy)", @"SecKeyEncrypt", @""],
+        @[@"OpenSSL RSA", @"RSA_public_encrypt", @"静态链接时不可 hook"],
+        @[@"OpenSSL RSA", @"EVP_PKEY_encrypt", @""],
+        @[@"CommonCrypto", @"CCCrypt", @"对称加密(AES/DES)"],
+        @[@"CommonCrypto RNG", @"CCRandomGenerateBytes", @"随机数(RSA 填充常用)"],
+        @[@"Security RNG", @"SecRandomCopyBytes", @""],
+    ];
+    int imageCount = dh_symtab_image_count();
+    NSMutableArray *rows = [NSMutableArray array];
+    NSMutableDictionary *layerAvail = [NSMutableDictionary dictionary];
+    for (NSArray *item in items) {
+        NSString *layer = item[0], *sym = item[1], *hint = item[2];
+        BOOL available = YES;
+        int images = 0;
+        if (sym.length) {
+            for (int i = 0; i < imageCount; i++) {
+                if (dh_symtab_imports(i, sym.UTF8String, 0, NULL, NULL) > 0) {
+                    images++;
+                    if (images >= 3) break;   // 只需判断可用性, 找到几处即可提前收工(全量扫描会很慢)
+                }
+            }
+            available = images > 0;
+        }
+        NSNumber *prev = layerAvail[layer];
+        layerAvail[layer] = (prev && ![prev boolValue]) ? @(available) : @(prev ? YES : available);
+        [rows addObject:@{@"layer": layer,
+                          @"symbol": sym.length ? sym : @"(runtime swizzle)",
+                          @"available": available ? @YES : @NO,
+                          @"images_importing": @(images),
+                          @"hint": hint}];
+    }
+    NSMutableArray *blind = [NSMutableArray array];
+    for (NSString *layer in layerAvail) if (![layerAvail[layer] boolValue]) [blind addObject:layer];
+    return tool_ok(@{
+        @"images_scanned": @(imageCount),
+        @"layers": rows,
+        @"blind_spots": blind,
+        @"note": @"available=YES: 符号出现在某镜像导入表, fishhook 可拦截; 它只表示候选可用, 不代表当前请求一定经过该层。NO: 未被本 App 使用或已静态链接(不可 hook) —— 后者只能改走其调用层的 ObjC/Swift 入口取证。",
+    });
 }
 
 static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
@@ -2388,12 +2547,50 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
     if ([name isEqualToString:@"get_config"])            return tool_get_config(args);
     if ([name isEqualToString:@"set_config"])            return tool_set_config(args);
     if ([name isEqualToString:@"get_diag"])              return tool_get_diag(args);
+    if ([name isEqualToString:@"get_capture_coverage"])  return tool_get_capture_coverage(args);
     // 动态 hook (一期: record-only)
     if ([name isEqualToString:@"hook_import"])           return tool_hook_import(args);
     if ([name isEqualToString:@"hook_method"])           return tool_hook_method(args);
     if ([name isEqualToString:@"list_hooks"])            return tool_list_hooks(args);
     if ([name isEqualToString:@"unhook"])                return tool_unhook(args);
     return nil;   // 未知工具
+}
+
+// ---- 重活串行化 ----
+// search_memory / find_*_refs / analyze_function 这类工具单次会读几十 MB 宿主内存并跑 Capstone,
+// 而 HTTP worker 队列是并发的: AI 客户端并发调用时会出现 N 份内存快照 + N 份 CPU 同时压在宿主
+// App 上, 在 2~3GB 设备上足以把被注入进程顶到 jetsam/看门狗阈值(表现就是「App 无报告闪退」)。
+// 这里把这类工具统一放到一条串行队列上执行, 单次只允许一个。
+static BOOL tool_is_heavy(NSString *name) {
+    static NSSet *heavy = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        heavy = [NSSet setWithArray:@[@"search_memory", @"find_xrefs", @"find_string_refs",
+                                      @"find_selector_refs", @"find_function_refs",
+                                      @"analyze_function", @"disassemble_function",
+                                      @"find_objc_methods", @"export_events", @"start_dump"]];
+    });
+    return [heavy containsObject:name];
+}
+
+static NSDictionary *dispatch_tool_guarded(NSString *name, NSDictionary *args) {
+    if (!tool_is_heavy(name)) return dispatch_tool(name, args);
+    static dispatch_queue_t q = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        q = dispatch_queue_create("com.decrypthelper.mcp.heavy", DISPATCH_QUEUE_SERIAL);
+    });
+    // 审计: 重活工具的开始/结束都写进 diag。若宿主在扫描期间被杀, 日志里会留下「开始」但没有
+    // 「完成」的那一条 —— 崩溃时间线可直接归因, 不必再靠猜。
+    dh_diag_append(DH_DIAG_SYS, "INFO",
+                   [[NSString stringWithFormat:@"heavy tool %@ 开始", name] UTF8String]);
+    NSTimeInterval t0 = [NSDate timeIntervalSinceReferenceDate];
+    __block NSDictionary *res = nil;
+    dispatch_sync(q, ^{ res = dispatch_tool(name, args); });
+    double ms = ([NSDate timeIntervalSinceReferenceDate] - t0) * 1000.0;
+    dh_diag_append(DH_DIAG_SYS, "INFO",
+                   [[NSString stringWithFormat:@"heavy tool %@ 完成 用时 %.0fms", name, ms] UTF8String]);
+    return res;
 }
 
 // ============================================================
@@ -2459,7 +2656,7 @@ static NSDictionary *dispatch_tool(NSString *name, NSDictionary *args) {
         if (![name isKindOfClass:NSString.class])
             return rpc_error(reqId, -32602, @"Invalid params: missing tool name");
 
-        NSDictionary *toolResult = dispatch_tool(name, args);
+        NSDictionary *toolResult = dispatch_tool_guarded(name, args);
         if (!toolResult)   // 未知工具名: 按 MCP 惯例走工具级错误信封, 而非协议错误
             return rpc_result(reqId, tool_err([NSString stringWithFormat:@"Unknown tool: %@", name]));
         return rpc_result(reqId, toolResult);

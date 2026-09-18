@@ -7,6 +7,8 @@
 #import <objc/message.h>
 #import <pthread.h>
 #import <stdatomic.h>
+#include <mach/mach.h>
+#include <ptrauth.h>
 #import "dh_thunk.h"
 #import "log_store.h"
 #import "fishhook.h"
@@ -19,6 +21,7 @@ typedef struct {
     char             name[160];
     _Atomic uint64_t hits;
     _Atomic int      enabled;
+    _Atomic int      describe_args;   // method hook: 记录时反引用前几个参数内容
     dh_hook_kind     kind;
     int              used;
 } dh_slot_t;
@@ -91,6 +94,104 @@ static inline void *dh_slot_addr(int i) { (void)i; return NULL; }
 // 线程内重入保护: 处理器会调 Foundation(可能再触发被 hook 的底层函数), 用 TLS 标志防无限递归。
 static __thread int g_in_thunk = 0;
 
+// ---- 参数反引用（可选; method hook 走对象反引用, import hook 走可打印 C 字符串判定）----
+// 目的: 直接看到参数「内容」(明文/密钥/密文/字典), 而不是只有一个指针值。
+// 安全策略(逐层收敛, 任何一层不满足就放弃):
+//   1) 指针必须对齐且 > 4GB;
+//   2) 用 vm_read_overwrite 读 isa —— 不可读地址直接失败, 绝不解引用野指针;
+//   3) isa 必须命中运行时类表(objc_copyClassList 排序后 bsearch);
+//   4) 才当作对象访问, 且全程 @try; 文本/字节数都有上限, 不产生大对象。
+static Class *gDHKnownClasses = NULL;
+static unsigned gDHKnownClassCount = 0;
+
+static int dh_class_cmp(const void *pa, const void *pb) {
+    Class a = *(const Class *)pa, b = *(const Class *)pb;
+    return (a < b) ? -1 : ((a > b) ? 1 : 0);
+}
+
+static BOOL dh_is_runtime_class(Class c) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        unsigned n = 0;
+        Class *all = objc_copyClassList(&n);
+        if (all) {
+            qsort(all, n, sizeof(Class), dh_class_cmp);
+            gDHKnownClasses = all;
+            gDHKnownClassCount = n;
+        }
+    });
+    if (!gDHKnownClasses || !c) return NO;
+    return bsearch(&c, gDHKnownClasses, gDHKnownClassCount, sizeof(Class), dh_class_cmp) != NULL;
+}
+
+static NSString *dh_describe_arg(uint64_t v) {
+    if (v < 0x100000000ULL || (v & 0x7)) return nil;
+    // 判定分两层, 顺序很重要:
+    //   1) vm_read_overwrite 确认地址可读(挡野指针);
+    //   2) 读出对象头 isa → 剥离 PAC(arm64e/Apple Silicon 上 isa 是签名指针) → 必须命中运行时类表。
+    // 只有第 2 步通过后才当对象访问。绝不能直接 object_getClass(): 参数里常见的 NSError**
+    // 等「可读但非对象」的指针会让它段错误, @try 也拦不住(SIGSEGV)。
+    uint64_t isaRaw = 0;
+    vm_size_t got = 0;
+    if (vm_read_overwrite(mach_task_self(), (vm_address_t)v, sizeof(isaRaw),
+                          (vm_address_t)&isaRaw, &got) != KERN_SUCCESS || got != sizeof(isaRaw)) return nil;
+    // isa 的编码随平台而变(实测 arm64e/Apple Silicon: PAC 签名在高位 + 低位若干标志位,
+    // 例如真实类 0x1f4c106e8 会以 0x1000001f4c106e9 出现)。逐个候选剥离后比对运行时类表,
+    // 命中任意一个才认为「这是个对象」; 全部不中直接放弃(裸缓冲/出参指针都是这种)。
+    uint64_t masked = isaRaw & 0x0000FFFFFFFFFFFFULL;
+    uint64_t lower  = isaRaw & 0x0000000FFFFFFFFFULL;
+    uint64_t cands[5] = {
+        (uint64_t)(uintptr_t)ptrauth_strip((void *)(uintptr_t)isaRaw, ptrauth_key_asia),
+        masked, masked & ~0x7ULL, lower, lower & ~0x7ULL,
+    };
+    BOOL isObj = NO;
+    for (int ci = 0; ci < 5; ci++) {
+        if (dh_is_runtime_class((__bridge Class)(void *)(uintptr_t)cands[ci])) { isObj = YES; break; }
+    }
+    if (!isObj) return nil;
+    id obj = (__bridge id)(void *)v;
+    @try {
+        if ([obj isKindOfClass:[NSData class]]) {
+            NSData *data = (NSData *)obj;
+            NSUInteger n = MIN(data.length, (NSUInteger)64);
+            NSData *head = n ? [data subdataWithRange:NSMakeRange(0, n)] : [NSData data];
+            return [NSString stringWithFormat:@"NSData(%lu) %@%@", (unsigned long)data.length,
+                    DHHexFromData(head), data.length > n ? @"…" : @""];
+        }
+        if ([obj isKindOfClass:[NSString class]]) {
+            NSString *s = (NSString *)obj;
+            NSString *t = s.length > 200 ? [[s substringToIndex:200] stringByAppendingString:@"…"] : s;
+            return [NSString stringWithFormat:@"NSString(%lu) %@", (unsigned long)s.length, t];
+        }
+        NSString *desc = [obj description];
+        if (desc.length > 300) desc = [[desc substringToIndex:300] stringByAppendingString:@"…"];
+        return desc;
+    } @catch (__unused NSException *ex) {
+        return @"<describe-exception>";
+    }
+}
+
+// C 符号参数: 把指针当「可打印 C 字符串」尝试(只读 256B, 必须 NUL 结尾且全是可见字符)。
+// 用于 getaddrinfo 的域名、dlopen/dlopen 的路径、stat 的 path 等 —— 这类参数没有任何类型信息,
+// 只能靠内容形态判断, 因此判定条件从严: 失败就静默跳过, 绝不误报二进制缓冲。
+static NSString *dh_describe_cstr(uint64_t p) {
+    if (p < 0x100000000ULL) return nil;
+    uint8_t buf[256];
+    vm_size_t got = 0;
+    if (vm_read_overwrite(mach_task_self(), (vm_address_t)p, sizeof(buf),
+                          (vm_address_t)buf, &got) != KERN_SUCCESS || got < 3) return nil;
+    size_t n = 0;
+    while (n < got && buf[n] != 0) {
+        uint8_t c = buf[n];
+        if (c < 0x20 || c > 0x7e) return nil;   // 非可见字符 → 不是纯文本参数
+        n++;
+    }
+    if (n < 2 || n >= got) return nil;          // 没在缓冲区内找到 NUL → 放弃
+    NSString *s = [[NSString alloc] initWithBytes:buf length:n encoding:NSUTF8StringEncoding];
+    if (!s) return nil;
+    return s.length > 200 ? [[s substringToIndex:200] stringByAppendingString:@"…"] : s;
+}
+
 // 汇编蹦床唯一的 C 落点。slot=槽位; gpr[0..8]=x0..x8; caller_sp/lr 供参考。
 void dh_thunk_handler(uint64_t slot, uint64_t *gpr, uint64_t caller_sp, uint64_t lr) {
     if (slot >= DH_THUNK_COUNT) return;
@@ -110,8 +211,20 @@ void dh_thunk_handler(uint64_t slot, uint64_t *gpr, uint64_t caller_sp, uint64_t
             [d appendFormat:@"self=0x%llx _cmd=%s\n", gpr[0],
                 sel_getName((SEL)gpr[1]) ?: "?"];
             for (int i = 2; i < 9; i++) [d appendFormat:@"arg%d(x%d)=0x%llx ", i - 2, i, gpr[i]];
+            if (atomic_load_explicit(&s->describe_args, memory_order_relaxed)) {
+                for (int i = 2; i <= 6; i++) {
+                    NSString *desc = dh_describe_arg(gpr[i]);
+                    if (desc.length) [d appendFormat:@"\n  arg%d = %@", i - 2, desc];
+                }
+            }
         } else {
             for (int i = 0; i < 9; i++) [d appendFormat:@"x%d=0x%llx ", i, gpr[i]];
+            if (atomic_load_explicit(&s->describe_args, memory_order_relaxed)) {
+                for (int i = 0; i <= 3; i++) {
+                    NSString *desc = dh_describe_cstr(gpr[i]);
+                    if (desc.length) [d appendFormat:@"\n  arg%d(cstr) = %@", i, desc];
+                }
+            }
         }
         [d appendFormat:@"\nsp=0x%llx lr=0x%llx", caller_sp, lr];
         e.detail    = d;
@@ -179,6 +292,14 @@ int dh_thunk_install_method(const char *className, const char *selector, int cla
     method_setImplementation(m, (IMP)dh_slot_addr(slot));
     pthread_mutex_unlock(&g_install_lock);
     return slot;
+}
+
+int dh_thunk_set_describe(int slot, int on) {
+    if (slot < 0 || slot >= DH_THUNK_COUNT) return -1;
+    dh_slot_t *s = &g_slots[slot];
+    if (!s->used) return -1;   // import hook 走「可打印 C 字符串」判定, method hook 走对象反引用
+    atomic_store_explicit(&s->describe_args, on ? 1 : 0, memory_order_relaxed);
+    return 0;
 }
 
 int dh_thunk_disable(int slot) {
