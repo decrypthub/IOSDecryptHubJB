@@ -12,6 +12,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <mach-o/dyld.h>
+#import <dlfcn.h>
 #import <pthread.h>
 #include <stdatomic.h>
 #import "log_store.h"
@@ -405,6 +406,27 @@ static IMP dh_wk_original_imp(id receiver, SEL sel) {
     return result;
 }
 
+// ---- 系统镜像判定(反递归叠加用) ----
+// 系统框架/库都在 dyld 共享缓存路径下；宿主 App、第三方 framework、越狱插件分别
+// 落在 /var/containers、/var/jb、/usr/lib/TweakInject 等路径，据此区分。
+static BOOL dh_wk_path_is_system(NSString *path) {
+    return [path hasPrefix:@"/System/Library/"] || [path hasPrefix:@"/usr/lib/"];
+}
+
+static BOOL dh_wk_class_is_system(Class cls) {
+    const char *image = cls ? class_getImageName(cls) : NULL;
+    if (!image) return NO;
+    NSString *path = [NSString stringWithUTF8String:image];
+    return path ? dh_wk_path_is_system(path) : NO;
+}
+
+static BOOL dh_wk_imp_is_system(IMP imp) {
+    Dl_info info = {0};
+    if (!imp || dladdr((const void *)imp, &info) == 0 || !info.dli_fname) return NO;
+    NSString *path = [NSString stringWithUTF8String:info.dli_fname];
+    return path ? dh_wk_path_is_system(path) : NO;
+}
+
 static BOOL dh_wk_swizzle_once(Class cls, SEL sel, IMP replacement, IMP *originalOut) {
     if (!cls || !sel || !replacement) return NO;
     Class implClass = dh_wk_impl_class(cls, sel);
@@ -425,6 +447,23 @@ static BOOL dh_wk_swizzle_once(Class cls, SEL sel, IMP replacement, IMP *origina
         return NO;
     }
     IMP original = method_getImplementation(method);
+    // 反递归叠加 —— 系统类(WebKit/UIKit 等)上的方法如果已经被宿主或第三方 swizzle，
+    // 此时 IMP 落在 App/插件镜像里。我们再叠加会把链路变成
+    //   我们的 hook → 宿主实现 → objc_msgSend(_cmd) → 我们的 hook → …
+    // 形成无限递归，主线程栈溢出(SIGSEGV KERN_PROTECTION_FAILURE)。
+    // 实测 bilibili + TrollFools(注入晚于宿主 swizzle) 100% 复现。
+    // 遇到这种已占用的系统方法直接跳过，把行为完整交还给宿主自己的实现。
+    // App 自定义类(URL scheme handler / delegate)不受此限制，我们本来就该挂它们。
+    if (dh_wk_class_is_system(implClass) && !dh_wk_imp_is_system(original)) {
+        const char *clsName = class_getName(implClass);
+        const char *selName = sel_getName(sel);
+        NSString *msg = [NSString stringWithFormat:
+            @"skip swizzle on system class %s %s: IMP already owned by non-system image (anti-recursion)",
+            clsName ?: "?", selName ?: "?"];
+        dh_diag_append(DH_BOARD, "WARN", msg.UTF8String);
+        pthread_mutex_unlock(&g_dh_wk_swizzle_lock);
+        return NO;
+    }
     method_setImplementation(method, replacement);
     if (originalOut) *originalOut = original;
     if (g_dh_wk_swizzle_count < DH_WK_SWIZZLE_MAX) {
