@@ -91,6 +91,7 @@ echo "[server] port=$PORT (无鉴权)"
 
 echo ""; echo "== 无鉴权直连 (局域网自用, 已移除 token) =="
 eq "$(curl -s -o /dev/null -w '%{http_code}' "$U/api/stats")"              "200" "/api/stats 直连 → 200"
+eq "$(curl -s "$U/api/stats" | jq -r '.pipeline.rss>0')"                   "true" "/api/stats 暴露 pipeline.rss"
 eq "$(curl -s -o /dev/null -w '%{http_code}' "$U/")"                       "200" "HTML 外壳 → 200"
 eq "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$U/api/mcp" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')" "200" "MCP 直连 → 200"
 
@@ -142,6 +143,9 @@ echo ""; echo "== 取证查询 =="
 mc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_stats","arguments":{}}}' > "$RESULT_DIR/dh_stats.json"
 eq "$(jq -r '.result.structuredContent.byCategory | has("net")' "$RESULT_DIR/dh_stats.json")" "true" "get_stats.byCategory 含 net (分类表)"
 eq "$(jq -r '.result.structuredContent.byCategory | has("keychain")' "$RESULT_DIR/dh_stats.json")" "true" "get_stats.byCategory 含 keychain"
+eq "$(jq -r '.result.structuredContent.pipeline.pending|type' "$RESULT_DIR/dh_stats.json")" "number" "get_stats.pipeline 暴露 pending"
+eq "$(jq -r '.result.structuredContent.pipeline.dropped|type' "$RESULT_DIR/dh_stats.json")" "number" "get_stats.pipeline 暴露 dropped"
+eq "$(jq -r '.result.structuredContent.pipeline.rss>0' "$RESULT_DIR/dh_stats.json")" "true" "get_stats.pipeline 暴露 rss"
 mc '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"digest","query":"SHA256","limit":1}}}' > "$RESULT_DIR/dh_dig.json"
 ge "$(jq '.result.structuredContent.matched' "$RESULT_DIR/dh_dig.json")" 1 "query_events digest SHA256 ≥1"
 DSEQ=$(jq -r '.result.structuredContent.events[0].seq // empty' "$RESULT_DIR/dh_dig.json")
@@ -155,7 +159,7 @@ eq "$(jq -r '.result.structuredContent.order' "$RESULT_DIR/dh_export.json")" "se
 eq "$(jq -r '.result.structuredContent.events|length' "$RESULT_DIR/dh_export.json")" "1" "事件导出遵守分页 limit"
 eq "$(jq -r '.result.structuredContent.events[0] | (.inputHex|length)<=16 and (has("inputDump")|not)' "$RESULT_DIR/dh_export.json")" "true" "批量导出限制 blob 且默认不重复 hexdump"
 eq "$(jq -r '.result.structuredContent.events[0] | if .input>8 then .inputTruncated==true else (has("inputTruncated")|not) end' "$RESULT_DIR/dh_export.json")" "true" "blob 截断标记与原始长度一致"
-eq "$(jq -r '.result.structuredContent.events[0].callStackFrames|type' "$RESULT_DIR/dh_export.json")" "array" "批量导出包含结构化调用栈"
+eq "$(jq -r '.result.structuredContent.events[0].callStackFrames|length>0' "$RESULT_DIR/dh_export.json")" "true" "批量导出包含结构化调用栈(>=1 帧)"
 
 mc '{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"export_events","arguments":{"limit":1,"max_blob_bytes":0}}}' > "$RESULT_DIR/dh_export_page1.json"
 EXPORT_NEXT=$(jq -r '.result.structuredContent.cursor.next_after_seq // empty' "$RESULT_DIR/dh_export_page1.json")

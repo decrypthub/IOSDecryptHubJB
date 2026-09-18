@@ -4,8 +4,13 @@
 #import "dh_capture.h"
 #import "dh_capability.h"
 #import "dh_noise.h"
+#import "dh_log_json.h"
 #import <sys/sysctl.h>
 #import <sys/time.h>
+#import <stdatomic.h>
+#import <mach/mach.h>
+#import <execinfo.h>
+#import <dlfcn.h>
 #import <pthread.h>
 #import <errno.h>
 
@@ -25,6 +30,11 @@
     unsigned long long            _logBytes;    // 当前段已写字节 (用于滚动判断); 仅 _queue 内访问
     NSUInteger                    _maxPerCategory;   // 仅 _queue 内写, append 内读
     unsigned long long            _maxLogFileBytes;  // 仅 _queue 内写, _persist 内读
+    _Atomic int64_t               _pendingEvents;    // 已派发但尚未处理的日志条数
+    _Atomic uint64_t              _droppedEvents;    // 因积压主动丢弃的总条数
+    _Atomic uint64_t              _droppedByCategory[DHCategoryOther + 1];
+    NSMutableData                *_writeBuf;         // 落盘批量缓冲 (仅 _queue 内访问)
+    BOOL                          _flushScheduled;   // 仅 _queue 内访问
 }
 @end
 
@@ -34,6 +44,12 @@ static const NSUInteger kMaxBlobLogged    = 64 * 1024;     // 单段 blob 落盘
 static const int        kMaxRotatedBackups = 3;            // 滚动归档最多保留 .1/.2/.3 (总占用 ≤ 单文件上限 ×4)
 static const NSUInteger kDefaultMaxPerCategory = 2000;     // 每类内存保留默认值
 static const unsigned long long kDefaultMaxLogFileBytes = 50ULL * 1024 * 1024;  // 单文件默认 50MB
+// 事件管线背压: 高价值事件(加解密/网络/Keychain)到 hard 才丢; 系统/文件类低价值事件到 soft 就开始丢。
+// 丢弃只计数、不阻塞宿主线程, 指标在 /api/stats.pipeline 与 get_stats.pipeline 暴露。
+static const int64_t  kSoftPendingLimit  = 1024;
+static const int64_t  kHardPendingLimit  = 4096;
+static const NSUInteger kFlushBufferBytes = 64 * 1024;     // 落盘批量阈值
+static const int64_t  kFlushIntervalMs   = 150;             // 最长 150ms 落盘一次, 兼顾崩溃取证
 
 + (instancetype)shared {
     static DHLogStore *s = nil;
@@ -57,6 +73,10 @@ static const unsigned long long kDefaultMaxLogFileBytes = 50ULL * 1024 * 1024;  
         _cfgPath  = [[paths firstObject] stringByAppendingPathComponent:@".dh_logcfg.conf"];
         _maxPerCategory  = kDefaultMaxPerCategory;
         _maxLogFileBytes = kDefaultMaxLogFileBytes;
+        atomic_init(&_pendingEvents, 0);
+        atomic_init(&_droppedEvents, 0);
+        for (int c = 0; c <= DHCategoryOther; c++) atomic_init(&_droppedByCategory[c], 0);
+        _writeBuf = [NSMutableData dataWithCapacity:kFlushBufferBytes];
         [self _loadCfg];
     }
     return self;
@@ -121,6 +141,27 @@ static const unsigned long long kDefaultMaxLogFileBytes = 50ULL * 1024 * 1024;  
     return total;
 }
 
+- (NSDictionary<NSString *, id> *)pipelineStats {
+    NSMutableDictionary *byCat = [NSMutableDictionary dictionary];
+    for (NSInteger c = 0; c <= DHCategoryOther; c++) {
+        uint64_t n = atomic_load_explicit(&_droppedByCategory[c], memory_order_relaxed);
+        if (n > 0) byCat[@(dh_log_category_name((int)c))] = @(n);
+    }
+    unsigned long long rss = 0;
+    mach_task_basic_info_data_t info;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) == KERN_SUCCESS)
+        rss = info.resident_size;
+    return @{
+        @"pending":           @(atomic_load_explicit(&_pendingEvents, memory_order_relaxed)),
+        @"dropped":           @(atomic_load_explicit(&_droppedEvents, memory_order_relaxed)),
+        @"droppedByCategory": byCat,
+        @"rss":               @(rss),
+        @"softLimit":         @(kSoftPendingLimit),
+        @"hardLimit":         @(kHardPendingLimit),
+    };
+}
+
 // 噪点判定: 仅对该条目所属板块的特征串做匹配。
 static BOOL dh_noise_entry_matches_board(DHLogEntry *entry, DHNoiseBoard board) {
     if (dh_noise_matches_for_board(board, DHUTF8FromData(entry.input))) return YES;
@@ -138,18 +179,47 @@ static BOOL dh_noise_entry_matches_board(DHLogEntry *entry, DHNoiseBoard board) 
     if (entry.threadId == 0) { uint64_t t = 0; pthread_threadid_np(NULL, &t); entry.threadId = t; }
     NSInteger ci = (entry.category >= 0 && entry.category <= DHCategoryOther) ? entry.category : DHCategoryOther;
     if (dh_capture_cat_paused((int)ci)) return;            // 该分类已暂停(单一真相源在 dh_capture, 已持久化)
+
+    // 背压: 低价值分类(系统/文件/其它)在 soft 水位开始丢弃; 所有分类到 hard 水位都丢弃。
+    // 高价值事件(加解密/网络/Keychain)在 hard 之前全部保留, 不改变正常使用体验。
+    BOOL lowPriority = (ci == DHCategorySystem || ci == DHCategoryFile || ci == DHCategoryOther);
+    int64_t pending = atomic_fetch_add_explicit(&_pendingEvents, 1, memory_order_relaxed) + 1;
+    if (pending > kHardPendingLimit || (pending > kSoftPendingLimit && lowPriority)) {
+        atomic_fetch_sub_explicit(&_pendingEvents, 1, memory_order_relaxed);
+        [self _noteDroppedForCategory:ci pending:pending];
+        return;
+    }
+
     DHNoiseBoard board = dh_noise_board_for_category(ci);
-    BOOL noisy = dh_noise_enabled_for_board(board) && dh_noise_entry_matches_board(entry, board);
     dispatch_async(_queue, ^{
-        entry.seq = ++self->_seqCounter;
-        NSMutableArray *b = noisy ? self->_noiseBuckets[board] : self->_buckets[ci];
-        [b addObject:entry];
-        if (b.count > self->_maxPerCategory)
-            [b removeObjectsInRange:NSMakeRange(0, b.count - self->_maxPerCategory)];
-        if (noisy) self->_noiseCount[board]++;
-        else       self->_categoryCounts[ci]++;
-        [self _persist:entry];   // 噪点条目仍照常落盘, 保持「崩溃可闭环取证」承诺
+        @try {
+            entry.seq = ++self->_seqCounter;
+            // 噪点判定移到串行队列, 宿主线程只做捕获; 匹配失败也只是少一次降噪, 不影响正确性。
+            BOOL noisy = dh_noise_enabled_for_board(board) && dh_noise_entry_matches_board(entry, board);
+            NSMutableArray *b = noisy ? self->_noiseBuckets[board] : self->_buckets[ci];
+            [b addObject:entry];
+            if (b.count > self->_maxPerCategory)
+                [b removeObjectsInRange:NSMakeRange(0, b.count - self->_maxPerCategory)];
+            if (noisy) self->_noiseCount[board]++;
+            else       self->_categoryCounts[ci]++;
+            [self _persist:entry];   // 噪点条目仍照常落盘, 保持「崩溃可闭环取证」承诺
+        } @finally {
+            atomic_fetch_sub_explicit(&self->_pendingEvents, 1, memory_order_relaxed);
+        }
     });
+}
+
+// 累计被背压丢弃的事件并低频写诊断。热路径只做原子加法, 每 1000 条才格式化一次。
+- (void)_noteDroppedForCategory:(NSInteger)ci pending:(int64_t)pending {
+    uint64_t d = atomic_fetch_add_explicit(&_droppedEvents, 1, memory_order_relaxed) + 1;
+    atomic_fetch_add_explicit(&_droppedByCategory[ci], 1, memory_order_relaxed);
+    if (d == 1 || (d % 1000) == 0) {
+        dh_diag_append(DH_DIAG_GENERAL, "WARN",
+            [[NSString stringWithFormat:
+              @"log pipeline overload: pending=%lld dropped=%llu category=%s (soft=%lld hard=%lld)",
+              (long long)pending, (unsigned long long)d, dh_log_category_name((int)ci),
+              (long long)kSoftPendingLimit, (long long)kHardPendingLimit] UTF8String]);
+    }
 }
 
 // 网络请求先记「只有请求」的条目, 响应到达后用「请求+响应」的完整条目原位替换。
@@ -164,31 +234,42 @@ static BOOL dh_noise_entry_matches_board(DHLogEntry *entry, DHNoiseBoard board) 
         newEntry.timestampMs = (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)(tv.tv_usec / 1000);
     }
     if (newEntry.threadId == 0) { uint64_t t = 0; pthread_threadid_np(NULL, &t); newEntry.threadId = t; }
+    // 网络响应是高价值事件: 只在 hard 水位丢弃; 低于 hard 时无条件排队。
+    int64_t pending = atomic_fetch_add_explicit(&_pendingEvents, 1, memory_order_relaxed) + 1;
+    if (pending > kHardPendingLimit) {
+        atomic_fetch_sub_explicit(&_pendingEvents, 1, memory_order_relaxed);
+        [self _noteDroppedForCategory:DHCategoryNetwork pending:pending];
+        return;
+    }
     dispatch_async(_queue, ^{
-        NSMutableArray *nb = self->_buckets[DHCategoryNetwork];
-        NSUInteger idx = [nb indexOfObjectIdenticalTo:oldEntry];   // 指针身份, 不用 isEqual
-        if (idx != NSNotFound) {
-            newEntry.seq = oldEntry.seq;      // 保持顺序与 correlate_request 锚点稳定
-            nb[idx] = newEntry;
-            [self _persist:newEntry];         // 完整条目补落盘 (磁盘先有请求, 再有完整对)
-            return;
-        }
-        for (int b = 0; b < DHNoiseBoardCount; b++) {   // 也可能被路由进噪声桶
-            NSUInteger ni = [self->_noiseBuckets[b] indexOfObjectIdenticalTo:oldEntry];
-            if (ni != NSNotFound) {
+        @try {
+            NSMutableArray *nb = self->_buckets[DHCategoryNetwork];
+            NSUInteger idx = [nb indexOfObjectIdenticalTo:oldEntry];   // 指针身份, 不用 isEqual
+            if (idx != NSNotFound) {
                 newEntry.seq = oldEntry.seq;
-                self->_noiseBuckets[b][ni] = newEntry;
+                nb[idx] = newEntry;
                 [self _persist:newEntry];
                 return;
             }
+            for (int b = 0; b < DHNoiseBoardCount; b++) {   // 也可能被路由进噪声桶
+                NSUInteger ni = [self->_noiseBuckets[b] indexOfObjectIdenticalTo:oldEntry];
+                if (ni != NSNotFound) {
+                    newEntry.seq = oldEntry.seq;
+                    self->_noiseBuckets[b][ni] = newEntry;
+                    [self _persist:newEntry];
+                    return;
+                }
+            }
+            // 旧条目已被裁剪淘汰: 退化为追加一条完整记录。
+            newEntry.seq = ++self->_seqCounter;
+            [nb addObject:newEntry];
+            if (nb.count > self->_maxPerCategory)
+                [nb removeObjectsInRange:NSMakeRange(0, nb.count - self->_maxPerCategory)];
+            self->_categoryCounts[DHCategoryNetwork]++;
+            [self _persist:newEntry];
+        } @finally {
+            atomic_fetch_sub_explicit(&self->_pendingEvents, 1, memory_order_relaxed);
         }
-        // 旧条目已被裁剪淘汰: 退化为追加一条完整记录。
-        newEntry.seq = ++self->_seqCounter;
-        [nb addObject:newEntry];
-        if (nb.count > self->_maxPerCategory)
-            [nb removeObjectsInRange:NSMakeRange(0, nb.count - self->_maxPerCategory)];
-        self->_categoryCounts[DHCategoryNetwork]++;
-        [self _persist:newEntry];
     });
 }
 
@@ -298,33 +379,52 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
     _logBytes = 0;
 }
 
-- (void)_persist:(DHLogEntry *)e {
-    NSMutableString *s = dh_entry_block(e);
-    NSData *bytes = [s dataUsingEncoding:NSUTF8StringEncoding];
-    if (!bytes) { DH_ERR(@"日志 UTF-8 编码失败, 丢弃 #%llu", (unsigned long long)e.seq); return; }
+- (void)_flushLocked {
+    if (_writeBuf.length == 0) return;
     // 关键: 落盘自身的 open/write(写 decrypt_helper.log) 不能被 file hook 再记录, 否则
     // write -> 记录 -> append -> _persist -> write 无限自我循环. 落盘期间置 dh_in_hook。
-    // 性能: 保持常开句柄, 每条只 write() 不 open/close; 进程崩溃时内核仍会落盘, 不破坏「实时落盘」取证保证。
     int saved = dh_in_hook; dh_in_hook = 1;
     @try {
         if (!_logFH) [self _openLogHandleLocked];
         if (!_logFH) {
             dh_health_persist_fail(errno);
             DH_ERR(@"日志落盘失败: 无法打开 %@ (errno=%d)", _filePath, errno);
-            return;   // @finally 仍会复位 dh_in_hook
-        }
-        @try {
-            [_logFH writeData:bytes];
-            _logBytes += bytes.length;
-        } @catch (NSException *ex) {
-            dh_health_persist_fail(errno);
-            DH_ERR(@"日志落盘失败(追加): %@", ex.reason);
-            [_logFH closeFile]; _logFH = nil;   // 句柄可能已坏, 丢弃, 下条重开
+            [_writeBuf setLength:0];   // 打不开就丢弃本批, 绝不让缓冲无限涨
             return;
         }
+        @try {
+            NSUInteger n = _writeBuf.length;
+            [_logFH writeData:_writeBuf];
+            _logBytes += n;
+        } @catch (NSException *ex) {
+            dh_health_persist_fail(errno);
+            DH_ERR(@"日志落盘失败(批量): %@", ex.reason);
+            [_logFH closeFile]; _logFH = nil;   // 句柄可能已坏, 下批重开
+        }
+        [_writeBuf setLength:0];
         if (_maxLogFileBytes > 0 && _logBytes >= _maxLogFileBytes) [self _rotateLocked];
     } @finally {
         dh_in_hook = saved;
+    }
+}
+
+- (void)_persist:(DHLogEntry *)e {
+    NSMutableString *s = dh_entry_block(e);
+    NSData *bytes = [s dataUsingEncoding:NSUTF8StringEncoding];
+    if (!bytes) { DH_ERR(@"日志 UTF-8 编码失败, 丢弃 #%llu", (unsigned long long)e.seq); return; }
+    // 批量落盘: 先进 64KB 缓冲, 满缓冲或 150ms 到点再 write 一次。
+    // 相比旧的「每条 write 一次」, syscall 数量降两个数量级; 崩溃时最多丢 150ms 日志,
+    // 仍然满足「被检测杀掉后重启可取全量」的取证语义。
+    if (!_writeBuf) _writeBuf = [NSMutableData dataWithCapacity:kFlushBufferBytes];
+    [_writeBuf appendData:bytes];
+    if (_writeBuf.length >= kFlushBufferBytes) {
+        [self _flushLocked];
+    } else if (!_flushScheduled) {
+        _flushScheduled = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kFlushIntervalMs * NSEC_PER_MSEC)), _queue, ^{
+            self->_flushScheduled = NO;
+            [self _flushLocked];
+        });
     }
 }
 
@@ -398,6 +498,7 @@ static NSMutableString *dh_entry_block(DHLogEntry *e) {
         self->_seqCounter = 0;
         memset(self->_categoryCounts, 0, sizeof(self->_categoryCounts));
         int saved = dh_in_hook; dh_in_hook = 1;
+        [self->_writeBuf setLength:0];   // 清空时丢弃尚未落盘的旧数据
         [self->_logFH closeFile]; self->_logFH = nil; self->_logBytes = 0;
         NSFileManager *fm = [NSFileManager defaultManager];
         for (int i = 0; i <= kMaxRotatedBackups; i++)   // 当前段 + 所有滚动备份段
@@ -568,35 +669,113 @@ NSString *DHUTF8FromData(NSData *d) {
     return s ?: @"(非UTF-8)";
 }
 
-NSString *DHCallStackFiltered(void) {
-    NSArray *symbols = [NSThread callStackSymbols];
-    NSMutableString *cs = [NSMutableString string];
-    NSArray *filterOut = @[
-        @"fishhook", @"decrypt_helper", @"DHLogStore",
-        @"CoreFoundation", @"libsystem", @"libdispatch",
-        @"UIKitCore", @"Foundation`",
-    ];
-    int kept = 0;
-    for (NSUInteger i = 0; i < symbols.count; i++) {
-        NSString *sym = symbols[i];
-        BOOL skip = NO;
-        for (NSString *bad in filterOut) {
-            if ([sym containsString:bad]) { skip = YES; break; }
+// ---- 调用栈采集: backtrace() + PC 级符号缓存 ----
+// 旧实现每条事件调用 [NSThread callStackSymbols], 内部对每一帧做 backtrace_symbols/dladdr;
+// 高频 App 上这是最大的 CPU / 分配来源。新实现只 unwind 一次, 每个 PC 的 dladdr 结果缓存复用,
+// 输出格式仍与 parse_callstack_frames 兼容: "  [ 0] 0   image   0xaddr symbol + offset"。
+#define DH_STACK_CACHE_SIZE  1024
+#define DH_STACK_CACHE_PROBES 8
+#define DH_STACK_MAX_FRAMES  48
+#define DH_STACK_MAX_KEEP    20
+
+typedef struct {
+    uintptr_t pc;
+    uint64_t  offset;
+    char      image[64];
+    char      symbol[160];
+} DHStackCacheEntry;
+
+static DHStackCacheEntry g_stackCache[DH_STACK_CACHE_SIZE];
+static pthread_mutex_t g_stackCacheLock = PTHREAD_MUTEX_INITIALIZER;
+
+static NSUInteger dh_stack_slot(uintptr_t pc) {
+    return (NSUInteger)((pc >> 4) & (DH_STACK_CACHE_SIZE - 1));
+}
+
+static BOOL dh_stack_cache_get(uintptr_t pc, DHStackCacheEntry *out) {
+    BOOL found = NO;
+    pthread_mutex_lock(&g_stackCacheLock);
+    NSUInteger slot = dh_stack_slot(pc);
+    for (int i = 0; i < DH_STACK_CACHE_PROBES; i++) {
+        NSUInteger idx = (slot + i) & (DH_STACK_CACHE_SIZE - 1);
+        if (g_stackCache[idx].pc == 0) break;
+        if (g_stackCache[idx].pc == pc) { *out = g_stackCache[idx]; found = YES; break; }
+    }
+    pthread_mutex_unlock(&g_stackCacheLock);
+    return found;
+}
+
+static void dh_stack_cache_put(const DHStackCacheEntry *e) {
+    pthread_mutex_lock(&g_stackCacheLock);
+    NSUInteger slot = dh_stack_slot(e->pc);
+    for (int i = 0; i < DH_STACK_CACHE_PROBES; i++) {
+        NSUInteger idx = (slot + i) & (DH_STACK_CACHE_SIZE - 1);
+        if (g_stackCache[idx].pc == 0 || g_stackCache[idx].pc == e->pc) {
+            g_stackCache[idx] = *e;
+            pthread_mutex_unlock(&g_stackCacheLock);
+            return;
         }
-        if (skip) continue;
-        [cs appendFormat:@"  [%2d] %@\n", kept++, sym];
-        if (kept >= 20) break;
+    }
+    g_stackCache[slot] = *e;   // 缓存满时覆盖首槽, 保证内存有界
+    pthread_mutex_unlock(&g_stackCacheLock);
+}
+
+static BOOL dh_stack_image_skipped(const char *nameOrPath) {
+    if (!nameOrPath || !nameOrPath[0]) return YES;
+    const char *base = strrchr(nameOrPath, '/');
+    base = base ? base + 1 : nameOrPath;
+    static const char *skip[] = {
+        "decrypt_helper", "fishhook", "libsystem", "libdispatch",
+        "CoreFoundation", "Foundation", "UIKitCore", NULL
+    };
+    for (int i = 0; skip[i]; i++) if (strstr(base, skip[i])) return YES;
+    return NO;
+}
+
+NSString *DHCallStackFiltered(void) {
+    void *frames[DH_STACK_MAX_FRAMES];
+    int n = backtrace(frames, DH_STACK_MAX_FRAMES);
+    NSMutableString *cs = [NSMutableString string];
+    int kept = 0;
+    for (int i = 0; i < n && kept < DH_STACK_MAX_KEEP; i++) {
+        uintptr_t pc = (uintptr_t)frames[i];
+        if (!pc) continue;
+        DHStackCacheEntry e;
+        if (!dh_stack_cache_get(pc, &e)) {
+            Dl_info info = {0};
+            if (dladdr((const void *)pc, &info) == 0 || !info.dli_fname) continue;
+            const char *base = strrchr(info.dli_fname, '/');
+            base = base ? base + 1 : info.dli_fname;
+            memset(&e, 0, sizeof(e));
+            e.pc = pc;
+            snprintf(e.image, sizeof(e.image), "%s", base);
+            if (info.dli_sname && info.dli_saddr) {
+                snprintf(e.symbol, sizeof(e.symbol), "%s", info.dli_sname);
+                e.offset = (uint64_t)(pc - (uintptr_t)info.dli_saddr);
+            } else {
+                snprintf(e.symbol, sizeof(e.symbol), "%s", base);
+                e.offset = (uint64_t)(pc - (uintptr_t)info.dli_fbase);
+            }
+            dh_stack_cache_put(&e);
+        }
+        if (dh_stack_image_skipped(e.image)) continue;
+        [cs appendFormat:@"  [%2d] 0   %s   0x%llx %s + %llu\n",
+         kept++, e.image, (unsigned long long)pc, e.symbol, (unsigned long long)e.offset];
     }
     if (kept == 0) [cs appendString:@"  (无应用相关栈帧)\n"];
     return cs;
 }
 
 NSString *DHTimestampNow(void) {
-    static NSDateFormatter *fmt = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        fmt = [[NSDateFormatter alloc] init];
-        fmt.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
-    });
-    return [fmt stringFromDate:[NSDate date]];
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    struct tm tmv;
+    if (!localtime_r(&tv.tv_sec, &tmv)) return @"";
+    char buf[40];
+    int n = snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d.%03d",
+                     tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+                     tmv.tm_hour, tmv.tm_min, tmv.tm_sec, (int)(tv.tv_usec / 1000));
+    if (n <= 0) return @"";
+    return [[NSString alloc] initWithBytes:buf length:(NSUInteger)MIN(n, (int)sizeof(buf) - 1)
+                                  encoding:NSUTF8StringEncoding] ?: @"";
 }

@@ -198,6 +198,7 @@ static void handle_stats(int fd) {
         @"port":        @(gPort),
         @"version":     @DH_HTTP_VERSION,
         @"logBytes":    @(logBytes),
+        @"pipeline":    [s pipelineStats],   // 背压/丢弃/RSS: 用于长时间运行稳定性观测
         @"noiseCount":  @[@([s noiseCountForBoard:DHNoiseBoardCrypto]), @([s noiseCountForBoard:DHNoiseBoardSys])],
         @"noiseEnabled": @[@(dh_noise_enabled_for_board(DHNoiseBoardCrypto)), @(dh_noise_enabled_for_board(DHNoiseBoardSys))],
         @"process":     [s processInfo],

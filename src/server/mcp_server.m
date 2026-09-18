@@ -1322,6 +1322,7 @@ static NSDictionary *tool_get_stats(NSDictionary *args) {
         @"byCategory": byCat,
         @"capture":    capture,
         @"logBytes":   @([s totalLogBytes]),
+        @"pipeline":   [s pipelineStats],
         @"process":    [s processInfo] ?: @{},
         @"noise":      @{@"crypto": @([s noiseCountForBoard:DHNoiseBoardCrypto]),
                          @"sys":    @([s noiseCountForBoard:DHNoiseBoardSys])},
@@ -1963,6 +1964,7 @@ static NSDictionary *tool_get_diag(NSDictionary *args) {
         @"board":    [b isKindOfClass:NSString.class] ? b : @"all",
         @"diag":     (txt && txt[0]) ? @(txt) : @"",
         @"unhooked": (unh && unh[0]) ? @(unh) : @"",
+        @"pipeline": [[DHLogStore shared] pipelineStats],
     });
 }
 
