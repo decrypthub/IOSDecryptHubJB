@@ -16,7 +16,7 @@
 | 登录主机 | `passport.bilibili.com`（**运行时抓到 SNI**） | `client.app.coc.10086.cn`（HTTP 事件 + 包内接口码表） | `scapp.sda.cn`（HTTP 事件） |
 | 登录路径 | `/x/passport-login/oauth2/login`（二进制字符串表；运行时拼装） | `/biz-orange/LN/uamthreenetworklogin/login`（码表 `60028`） | `/api/api-bff-service/bff_service/customer/login/login4UserNamePassword` |
 | 请求体 | appkey 方案 query string（MD5 签名） | `Base64(AES-128-CBC(JSON))`，**已实际解密复核** | `{"param": Base64(AES-128-ECB(JSON))}`，**已实际解密 + 回加密复核** |
-| 敏感字段 | 密码 = `base64(RSA-PKCS1(盐+密码))`；请求密钥 = `base64(RSA-PKCS1(盐+AESKey))`；指纹 = `hex(AES-128-CBC(设备JSON))` | 手机号 = `AES-128-ECB(固定密钥)`；`cellNum` = **128B RSA-1024 随机填充密文** | `password` 明文进业务 JSON（外层 AES 套壳）；key 每次随机 16 字节，无 RSA |
+| 敏感字段 | 密码 = `base64(RSA-PKCS1(盐+密码))`；请求密钥 = `base64(RSA-PKCS1(盐+AESKey))`；指纹 = `hex(AES-128-CBC(设备JSON))` | 手机号 = `AES-128-ECB(固定密钥)`；`cellNum` = **128B RSA-1024 随机填充密文** | `password` 明文进业务 JSON（外层 AES 套壳）；key 为二进制内硬编码 16 字节常量，无 RSA |
 | 签名 | `sign = MD5(待签名 query string)` | `x-sign = MD5(x-token + "_" + x-time + "_" + x-nonce + "_null")` ✅ 复核一致；`xs = MD5(url + "_" + JSON + "_Leadeon/SecurityOrganization")` ✅ | 本次实测请求头无 sign |
 | 加密原语可见性 | 全部可见（RSA/AES/MD5 均为 hook 到明文的原始调用） | 对称/摘要可见；RSA 为静态实现，**明文不可观测** | 静态 CryptoSwift；1.27.3 用 `mlock + capture_memory` 在命中瞬间抓到 key，**已闭环** |
 
