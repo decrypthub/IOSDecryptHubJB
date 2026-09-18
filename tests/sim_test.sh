@@ -88,10 +88,12 @@ ge "$(jq -r '.result.structuredContent.byCategory.sym // 0' "$RESULT_DIR/stats.j
 ge "$(jq -r '.result.structuredContent.byCategory.file // 0' "$RESULT_DIR/stats.json")" 5 "文件事件 >= 5"
 ge "$(jq -r '.result.structuredContent.byCategory.net // 0' "$RESULT_DIR/stats.json")" 1 "回环网络事件 >= 1"
 
-mc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"net","limit":10}}}' \
+mc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"net","query":"X-Validator","limit":20}}}' \
     > "$RESULT_DIR/network-events.json"
 ge "$(jq -r '.result.structuredContent.matched // 0' "$RESULT_DIR/network-events.json")" 1 "存在网络事件明细"
-NET_SEQ=$(jq -r '.result.structuredContent.events[0].seq // 0' "$RESULT_DIR/network-events.json")
+eq "$(jq -r '[.result.structuredContent.events[] | select(.algorithm=="HTTP")] | length > 0' "$RESULT_DIR/network-events.json")" \
+    "true" "存在本机 NSURLSession 网络事件"
+NET_SEQ=$(jq -r '[.result.structuredContent.events[] | select(.algorithm=="HTTP")][0].seq // 0' "$RESULT_DIR/network-events.json")
 mc "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"get_event\",\"arguments\":{\"seq\":$NET_SEQ}}}" \
     > "$RESULT_DIR/network-event-detail.json"
 eq "$(jq -r '(.result.structuredContent.detail // "")|contains("127.0.0.1")' "$RESULT_DIR/network-event-detail.json")" \
@@ -124,7 +126,8 @@ for ((i = 0; i < 100; i++)); do
         > "$RESULT_DIR/webkit-probe-events.json" || true
     if jq -e '[.result.structuredContent.events[] | select(.algorithm=="WEBKIT-PROBE") | .operation] as $ops |
         ["fetch.request","fetch.response","xhr.request","xhr.response","websocket.open",
-         "websocket.send","websocket.recv","beacon"] |
+         "websocket.send","websocket.recv","beacon","eventsource.open","eventsource.message",
+         "console","localStorage.set","crypto.digest"] |
         all(. as $op | $ops | index($op) != null)' "$RESULT_DIR/webkit-probe-events.json" >/dev/null 2>&1; then
         probe_ready=1
         break
@@ -132,7 +135,8 @@ for ((i = 0; i < 100; i++)); do
     sleep 0.2
 done
 eq "$probe_ready" "1" "WebKit JS 网络探针事件已产生"
-for op in fetch.request fetch.response xhr.request xhr.response websocket.open websocket.send websocket.recv beacon; do
+for op in fetch.request fetch.response xhr.request xhr.response websocket.open websocket.send websocket.recv beacon \
+          eventsource.open eventsource.message console localStorage.set crypto.digest; do
     eq "$(jq -r --arg op "$op" '[.result.structuredContent.events[] | select(.algorithm=="WEBKIT-PROBE" and .operation==$op)] | length > 0' "$RESULT_DIR/webkit-probe-events.json")" \
         "true" "WebKit JS 探针包含 $op"
 done

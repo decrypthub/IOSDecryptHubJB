@@ -794,6 +794,10 @@ static NSString *chk_device_info(void) {
          "xhr.setRequestHeader('X-WK-Fixture','DH_WK_XHR_001');xhr.send('DH_WK_XHR_BODY_001');"
          "var ws=new WebSocket('ws://127.0.0.1:8099/ws');"
          "ws.onopen=function(){ws.send('DH_WK_WS_001');};"
+         "var es=new EventSource('/events?case=webkit-eventsource');"
+         "console.log('DH_WK_CONSOLE_001');"
+         "localStorage.setItem('DH_WK_STORAGE_001','storage-value');"
+         "crypto.subtle.digest('SHA-256',new TextEncoder().encode('DH_WK_CRYPTO_001'));"
          "if(navigator.sendBeacon)navigator.sendBeacon('/echo?case=webkit-beacon','DH_WK_BEACON_001');"
          "</script></body></html>";
     [wk loadHTMLString:html baseURL:[NSURL URLWithString:@"http://127.0.0.1:8099/"]];
