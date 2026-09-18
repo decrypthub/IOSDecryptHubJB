@@ -48,6 +48,7 @@
 | 1.27.1 | **新增 WebKit JS 网络探针 P1（默认关闭）**：`set_webkit_probe` 可开启 document-start JS 探针，记录 `fetch` / `XMLHttpRequest` / `WebSocket` / `sendBeacon` 的 URL、Header、请求/响应体（默认 8KB 截断）；支持域名 allow/deny 和敏感 Header 默认脱敏；仅对新创建的 WKWebView 生效 |
 | 1.27.2 | **扩展 WebKit JS 探针 P1.1**：新增 `EventSource`、`console`、localStorage/sessionStorage 和 WebCrypto 元数据观测；相对 URL 统一解析为绝对 URL；simulator 场景覆盖 fetch/XHR/WebSocket/SSE/存储/WebCrypto |
 | 1.27.3 | **新增 `capture_memory` 参数内存快照**：`hook_import` / `hook_method` 可在命中瞬间按寄存器参数抓一段内存（`{ptr_arg, len_arg, max_bytes}`，上限 8KB）写入事件 `input`。解决「缓冲区在函数返回后被释放/复用，事后回读只剩零」的结构性盲区（如 CryptoSwift AES 的 key buffer 经 `mlock` 锁定后立即释放）；仍只改 GOT/IMP 指针，不引入 inline hook 或可执行内存 |
+| 1.27.3 | **修复 TrollStore/TrollFools 注入下的 WebKit 递归崩溃**：宿主 App 若先 swizzle 了 `-[WKWebView loadRequest:]` 等系统方法（bilibili 实测），我们再把该 IMP 当 original 叠加，会形成「我们 → 宿主实现 → `objc_msgSend(_cmd)` → 我们」的无限递归，主线程栈溢出（SIGSEGV KERN_PROTECTION_FAILURE）。现在系统类上的方法若已被非系统镜像占用则跳过该 hook，把行为完整交还宿主；App 自定义类（scheme handler / delegate）不受影响 |
 
 ## 四、已知结构性边界（不是缺陷，是模型限制）
 
