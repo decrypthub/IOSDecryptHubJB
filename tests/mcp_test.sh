@@ -423,12 +423,13 @@ sleep 1
 mc '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"other","limit":80}}}' > "$RESULT_DIR/hook_capture_events.json"
 eq "$(jq -r '[.result.structuredContent.events[] | select((.detail // "") | contains("captured arg1")) | select(.inLen > 0)] | length > 0' "$RESULT_DIR/hook_capture_events.json")" "true" "capture_memory 命中瞬间记录了参数内存(inLen>0)"
 # method 侧: 挂 NSFileManager 的目录列举, 再用 list_files 主动触发 —— 确定性验证「参数内容被记录」
-mc '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"hook_method","arguments":{"class":"NSFileManager","selector":"contentsOfDirectoryAtPath:error:","describe_args":true}}}' > "$RESULT_DIR/hook_method.json"
-eq "$(jq -r '.result.structuredContent.slot>=0 and .result.structuredContent.describe_args' "$RESULT_DIR/hook_method.json")" "true" "hook_method(describe_args) 安装并启用"
+mc '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"hook_method","arguments":{"class":"NSFileManager","selector":"contentsOfDirectoryAtPath:error:","describe_args":true,"capture_memory":{"ptr_arg":2,"len_arg":-1,"max_bytes":32}}}}' > "$RESULT_DIR/hook_method.json"
+eq "$(jq -r '.result.structuredContent.slot>=0 and .result.structuredContent.describe_args and .result.structuredContent.capture.ptr_arg==2' "$RESULT_DIR/hook_method.json")" "true" "hook_method(describe_args + capture_memory) 安装并启用"
 mc '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"list_files","arguments":{"path":"Documents"}}}' > /dev/null
 sleep 1
 mc '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"other","limit":50}}}' > "$RESULT_DIR/hook_events.json"
 eq "$(jq -r '[.result.structuredContent.events[].detail // ""] | any(contains("arg0 ="))' "$RESULT_DIR/hook_events.json")" "true" "method hook 记录了参数内容(反引用生效)"
+eq "$(jq -r '[.result.structuredContent.events[] | select((.detail // "") | contains("captured arg2")) | select(.inLen > 0)] | length > 0' "$RESULT_DIR/hook_events.json")" "true" "method hook capture_memory 命中瞬间记录了内存(inLen>0)"
 
 if grep -Eq '^(jq:|curl:)' "$RESULT_DIR/stderr.log"; then
   ng "测试过程中没有 jq/curl 执行错误"
