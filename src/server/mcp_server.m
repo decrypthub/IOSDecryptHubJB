@@ -1359,22 +1359,68 @@ static NSDictionary *tool_get_capabilities(NSDictionary *args) {
 }
 
 // ===== 动态 hook (一期: record-only, 观测) =====
+// 解析可选的 capture_memory 配置: 命中瞬间把「指针参数指向的内存」拷进事件 input。
+// ptr_arg/len_arg 是寄存器位置(x0..x8; method hook 里 x0=self, x1=_cmd, x2..=参数)。
+// 未提供该字段时 *ptr_arg_out = -1(不开启); 校验失败时返回 NO 并给出错误文本。
+static BOOL dh_parse_capture_memory(NSDictionary *args, int *ptr_arg_out, int *len_arg_out,
+                                    int *max_bytes_out, NSString **error) {
+    *ptr_arg_out = -1; *len_arg_out = -1; *max_bytes_out = 0;
+    id raw = args[@"capture_memory"];
+    if (!raw) return YES;
+    if (![raw isKindOfClass:NSDictionary.class]) {
+        if (error) *error = @"capture_memory 必须是对象: {ptr_arg, len_arg, max_bytes}";
+        return NO;
+    }
+    NSDictionary *c = raw;
+    int ptrArg = c[@"ptr_arg"] ? [c[@"ptr_arg"] intValue] : 0;
+    int lenArg = c[@"len_arg"] ? [c[@"len_arg"] intValue] : -1;
+    int maxBytes = c[@"max_bytes"] ? [c[@"max_bytes"] intValue] : 256;
+    if (ptrArg < 0 || ptrArg > 8 || lenArg < -1 || lenArg > 8 ||
+        maxBytes < 1 || maxBytes > DH_THUNK_CAPTURE_MAX) {
+        if (error) *error = [NSString stringWithFormat:
+            @"capture_memory 参数越界(ptr_arg=%d, len_arg=%d, max_bytes=%d); 要求 ptr_arg 0..8, len_arg -1..8, max_bytes 1..%d",
+            ptrArg, lenArg, maxBytes, DH_THUNK_CAPTURE_MAX];
+        return NO;
+    }
+    *ptr_arg_out = ptrArg; *len_arg_out = lenArg; *max_bytes_out = maxBytes;
+    return YES;
+}
+
+static NSDictionary *dh_capture_echo(int ptrArg, int lenArg, int maxBytes) {
+    if (ptrArg < 0) return nil;
+    return @{@"ptr_arg": @(ptrArg), @"len_arg": @(lenArg), @"max_bytes": @(maxBytes)};
+}
+
 // hook_import — 对导入 C 符号装只读 hook (fishhook GOT)。命中即记录参数寄存器快照+调用栈, 再透明转发。
 static NSDictionary *tool_hook_import(NSDictionary *args) {
     NSString *sym = args[@"symbol"];
     if (![sym isKindOfClass:NSString.class] || sym.length == 0) return tool_err(@"symbol required");
     NSString *label = [args[@"label"] isKindOfClass:NSString.class] ? args[@"label"] : nil;
+    int capPtr = -1, capLen = -1, capMax = 0;
+    NSString *capErr = nil;
+    if (!dh_parse_capture_memory(args, &capPtr, &capLen, &capMax, &capErr)) return tool_err(capErr);
     int slot = dh_thunk_install_import(sym.UTF8String, label.UTF8String);
     if (slot == -1) return tool_err(@"thunk slots exhausted (max 128)");
     if (slot == -2) return tool_err([NSString stringWithFormat:
         @"symbol '%@' not found in any image's import table — it is statically linked or not imported, so fishhook cannot rebind it. Try list_imports to confirm the symbol is an external import.", sym]);
     BOOL describe = [args[@"describe_args"] boolValue];
     if (describe && dh_thunk_set_describe(slot, 1) != 0) describe = NO;
-    return tool_ok(@{@"slot": @(slot), @"symbol": sym, @"kind": @"import", @"enabled": @YES,
-                     @"describe_args": describe ? @YES : @NO,
-                     @"note": describe
-                        ? @"record-only + C 字符串参数反引用(前 4 个参数里像可打印字符串的会被记内容); events land in category 'other' as algorithm 'import-hook'."
-                        : @"record-only; events land in category 'other' as algorithm 'import-hook'. 传 describe_args:true 可尝试记录字符串参数(如 getaddrinfo 域名/dlopen 路径)。"});
+    if (capPtr >= 0 && dh_thunk_set_capture(slot, capPtr, capLen, capMax) != 0) {
+        dh_thunk_disable(slot);
+        return tool_err(@"capture_memory 应用失败");
+    }
+    NSMutableDictionary *res = [@{@"slot": @(slot), @"symbol": sym, @"kind": @"import", @"enabled": @YES,
+                                  @"describe_args": describe ? @YES : @NO,
+                                  @"note": describe
+                                    ? @"record-only + C 字符串参数反引用(前 4 个参数里像可打印字符串的会被记内容); events land in category 'other' as algorithm 'import-hook'."
+                                    : @"record-only; events land in category 'other' as algorithm 'import-hook'. 传 describe_args:true 可尝试记录字符串参数(如 getaddrinfo 域名/dlopen 路径)。"} mutableCopy];
+    NSDictionary *capEcho = dh_capture_echo(capPtr, capLen, capMax);
+    if (capEcho) {
+        res[@"capture"] = capEcho;
+        res[@"note"] = [NSString stringWithFormat:@"%@ capture_memory: 命中瞬间把 arg%d 指向的内存(长度取自 arg%d%@, 上限 %d 字节)拷进事件 input。",
+                        res[@"note"], capPtr, capLen, capLen < 0 ? @"(未指定, 用固定上限)" : @"", capMax];
+    }
+    return tool_ok(res);
 }
 
 // hook_method — 对 ObjC 方法装只读 hook (method_setImplementation swizzle)。同一套 thunk, x0=self x1=_cmd。
@@ -1384,19 +1430,33 @@ static NSDictionary *tool_hook_method(NSDictionary *args) {
     if (![cls isKindOfClass:NSString.class] || cls.length == 0) return tool_err(@"class required");
     if (![sel isKindOfClass:NSString.class] || sel.length == 0) return tool_err(@"selector required");
     BOOL classMethod = [args[@"classMethod"] boolValue];
+    int capPtr = -1, capLen = -1, capMax = 0;
+    NSString *capErr = nil;
+    if (!dh_parse_capture_memory(args, &capPtr, &capLen, &capMax, &capErr)) return tool_err(capErr);
     int slot = dh_thunk_install_method(cls.UTF8String, sel.UTF8String, classMethod ? 1 : 0);
     if (slot == -1) return tool_err(@"thunk slots exhausted (max 128)");
     if (slot == -3) return tool_err([NSString stringWithFormat:@"class '%@' or its %@ method '%@' not found",
                                      cls, classMethod ? @"class" : @"instance", sel]);
     BOOL describe = [args[@"describe_args"] boolValue];
     if (describe && dh_thunk_set_describe(slot, 1) != 0) describe = NO;
-    return tool_ok(@{@"slot": @(slot),
-                     @"target": [NSString stringWithFormat:@"%@[%@ %@]", classMethod ? @"+" : @"-", cls, sel],
-                     @"kind": @"method", @"enabled": @YES,
-                     @"describe_args": describe ? @YES : @NO,
-                     @"note": describe
-                        ? @"record-only + 参数反引用(NSData→hex, NSString→文本, 其它→description); events land in category 'other' as algorithm 'objc-hook'."
-                        : @"record-only; events land in category 'other' as algorithm 'objc-hook'. 传 describe_args:true 可直接记录参数内容。"});
+    if (capPtr >= 0 && dh_thunk_set_capture(slot, capPtr, capLen, capMax) != 0) {
+        dh_thunk_disable(slot);
+        return tool_err(@"capture_memory 应用失败");
+    }
+    NSMutableDictionary *res = [@{@"slot": @(slot),
+                                  @"target": [NSString stringWithFormat:@"%@[%@ %@]", classMethod ? @"+" : @"-", cls, sel],
+                                  @"kind": @"method", @"enabled": @YES,
+                                  @"describe_args": describe ? @YES : @NO,
+                                  @"note": describe
+                                    ? @"record-only + 参数反引用(NSData→hex, NSString→文本, 其它→description); events land in category 'other' as algorithm 'objc-hook'."
+                                    : @"record-only; events land in category 'other' as algorithm 'objc-hook'. 传 describe_args:true 可直接记录参数内容。"} mutableCopy];
+    NSDictionary *capEcho = dh_capture_echo(capPtr, capLen, capMax);
+    if (capEcho) {
+        res[@"capture"] = capEcho;
+        res[@"note"] = [NSString stringWithFormat:@"%@ capture_memory: 命中瞬间把 x%d 指向的内存(长度取自 x%d%@, 上限 %d 字节)拷进事件 input。",
+                        res[@"note"], capPtr, capLen, capLen < 0 ? @"(未指定, 用固定上限)" : @"", capMax];
+    }
+    return tool_ok(res);
 }
 
 // list_hooks — 枚举当前所有动态 hook (含命中次数与启用状态)。
@@ -1406,13 +1466,17 @@ static NSDictionary *tool_list_hooks(NSDictionary *args) {
     int n = dh_thunk_list(info, DH_THUNK_COUNT);
     NSMutableArray *arr = [NSMutableArray array];
     for (int i = 0; i < n; i++) {
-        [arr addObject:@{
+        NSMutableDictionary *h = [@{
             @"slot":    @(info[i].slot),
             @"kind":    info[i].kind == DH_HOOK_METHOD ? @"method" : @"import",
             @"name":    info[i].name ? @(info[i].name) : @"",
             @"hits":    @(info[i].hits),
             @"enabled": info[i].enabled ? @YES : @NO,
-        }];
+        } mutableCopy];
+        NSDictionary *cap = dh_capture_echo(info[i].capture_ptr_arg, info[i].capture_len_arg,
+                                            info[i].capture_max_bytes);
+        if (cap) h[@"capture"] = cap;
+        [arr addObject:h];
     }
     return tool_ok(@{@"count": @((NSInteger)arr.count), @"capacity": @(DH_THUNK_COUNT), @"hooks": arr});
 }
@@ -2412,6 +2476,15 @@ static NSArray *tool_definitions(void) {
                     @"symbol": @{@"type": @"string", @"description": @"Imported symbol name, no leading underscore, e.g. \"SSL_write\""},
                     @"label":  @{@"type": @"string", @"description": @"Optional note appended to the event name"},
                     @"describe_args": @{@"type": @"boolean", @"description": @"true 时尝试把前 4 个参数里「像可打印 C 字符串」的读出来(如 getaddrinfo 的域名、dlopen 的路径); 默认 false"},
+                    @"capture_memory": @{
+                        @"type": @"object",
+                        @"description": @"命中瞬间按寄存器参数抓一段内存到事件 input(hex/utf8)。不会事后回读, 因此能在缓冲区释放/复用前拿到 key、IV、明文。ptr_arg 是 x 寄存器索引(0..8), len_arg 指定哪个寄存器是长度(-1=固定抓 max_bytes), max_bytes 上限 8192。例: mlock 的 key 缓冲 → {ptr_arg:0, len_arg:1, max_bytes:4096}",
+                        @"properties": @{
+                            @"ptr_arg":   @{@"type": @"number", @"description": @"指针参数所在 x 寄存器索引 0..8; 默认 0"},
+                            @"len_arg":   @{@"type": @"number", @"description": @"长度参数所在 x 寄存器索引 0..8; -1 表示用 max_bytes 固定长度; 默认 -1"},
+                            @"max_bytes": @{@"type": @"number", @"description": @"单次最多拷贝字节数 1..8192; 默认 256"},
+                        },
+                    },
                 },
                 @"required": @[@"symbol"],
             },
@@ -2426,6 +2499,15 @@ static NSArray *tool_definitions(void) {
                     @"selector":    @{@"type": @"string", @"description": @"Selector, e.g. \"dataTaskWithRequest:completionHandler:\""},
                     @"classMethod": @{@"type": @"boolean", @"description": @"true for a class (+) method; default false (instance -)"},
                     @"describe_args": @{@"type": @"boolean", @"description": @"true 时反引用前几个参数内容(NSData→hex 前缀 / NSString→文本 / 其它→description), 直接看明文、密钥、密文; 默认 false"},
+                    @"capture_memory": @{
+                        @"type": @"object",
+                        @"description": @"命中瞬间按 x 寄存器参数抓一段内存到事件 input。x0=self, x1=_cmd, x2..=方法参数。用于 ObjC 方法参数里裸指针+长度的加密缓冲。",
+                        @"properties": @{
+                            @"ptr_arg":   @{@"type": @"number", @"description": @"指针参数所在 x 寄存器索引 0..8; 默认 0"},
+                            @"len_arg":   @{@"type": @"number", @"description": @"长度参数所在 x 寄存器索引 0..8; -1 表示用 max_bytes 固定长度; 默认 -1"},
+                            @"max_bytes": @{@"type": @"number", @"description": @"单次最多拷贝字节数 1..8192; 默认 256"},
+                        },
+                    },
                 },
                 @"required": @[@"class", @"selector"],
             },

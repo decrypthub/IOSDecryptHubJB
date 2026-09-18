@@ -1,23 +1,24 @@
 # 真实 App 登录协议分析记录
 
-本目录记录用 IOSDecryptHub 对真实 App 做的运行时分析。两份主文档：
+本目录记录用 IOSDecryptHub 对真实 App 做的运行时分析。主文档：
 
 - [哔哩哔哩-登录协议.md](哔哩哔哩-登录协议.md)
 - [中国移动-登录加密.md](中国移动-登录加密.md)
+- [山东航空-登录加密.md](山东航空-登录加密.md)
 - [WebKit-能力规划.md](WebKit-能力规划.md)
 
 > 所有记录只写协议结构，不含真实密钥、手机号、设备标识或令牌。
 
 ## 一、结论速览
 
-| | 哔哩哔哩 `tv.danmaku.bilianime` | 中国移动 `cn.10086.app` |
-|---|---|---|
-| 登录主机 | `passport.bilibili.com`（**运行时抓到 SNI**） | `client.app.coc.10086.cn`（HTTP 事件 + 包内接口码表） |
-| 登录路径 | `/x/passport-login/oauth2/login`（二进制字符串表；运行时拼装） | `/biz-orange/LN/uamthreenetworklogin/login`（码表 `60028`） |
-| 请求体 | appkey 方案 query string（MD5 签名） | `Base64(AES-128-CBC(JSON))`，**已实际解密复核** |
-| 敏感字段 | 密码 = `base64(RSA-PKCS1(盐+密码))`；请求密钥 = `base64(RSA-PKCS1(盐+AESKey))`；指纹 = `hex(AES-128-CBC(设备JSON))` | 手机号 = `AES-128-ECB(固定密钥)`；`cellNum` = **128B RSA-1024 随机填充密文** |
-| 签名 | `sign = MD5(待签名 query string)` | `x-sign = MD5(x-token + "_" + x-time + "_" + x-nonce + "_null")` ✅ 复核一致；`xs = MD5(url + "_" + JSON + "_Leadeon/SecurityOrganization")` ✅ |
-| 加密原语可见性 | 全部可见（RSA/AES/MD5 均为 hook 到明文的原始调用） | 对称/摘要可见；RSA 为静态实现，**明文不可观测** |
+| | 哔哩哔哩 `tv.danmaku.bilianime` | 中国移动 `cn.10086.app` | 山东航空 `cn.com.shandongair.m` |
+|---|---|---|---|
+| 登录主机 | `passport.bilibili.com`（**运行时抓到 SNI**） | `client.app.coc.10086.cn`（HTTP 事件 + 包内接口码表） | `scapp.sda.cn`（HTTP 事件） |
+| 登录路径 | `/x/passport-login/oauth2/login`（二进制字符串表；运行时拼装） | `/biz-orange/LN/uamthreenetworklogin/login`（码表 `60028`） | `/api/api-bff-service/bff_service/customer/login/login4UserNamePassword` |
+| 请求体 | appkey 方案 query string（MD5 签名） | `Base64(AES-128-CBC(JSON))`，**已实际解密复核** | `{"param": Base64(AES-128-ECB(JSON))}`，**已实际解密 + 回加密复核** |
+| 敏感字段 | 密码 = `base64(RSA-PKCS1(盐+密码))`；请求密钥 = `base64(RSA-PKCS1(盐+AESKey))`；指纹 = `hex(AES-128-CBC(设备JSON))` | 手机号 = `AES-128-ECB(固定密钥)`；`cellNum` = **128B RSA-1024 随机填充密文** | `password` 明文进业务 JSON（外层 AES 套壳）；key 每次随机 16 字节，无 RSA |
+| 签名 | `sign = MD5(待签名 query string)` | `x-sign = MD5(x-token + "_" + x-time + "_" + x-nonce + "_null")` ✅ 复核一致；`xs = MD5(url + "_" + JSON + "_Leadeon/SecurityOrganization")` ✅ | 本次实测请求头无 sign |
+| 加密原语可见性 | 全部可见（RSA/AES/MD5 均为 hook 到明文的原始调用） | 对称/摘要可见；RSA 为静态实现，**明文不可观测** | 静态 CryptoSwift；1.27.3 用 `mlock + capture_memory` 在命中瞬间抓到 key，**已闭环** |
 
 ## 二、证据等级标注
 
@@ -46,6 +47,7 @@
 | 1.27.0 | **新增 WebKit 宿主侧观测 P0**：`WKWebView` 导航与 `evaluateJavaScript`、`WKUserContentController` / `WKScriptMessage` bridge、`WKHTTPCookieStore` 与 `WKWebsiteDataStore`、`WKURLSchemeHandler`、`WKWebView.inspectable`；只走 ObjC swizzle，WebKit 晚加载时自动安装，TrollStore / Jailbreak 共用 |
 | 1.27.1 | **新增 WebKit JS 网络探针 P1（默认关闭）**：`set_webkit_probe` 可开启 document-start JS 探针，记录 `fetch` / `XMLHttpRequest` / `WebSocket` / `sendBeacon` 的 URL、Header、请求/响应体（默认 8KB 截断）；支持域名 allow/deny 和敏感 Header 默认脱敏；仅对新创建的 WKWebView 生效 |
 | 1.27.2 | **扩展 WebKit JS 探针 P1.1**：新增 `EventSource`、`console`、localStorage/sessionStorage 和 WebCrypto 元数据观测；相对 URL 统一解析为绝对 URL；simulator 场景覆盖 fetch/XHR/WebSocket/SSE/存储/WebCrypto |
+| 1.27.3 | **新增 `capture_memory` 参数内存快照**：`hook_import` / `hook_method` 可在命中瞬间按寄存器参数抓一段内存（`{ptr_arg, len_arg, max_bytes}`，上限 8KB）写入事件 `input`。解决「缓冲区在函数返回后被释放/复用，事后回读只剩零」的结构性盲区（如 CryptoSwift AES 的 key buffer 经 `mlock` 锁定后立即释放）；仍只改 GOT/IMP 指针，不引入 inline hook 或可执行内存 |
 
 ## 四、已知结构性边界（不是缺陷，是模型限制）
 

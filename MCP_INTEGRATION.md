@@ -33,6 +33,10 @@
 | `objc_resolve_imp` | selector → 当前运行时 IMP；明确不宣称恢复第三方 swizzle 前实现 | `selector` + (`class` 或 `object`) |
 | `find_objc_methods` | 查询 runtime 中类自身声明的方法：selector、type encoding、当前 IMP、class image 与 IMP image；支持过滤和分页 | 至少一个过滤条件 |
 | `export_events` | 按稳定 seq 游标分页导出完整事件 JSON，包含密钥/IV/输入输出/结构化调用栈和进程元数据；blob 有界并标记截断 | 无 |
+| `hook_import` | 对导入 C 符号装只读 hook（fishhook GOT 改写，不生成可执行内存）：记录 x0–x8 寄存器快照、调用栈；`describe_args:true` 尝试读 C 字符串参数；`capture_memory:{ptr_arg,len_arg,max_bytes}` 在命中瞬间把指针参数指向的内存拷贝到事件 `input`（hex/UTF-8），用于缓冲区随后被释放/复用的场景（如 CryptoSwift 的 key buffer）。仅对 `list_imports` 里出现的符号有效 | `symbol` |
+| `hook_method` | 对 ObjC 方法装只读 hook（`method_setImplementation`，不使用 inline hook）：记录 self/SEL/参数寄存器与调用栈；`describe_args:true` 反引用对象参数；`capture_memory` 语义同上（x0=self, x1=_cmd, x2..=方法参数） | `class`, `selector` |
+| `list_hooks` | 枚举本次会话已装的动态 hook：slot、kind、名称、命中次数、启用状态与 capture 配置 | 无 |
+| `unhook` | 原子关闭动态 hook（thunk 继续透明转发，无 unbind 竞态） | `slot` |
 
 可选参数：`disassemble`/`analyze_function` 的 `arch`（`arm64`/`arm`/`thumb`，默认 arm64）；`list_imports` 的 `query`（子串过滤）、`limit`；四个 xref 工具均支持 `image`（镜像名子串，默认主程序）、`max_results`（默认 256）、`scan_offset` 和 `scan_size`。
 

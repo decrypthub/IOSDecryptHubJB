@@ -414,6 +414,14 @@ echo ""; echo "== 动态 hook + 参数反引用 =="
 # import 侧: 只验证能装 + describe_args 生效(是否命中取决于宿主是否真的调这个符号)
 mc '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"hook_import","arguments":{"symbol":"getenv","label":"t-cstr","describe_args":true}}}' > "$RESULT_DIR/hook_import.json"
 eq "$(jq -r '.result.structuredContent.slot>=0 and .result.structuredContent.describe_args' "$RESULT_DIR/hook_import.json")" "true" "hook_import(describe_args) 安装并启用"
+# 参数内存快照: 挂 send 抓 x1 缓冲区(x2 是长度), 由 HTTP 响应本身确定性触发。
+# 关键点: 内容必须在命中瞬间拷贝 —— 事后回读时缓冲区可能已被释放/复用(CryptoSwift key 场景)。
+mc '{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"hook_import","arguments":{"symbol":"send","label":"t-capture","capture_memory":{"ptr_arg":1,"len_arg":2,"max_bytes":64}}}}' > "$RESULT_DIR/hook_capture.json"
+eq "$(jq -r '.result.structuredContent.slot>=0 and .result.structuredContent.capture.ptr_arg==1 and .result.structuredContent.capture.max_bytes==64' "$RESULT_DIR/hook_capture.json")" "true" "hook_import(capture_memory) 安装并回显配置"
+mc '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"get_stats","arguments":{}}}' > /dev/null
+sleep 1
+mc '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"query_events","arguments":{"category":"other","limit":80}}}' > "$RESULT_DIR/hook_capture_events.json"
+eq "$(jq -r '[.result.structuredContent.events[] | select((.detail // "") | contains("captured arg1")) | select(.inLen > 0)] | length > 0' "$RESULT_DIR/hook_capture_events.json")" "true" "capture_memory 命中瞬间记录了参数内存(inLen>0)"
 # method 侧: 挂 NSFileManager 的目录列举, 再用 list_files 主动触发 —— 确定性验证「参数内容被记录」
 mc '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"hook_method","arguments":{"class":"NSFileManager","selector":"contentsOfDirectoryAtPath:error:","describe_args":true}}}' > "$RESULT_DIR/hook_method.json"
 eq "$(jq -r '.result.structuredContent.slot>=0 and .result.structuredContent.describe_args' "$RESULT_DIR/hook_method.json")" "true" "hook_method(describe_args) 安装并启用"

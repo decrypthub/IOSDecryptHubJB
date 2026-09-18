@@ -36,6 +36,9 @@ typedef struct {
     dh_hook_kind kind;
     uint64_t     hits;
     const char  *name;    // 符号名 / "-[Class sel]"
+    int          capture_ptr_arg;   // >=0: 从该寄存器位置的指针参数抓内存; -1: 未开启
+    int          capture_len_arg;   // >=0: 从该寄存器位置取长度; -1: 用 capture_max_bytes 固定长度
+    int          capture_max_bytes; // 单次最多抓多少字节
 } dh_hook_info;
 
 // 装导入符号 hook。symbol 去前导下划线的名字(与 list_imports 一致); label 可为 NULL。
@@ -49,6 +52,14 @@ int  dh_thunk_install_method(const char *className, const char *selector, int cl
 //   - DH_HOOK_METHOD: 前几个参数当 ObjC 对象读 (NSData → hex 前缀, NSString → 文本, 其它 → description)
 //   - DH_HOOK_IMPORT: 前几个参数当「可打印 C 字符串」尝试 (如 getaddrinfo 的域名、dlopen 的路径)
 int  dh_thunk_set_describe(int slot, int on);
+
+// 打开某个 hook 的「参数内存快照」(默认关闭, 返回 0 成功 / -1 参数或槽位无效):
+// 命中瞬间按寄存器索引取「指针参数」和「长度参数」, 用 vm_read_overwrite 拷贝一份内存写进事件
+// 的 input 字段。ptr_arg: x 寄存器索引(import: x0..x8; method: x0=self, x1=_cmd, x2..=参数);
+// len_arg >=0 时从该寄存器读长度, -1 时固定抓 max_bytes。max_bytes 上限 DH_THUNK_CAPTURE_MAX。
+// 传 ptr_arg<0 关闭捕获。拷贝在 hook 命中时完成, 不依赖事后回读(缓冲区可能已释放/复用)。
+#define DH_THUNK_CAPTURE_MAX 8192
+int  dh_thunk_set_capture(int slot, int ptr_arg, int len_arg, int max_bytes);
 
 // 原子关闭一个 hook(停止记录, 仍透明转发)。越界/未用返回 -1, 成功返回 0。
 int  dh_thunk_disable(int slot);

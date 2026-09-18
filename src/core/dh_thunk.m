@@ -22,6 +22,9 @@ typedef struct {
     _Atomic uint64_t hits;
     _Atomic int      enabled;
     _Atomic int      describe_args;   // method hook: 记录时反引用前几个参数内容
+    _Atomic int      capture_ptr_arg;   // >=0: 抓该寄存器位置的指针参数
+    _Atomic int      capture_len_arg;   // >=0: 从该寄存器取长度; -1: 固定长度
+    _Atomic int      capture_max_bytes;
     dh_hook_kind     kind;
     int              used;
 } dh_slot_t;
@@ -107,6 +110,37 @@ static unsigned gDHKnownClassCount = 0;
 static int dh_class_cmp(const void *pa, const void *pb) {
     Class a = *(const Class *)pa, b = *(const Class *)pb;
     return (a < b) ? -1 : ((a > b) ? 1 : 0);
+}
+
+// 参数内存快照: 命中时把 [ptr, ptr+len) 拷贝到事件 input。
+// 为什么必须在 handler 里拷贝: 调用返回后原缓冲区可能立刻被释放/复用(实测 CryptoSwift
+// 的 key 缓冲区经 mlock 锁定又立即 munlock, 事后回读只剩零), 只有命中瞬间的内容可信。
+// 安全边界: 只读用户态地址, 显式长度上限, vm_read_overwrite 失败/部分成功都安全降级,
+// 不新增任何可执行内存或 inline hook。
+static NSData *dh_capture_arg_memory(dh_slot_t *s, uint64_t *gpr) {
+    int ptrArg = atomic_load_explicit(&s->capture_ptr_arg, memory_order_acquire);
+    if (ptrArg < 0 || ptrArg > 8) return nil;
+    int lenArg = atomic_load_explicit(&s->capture_len_arg, memory_order_relaxed);
+    int maxBytes = atomic_load_explicit(&s->capture_max_bytes, memory_order_relaxed);
+    if (maxBytes <= 0 || maxBytes > DH_THUNK_CAPTURE_MAX) return nil;
+    uint64_t addr = gpr[ptrArg];
+    if (addr < 0x100000000ULL) return nil;
+    size_t want = (size_t)maxBytes;
+    if (lenArg >= 0 && lenArg <= 8) {
+        uint64_t rawLen = gpr[lenArg];
+        if (rawLen == 0) return nil;
+        if (rawLen < want) want = (size_t)rawLen;
+    }
+    if (want == 0) return nil;
+    NSMutableData *data = [NSMutableData dataWithLength:want];
+    if (!data) return nil;
+    vm_size_t got = 0;
+    kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)addr,
+                                         (vm_size_t)want,
+                                         (mach_vm_address_t)data.mutableBytes, &got);
+    if (kr != KERN_SUCCESS || got == 0) return nil;
+    if (got < want) data.length = got;
+    return data;
 }
 
 static BOOL dh_is_runtime_class(Class c) {
@@ -226,6 +260,20 @@ void dh_thunk_handler(uint64_t slot, uint64_t *gpr, uint64_t caller_sp, uint64_t
                 }
             }
         }
+        int capPtr = atomic_load_explicit(&s->capture_ptr_arg, memory_order_acquire);
+        if (capPtr >= 0 && capPtr <= 8) {
+            int capLen = atomic_load_explicit(&s->capture_len_arg, memory_order_relaxed);
+            int capMax = atomic_load_explicit(&s->capture_max_bytes, memory_order_relaxed);
+            NSData *captured = dh_capture_arg_memory(s, gpr);
+            if (captured.length) {
+                e.input = captured;
+                [d appendFormat:@"\ncaptured arg%d(x%d) @0x%llx = %lu bytes (ptr_arg=%d len_arg=%d max=%d)",
+                 capPtr, capPtr, gpr[capPtr], (unsigned long)captured.length, capPtr, capLen, capMax];
+            } else {
+                [d appendFormat:@"\ncaptured arg%d(x%d) @0x%llx failed (ptr_arg=%d len_arg=%d max=%d)",
+                 capPtr, capPtr, gpr[capPtr], capPtr, capLen, capMax];
+            }
+        }
         [d appendFormat:@"\nsp=0x%llx lr=0x%llx", caller_sp, lr];
         e.detail    = d;
         e.callStack = DHCallStackFiltered();
@@ -253,6 +301,7 @@ int dh_thunk_install_import(const char *symbol, const char *label) {
              (label && label[0]) ? " " : "", (label && label[0]) ? label : "");
     s->kind = DH_HOOK_IMPORT;
     s->used = 1;
+    atomic_store_explicit(&s->capture_ptr_arg, -1, memory_order_relaxed);
     g_dh_thunk_orig[slot] = NULL;
     struct rebinding rb = { symbol, dh_slot_addr(slot), &g_dh_thunk_orig[slot] };
     rebind_symbols(&rb, 1);
@@ -287,6 +336,7 @@ int dh_thunk_install_method(const char *className, const char *selector, int cla
     snprintf(s->name, sizeof(s->name), "%c[%s %s]", classMethod ? '+' : '-', className, selector);
     s->kind = DH_HOOK_METHOD;
     s->used = 1;
+    atomic_store_explicit(&s->capture_ptr_arg, -1, memory_order_relaxed);
     g_dh_thunk_orig[slot] = (void *)method_getImplementation(m);
     atomic_store_explicit(&s->enabled, 1, memory_order_release);
     method_setImplementation(m, (IMP)dh_slot_addr(slot));
@@ -299,6 +349,24 @@ int dh_thunk_set_describe(int slot, int on) {
     dh_slot_t *s = &g_slots[slot];
     if (!s->used) return -1;   // import hook 走「可打印 C 字符串」判定, method hook 走对象反引用
     atomic_store_explicit(&s->describe_args, on ? 1 : 0, memory_order_relaxed);
+    return 0;
+}
+
+int dh_thunk_set_capture(int slot, int ptr_arg, int len_arg, int max_bytes) {
+    if (slot < 0 || slot >= DH_THUNK_COUNT) return -1;
+    dh_slot_t *s = &g_slots[slot];
+    if (!s->used) return -1;
+    if (ptr_arg < 0) {   // 关闭捕获
+        atomic_store_explicit(&s->capture_ptr_arg, -1, memory_order_release);
+        return 0;
+    }
+    if (ptr_arg > 8 || len_arg < -1 || len_arg > 8) return -1;
+    if (max_bytes < 1 || max_bytes > DH_THUNK_CAPTURE_MAX) return -1;
+    // 先发布长度/上限, 最后用 release 发布 ptr_arg —— handler 用 acquire 读 ptr_arg,
+    // 保证它看到 ptr_arg>=0 时另外两个字段一定已是本次配置。
+    atomic_store_explicit(&s->capture_len_arg, len_arg, memory_order_relaxed);
+    atomic_store_explicit(&s->capture_max_bytes, max_bytes, memory_order_relaxed);
+    atomic_store_explicit(&s->capture_ptr_arg, ptr_arg, memory_order_release);
     return 0;
 }
 
@@ -319,6 +387,9 @@ int dh_thunk_list(dh_hook_info *out, int max) {
         out[n].kind    = g_slots[i].kind;
         out[n].hits    = atomic_load_explicit(&g_slots[i].hits, memory_order_relaxed);
         out[n].name    = g_slots[i].name;
+        out[n].capture_ptr_arg   = atomic_load_explicit(&g_slots[i].capture_ptr_arg, memory_order_acquire);
+        out[n].capture_len_arg   = atomic_load_explicit(&g_slots[i].capture_len_arg, memory_order_relaxed);
+        out[n].capture_max_bytes = atomic_load_explicit(&g_slots[i].capture_max_bytes, memory_order_relaxed);
         n++;
     }
     return n;   // 实际写入条数 (跳过被作废的槽)
