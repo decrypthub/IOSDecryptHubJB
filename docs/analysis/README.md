@@ -5,6 +5,7 @@
 - [哔哩哔哩-登录协议.md](哔哩哔哩-登录协议.md)
 - [中国移动-登录加密.md](中国移动-登录加密.md)
 - [山东航空-登录加密.md](山东航空-登录加密.md)
+- [逆向技巧-静态链接加密库.md](逆向技巧-静态链接加密库.md)
 - [WebKit-能力规划.md](WebKit-能力规划.md)
 
 > 所有记录只写协议结构，不含真实密钥、手机号、设备标识或令牌。
@@ -72,3 +73,9 @@ idh connect <设备IP>:8088
 idh call <target> get_capture_coverage     # 先看哪些层可抓
 idh call <target> query_events --arguments '{"category":"net","limit":50}'
 ```
+
+## 六、通用逆向技巧
+
+- [逆向技巧-静态链接加密库.md](逆向技巧-静态链接加密库.md)：标准 `sym` / `asym` / `digest` hook 全空、
+  网络层却有密文时，如何用 `list_imports` + `hook_import(capture_memory)` 抓静态链接加密库的 key，
+  以及「解密 + 回加密」闭环验证和仍然抓不到时的边界。

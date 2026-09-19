@@ -1356,6 +1356,16 @@ static NSDictionary *tool_get_capabilities(NSDictionary *args) {
         @"process":        [[DHLogStore shared] processInfo] ?: @{},
         // 本变体暴露的动态 hook 工具名。一期尚未实现动态 hook, 故为空; 二期按能力位填充。
         @"dynamicHookTools": @[],
+        // 标准 crypto hook 全空时的通用排查路径。让 Agent 在第一次握手就拿到这条引导,
+        // 而不是只对着 CCCrypt/EVP 空转。
+        @"guidance": @{
+            @"whenNoCryptoEvents": @[
+                @"标准 sym/asym/digest hook 全空、但网络层已有密文时，先 get_capture_coverage 确认 blind spot。",
+                @"用 list_images → list_imports 找静态加密库仍会调用的「指针+长度」导入(mlock/memcpy/read/send/getrandom)。",
+                @"用 hook_import + capture_memory 在命中瞬间抓缓冲区；只存指针、事后 read_memory 通常已被释放/复用。",
+                @"候选 key 必须做「解密 + 回加密逐字节一致」闭环，并多次触发确认 key 生命周期。",
+            ],
+        },
     });
 }
 
@@ -1975,7 +1985,7 @@ static NSArray *tool_definitions(void) {
     return @[
         @{
             @"name": @"get_capabilities",
-            @"description": @"Handshake — call FIRST. Returns plugin version, packaging variant (dev/trollstore), CPU arch, current phase (observe|override), and per-tier hook capability flags (hook_import/hook_method/unpack). Use it to decide which hook tier to use instead of attempting unsupported ones.",
+            @"description": @"Handshake — call FIRST. Returns plugin version, packaging variant (dev/trollstore), CPU arch, current phase (observe|override), and per-tier hook capability flags (hook_import/hook_method/unpack). Also returns guidance.whenNoCryptoEvents: when standard crypto hooks (CCCrypt/EVP/SecKey) show no events but network traffic is encrypted, enumerate pointer+length imports (mlock/memcpy/read/send/getrandom) and capture at call time with hook_import(capture_memory) instead of attempting unsupported hooks.",
             @"inputSchema": @{@"type": @"object", @"properties": @{}},
         },
         @{
@@ -2471,7 +2481,7 @@ static NSArray *tool_definitions(void) {
         // ===== 动态 hook (一期: record-only) — 能力见 get_capabilities.capabilities =====
         @{
             @"name": @"hook_import",
-            @"description": @"Install a record-only hook on an imported C symbol via fishhook (GOT rebind). On each call it snapshots arg registers x0-x8 + backtrace, records an event (category 'other', algorithm 'import-hook'), then transparently forwards to the original. Only works for symbols that appear in some image's import table (check with list_imports); statically-linked symbols cannot be rebound. Observe-only — does not alter behavior.",
+            @"description": @"Install a record-only hook on an imported C symbol via fishhook (GOT rebind). On each call it snapshots arg registers x0-x8 + backtrace, records an event (category 'other', algorithm 'import-hook'), then transparently forwards to the original. Only works for symbols that appear in some image's import table (check with list_imports); statically-linked symbols cannot be rebound. When standard crypto hooks miss, enumerate pointer+length imports (mlock/memcpy/read/send/getrandom) and use capture_memory to copy the buffer at call time; a later read_memory is usually too late because the buffer may already be freed or reused. Observe-only — does not alter behavior.",
             @"inputSchema": @{
                 @"type": @"object",
                 @"properties": @{
@@ -2480,7 +2490,7 @@ static NSArray *tool_definitions(void) {
                     @"describe_args": @{@"type": @"boolean", @"description": @"true 时尝试把前 4 个参数里「像可打印 C 字符串」的读出来(如 getaddrinfo 的域名、dlopen 的路径); 默认 false"},
                     @"capture_memory": @{
                         @"type": @"object",
-                        @"description": @"命中瞬间按寄存器参数抓一段内存到事件 input(hex/utf8)。不会事后回读, 因此能在缓冲区释放/复用前拿到 key、IV、明文。ptr_arg 是 x 寄存器索引(0..8), len_arg 指定哪个寄存器是长度(-1=固定抓 max_bytes), max_bytes 上限 8192。例: mlock 的 key 缓冲 → {ptr_arg:0, len_arg:1, max_bytes:4096}",
+                        @"description": @"命中瞬间按寄存器参数抓一段内存到事件 input(hex/utf8)。不会事后回读, 因此能在缓冲区释放/复用前拿到 key、IV、明文。标准 crypto hook 全空时, 这是抓静态链接加密库 key 的主要手段: 先用 list_imports 找 mlock/memcpy/read/send 等「指针+长度」导入, 再在此配置。ptr_arg 是 x 寄存器索引(0..8), len_arg 指定哪个寄存器是长度(-1=固定抓 max_bytes), max_bytes 上限 8192。例: mlock 的 key 缓冲 → {ptr_arg:0, len_arg:1, max_bytes:4096}",
                         @"properties": @{
                             @"ptr_arg":   @{@"type": @"number", @"description": @"指针参数所在 x 寄存器索引 0..8; 默认 0"},
                             @"len_arg":   @{@"type": @"number", @"description": @"长度参数所在 x 寄存器索引 0..8; -1 表示用 max_bytes 固定长度; 默认 -1"},

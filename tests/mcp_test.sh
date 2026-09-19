@@ -104,6 +104,9 @@ eq "$(jq -r '[.result.tools[].name] as $names |
      "get_webkit_probe","set_webkit_probe","hook_import","hook_method","unhook"] |
     all(. as $name | $names | index($name) != null)' "$RESULT_DIR/tools.json")" \
     "true" "tools/list 包含关键兼容工具集合"
+mc '{"jsonrpc":"2.0","id":901,"method":"tools/call","params":{"name":"get_capabilities","arguments":{}}}' > "$RESULT_DIR/capabilities.json"
+eq "$(jq -r '(.result.structuredContent.guidance.whenNoCryptoEvents | type) == "array" and (.result.structuredContent.guidance.whenNoCryptoEvents | length) >= 4' "$RESULT_DIR/capabilities.json")" \
+    "true" "get_capabilities 返回标准加密 hook 全空时的引导"
 mc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"disassemble","arguments":{"bytes":"fd7bbfa9","arch":"arm64"}}}' > "$RESULT_DIR/dh_disasm_stp.json"
 eq "$(jq -r '.result.structuredContent.instructions[0].mnemonic' "$RESULT_DIR/dh_disasm_stp.json")" "stp" "disassemble fd7bbfa9 → stp"
 eq "$(jq -r '.result.structuredContent.instructions[0].operands[0].type' "$RESULT_DIR/dh_disasm_stp.json")" "register" "结构化 operand 标记寄存器"

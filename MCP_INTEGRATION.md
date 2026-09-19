@@ -66,6 +66,19 @@
 
 工具执行错误走 MCP 的 `isError:true` content 信封（非 JSON-RPC 协议错误）；返回同时含 `structuredContent`（机器可读）与 `content[].text`（JSON 文本）。
 
+## 逆向引导：标准加密 hook 全空时
+
+如果 `sym` / `asym` / `digest` 分类没有事件，但网络层已经抓到密文，按这个顺序排查：
+
+1. `get_capture_coverage` 确认 blind spot（静态链接 / 纯 Swift / 自研实现）；
+2. `list_images` → `list_imports`，找静态加密库仍会调用的「指针 + 长度」导入：
+   `mlock` / `memcpy` / `read` / `send` / `getrandom` / `memset`；
+3. `hook_import` + `capture_memory` 在命中瞬间抓缓冲区；只存指针、事后 `read_memory` 通常已经太晚；
+4. 候选 key 必须做「解密 + 回加密逐字节一致」闭环，并多次触发确认 key 生命周期；
+5. 完整方法与实战案例见 `docs/analysis/逆向技巧-静态链接加密库.md`。
+
+这条路径仍然只改 GOT/IMP 指针，不引入 inline hook / trampoline / 可执行内存。
+
 ## 调用示例
 
 初始化握手：
