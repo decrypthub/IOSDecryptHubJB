@@ -2,7 +2,9 @@
 
 An independent jailbreak runtime-analysis project for rootless / RootHide iOS devices. The product is one complete deb containing a persistent daemon, a phone Manager app, an injection loader and the Agent, updated together through an APT repository.
 
-The [TrollStore edition](https://github.com/taisuii/IOSDecryptHub) is a separate project. Each project maintains its own main branch, versions and releases.
+The [TrollStore edition](https://github.com/decrypthub/IOSDecryptHubTrollStore) is a separate project. Each project maintains its own main branch, versions and releases.
+
+This project is public under the decrypthub organization. The existing public [IOSDecryptHub v1](https://github.com/decrypthub/IOSDecryptHub) contains a released Manager, loader, updater and package pipeline. Its release URLs remain in place; v2 should migrate those implementations instead of assuming they are absent.
 
 The Manager enables or disables injection per app and shows both saved policy and the actual running state. The daemon continues without the Manager UI; the target app follows its ordinary lifecycle. The phone owns storage, bounded analysis, web and MCP services. A PC is optional.
 

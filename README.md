@@ -2,7 +2,9 @@
 
 独立的 iOS 越狱运行时分析项目。面向 rootless / RootHide，以一个 deb 整包交付常驻守护程序、手机 Manager UI、注入 Loader 与 Agent 引擎，支持通过 APT 越狱源统一更新。
 
-本项目与 [IOSDecryptHub 巨魔版](https://github.com/taisuii/IOSDecryptHub) 分别维护自己的 main、版本和发布，不再通过同仓分支区分产品。
+本项目与 [IOSDecryptHub 巨魔版](https://github.com/decrypthub/IOSDecryptHubTrollStore) 分别维护自己的 main、版本和发布，不再通过同仓分支区分产品。
+
+本项目在 `decrypthub` 组织公开维护。既有公开 [IOSDecryptHub v1](https://github.com/decrypthub/IOSDecryptHub) 另有已发布的管理器、加载器、updater 和整包脚本，保留原地址和发布链路；v2 后续从这些实际实现迁移，不将其误判为不存在。
 
 ## 产品使用流程
 
@@ -16,7 +18,7 @@
 
 ## 当前状态
 
-**当前为独立工程与设计迁移阶段，尚无新版可安装整包。** 仓库保留旧引擎源码和历史作为迁移基线；新版 daemon、Manager、scope IPC、完整 deb / 源更新，以及 Inline / Trace 均未实现。正式源 URL 尚未配置。
+**当前为独立工程与设计迁移阶段，尚无新版可安装整包。** 仓库保留旧引擎源码和历史作为迁移基线；新版常驻分析 daemon、Manager 改造、scope IPC、整包 / 源更新迁移，以及 Inline / Trace 尚未完成。既有 v1 的源和包 ID 需要按升级兼容性接管，不另造相互冲突的渠道。
 
 已验证旧引擎可经 SSH 在 Mac 编译 arm64 / arm64e；这不等于新版整包或真机功能已验收。旧 Makefile 和跨仓脚本仅用于追溯/迁移，不是新版产品交付入口。
 

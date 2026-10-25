@@ -8,10 +8,12 @@ Always respond in Chinese-simplified.
 2. `docs/PROGRESS.md`：当前实现/验证状态。
 3. 涉及 UI 读 `docs/MANAGER_UI.md`，涉及 Hook / Trace 读 `docs/HOOK_AND_TRACE_DESIGN.md`。
 4. 按用户要求先读本机该项目 Claude memory 索引，再用代码和现场状态核对记忆。
+5. 既有公开 v1 源码在 `https://github.com/decrypthub/IOSDecryptHub`（本机只读参考 remote：`legacy-public`），包含 app/、daemon/、src/loader.m、build_deb.sh 与 release workflow。开始重做组件前先核对，不把“本工作树没有”误认为“产品从未实现”。
 
 ## 产品定位
 
 - 本仓库是 IOSDecryptHubJB，只维护越狱版；巨魔版位于独立 IOSDecryptHub 仓库。
+- 所有本产品仓库均在 decrypthub 组织公开维护；不另建个人私有工作仓作为版本真相。
 - 使用自己的 main、版本和发布，不把巨魔仓的 jailbreak 分支作为开发入口。
 - 对用户只交付整包 deb，包含 daemon + Manager + Loader + Agent + 必需资源。内部 dylib 由整包任务自动编译，不需要从另一个项目手工构建或复制。
 - 手机常驻 daemon 是服务中心，PC 可选。Manager 能按应用开关注入，并区分已保存策略与实际加载状态。

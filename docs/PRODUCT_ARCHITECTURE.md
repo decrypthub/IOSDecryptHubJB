@@ -13,6 +13,8 @@
 
 本项目从旧越狱提交 `4858677` 导入并保留历史与引擎源码。旧目录暂留作迁移基线；它们存在不代表新版 Manager、daemon、Inline 或整包已完成。
 
+**公开源码补充核对**：组织既有 [IOSDecryptHub](https://github.com/decrypthub/IOSDecryptHub) 的 `main` 已包含 `app/` 管理器、`src/loader.m`、一次性 updater daemon、`build_deb.sh` 和发布 workflow，并有 v1.27.5 dylib / 两类 deb Release。新仓已将其登记为本机只读参考 `legacy-public/main`（核对提交 `a94a396`）。这些是要迁移的实际 v1 功能，区别于本设计新增的常驻分析服务与整包源更新；不能因为前期未检索到本地并列仓就从零重复实现。旧公开仓不覆盖、不重命名，以保留现有下载和更新地址。
+
 ## 2. 手机独立运行，PC 可选
 
 ```mermaid
@@ -167,5 +169,5 @@ J0/J1 优先解决“安装整包、打开应用开关就能采集”的手机�
 
 - 已建立本独立项目，保留旧引擎与历史，已核对 Android 的 Manager / scope / daemon 结构。
 - 已验证现有引擎可在用户 Mac 经 SSH 编译 arm64 和 arm64+arm64e；这是旧基线编译证明。
-- 新 daemon、Manager、scope IPC、整包流水线、APT 源与 Inline / Trace 尚未实现；本次未安装手机、未发布 deb、未部署越狱源。
-- 尚未确认本产品正式源 URL、是否存在需要接管的历史包 ID。编码/发包前须核对已有安装，不能盲目复用包 ID 或发布到其它产品源。
+- 本工作树尚未完成新常驻 daemon、Manager 改造、scope IPC、整包迁移与 Inline / Trace；现有公开 v1 已有管理器、一次性 updater、整包与源说明，必须区分新旧状态。本次未安装手机、未发布 deb、未部署源。
+- 已知旧公开 README 声明源 `https://ios.decrypthub.com`、包 ID `com.iosdecrypthub`。新包需先核对线上索引、签名与存量安装再设计接管；本轮未改变旧源或更新服务。
