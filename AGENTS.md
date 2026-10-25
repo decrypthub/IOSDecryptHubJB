@@ -11,7 +11,7 @@ Always respond in Chinese-simplified
 
 IOSDecryptHub 是一个 iOS 运行时安全分析 dylib。注入目标 App 进程后，实时捕获加解密（CommonCrypto / SecKey / OpenSSL EVP）、文件、网络、Keychain、动态加载行为，提供 Web 面板 + MCP 分析服务 + 脱壳能力。
 
-项目同时支持 TrollStore 免越狱注入和越狱加载器注入，两条路线共享 `src/` 下同一份核心引擎。越狱框架只负责加载 dylib，不得使用其 hook API。
+项目以两个长期分支分别维护：`main` 为 TrollStore 巨魔版，`jailbreak` 为越狱版。两条路线复用 `src/` 下的公共核心，公共修复按提交同步；越狱专属增强仅在 `jailbreak` 推进。共享核心只使用 fishhook + ObjC swizzle；Inline Hook / Trace 等高级能力应隔离在越狱侧独立扩展中，详见架构文档 §3.1。
 
 ---
 
@@ -55,7 +55,7 @@ IOSDecryptHub/
 | `make test-mcp` | MCP 集成测试（需 jq） |
 | `make clean` | 清理构建产物 |
 
-**三个变体**：`dev`（默认）、`trollstore` 和 `jailbreak`。变体只决定注入载体和能力标识，核心 hook 引擎保持一致。
+**三个编译变体**：`dev`（默认）、`trollstore` 和 `rootless`。`jailbreak` 是维护分支名，不是 `VARIANT` 值。变体只决定注入载体和能力标识，共享核心 hook 引擎保持一致。巨魔版构建在 `main` 进行，越狱版构建与 deb 打包在 `jailbreak` 进行。
 
 ---
 
@@ -63,9 +63,9 @@ IOSDecryptHub/
 
 完整内容见 `docs/ARCHITECTURE_BOUNDARY.md`，此处列出最关键的：
 
-- **巨魔 + 越狱双轨**。两条路线共享同一份 dylib 核心引擎
-- **越狱框架只作加载器**。不得使用 MSHookFunction、`%hook` 等 inline hook API，不得引用 daemon / dh_server
-- **Hook 只用 fishhook + ObjC swizzle**。不做 inline hook，不生成可执行内存
+- **巨魔 + 越狱分支维护**。`main` 维护巨魔版，`jailbreak` 维护越狱版；公共核心修复按提交同步
+- **共享核心与越狱扩展隔离**。`src/` 不得使用 MSHookFunction、`%hook` 等越狱框架 API，不得引用 daemon / dh_server；越狱高级能力由独立扩展承载，加载器继续保持薄层
+- **共享 Hook 只用 fishhook + ObjC swizzle**。共享核心不做 inline hook、不生成可执行内存；越狱侧 Inline Hook / Trace 按架构文档 §3.1 的隔离条件开发，当前属于后续规划
 - **不崩溃原则**：dylib 在别人进程里跑，任何 crash 都杀死宿主 App
 - **MCP 复用 8088 端口**（`POST /api/mcp`），不额外开端口
 - **手动连接**：PC 端 `idh connect <设备 IP>:8088` 指定设备，无自动发现
@@ -125,7 +125,10 @@ IOSDecryptHub/
 
 ## Git 规范
 
-- 当前分支：`main`
+- 长期维护分支：`main`（巨魔版，默认）/ `jailbreak`（越狱版）
+- 平台专属功能从对应维护分支创建功能分支，并回到同一维护分支；不得将越狱专属依赖整分支合入 `main`
+- 公共修复通过 `git cherry-pick -x <commit>` 按需同步；同步后分别验证巨魔与越狱兼容性
+- 后续发布标签：`trollstore-v<版本号>` / `jailbreak-v<版本号>`，从对应维护分支打标签；历史 `v*` 标签不重写
 - Commit 格式：`type: 中文描述`（type = feat/fix/refactor/docs/test/style）
 - 不提交：密钥/token/dylib 产物/dSYM/build 目录、自动生成的 Web 头文件、自动下载的签名二进制
 - `.gitignore` 已排除构建产物

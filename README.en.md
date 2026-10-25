@@ -8,6 +8,33 @@ IOSDecryptHub is a runtime-analysis dylib injected into iOS app processes. It ca
 
 For the full feature set and a live demo, visit: [ios.decrypthub.com](https://ios.decrypthub.com/)
 
+## Editions and Maintenance Branches
+
+The TrollStore and Jailbreak editions are maintained on two long-lived branches:
+
+| Edition | Branch | Focus |
+|---------|--------|-------|
+| TrollStore | [`main`](https://github.com/taisuii/IOSDecryptHub/tree/main) (default) | Non-jailbroken injection, the TrollStore manager, IPA injection, fishhook / ObjC swizzle, and existing web / MCP analysis, with compatibility and stability as priorities |
+| Jailbreak | [`jailbreak`](https://github.com/taisuii/IOSDecryptHub/tree/jailbreak) | Rootless / roothide devices, with more advanced runtime analysis planned, including Inline Hook and Trace |
+
+```bash
+git fetch origin
+git switch main        # TrollStore development and maintenance
+git switch jailbreak   # Jailbreak development; tracks origin/jailbreak on first checkout
+```
+
+Port shared engine fixes as needed with `git cherry-pick -x <commit>` and verify both editions separately. Keep platform-specific features on their respective branches; do not merge the entire Jailbreak branch back into `main`. Future releases use `trollstore-v<version>` / `jailbreak-v<version>` tags; existing `v*` tags remain unchanged.
+
+### Jailbreak Roadmap
+
+The following features are planned for `jailbreak`; **creating these branches does not mean these enhancements are implemented**:
+
+- **Inline Hook**: cover statically linked functions, direct calls within an image and custom algorithms that fishhook cannot intercept, with argument, return-value and memory-snapshot inspection.
+- **Trace**: add function-call tracing and call-chain analysis, and explore instruction-level execution tracing for algorithm and data-flow analysis.
+- **Analysis integration**: feed extension events into the existing web / MCP interfaces, with start/stop controls, filtering and export.
+
+Enable advanced capabilities only after checking device permissions, architecture and runtime support. Keep Inline Hook / Trace implementations in Jailbreak-only extensions; the shared engine continues to use fishhook + ObjC swizzle. See [Architecture Boundaries](./docs/ARCHITECTURE_BOUNDARY.md).
+
 ## Getting the dylib
 
 Download `decrypt_helper.dylib` from [GitHub Releases](https://github.com/taisuii/IOSDecryptHub/releases), or build it yourself:
@@ -82,6 +109,8 @@ idh mcp
 | rootless | `make VARIANT=rootless` | Jailbreak deb package |
 
 ### Jailbreak deb Package (Rootless / roothide)
+
+Switch to `jailbreak` before packaging. This also requires the sibling repository `../IOSDecryptHubJB/` (or a path set through `DH_JB_DIR`); see [Jailbreak Packaging](./jailbreak/README.md).
 
 ```bash
 make deb              # Build both standard rootless and roothide packages

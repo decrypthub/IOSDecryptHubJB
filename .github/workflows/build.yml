@@ -2,7 +2,7 @@ name: Build 解密助手 dylib
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, jailbreak ]
   workflow_dispatch:
     inputs:
       ipa_url:
@@ -12,13 +12,15 @@ on:
 jobs:
   build:
     runs-on: macos-latest
+    env:
+      DH_BUILD_VARIANT: ${{ github.ref_name == 'jailbreak' && 'rootless' || 'trollstore' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Build dylib
-        run: make
+        run: make VARIANT="$DH_BUILD_VARIANT"
 
       - name: Install insert_dylib
         if: ${{ github.event.inputs.ipa_url != '' }}
@@ -37,12 +39,12 @@ jobs:
       - name: Upload dylib artifact
         uses: actions/upload-artifact@v4
         with:
-          name: decrypt_helper_dylib
+          name: decrypt_helper_${{ env.DH_BUILD_VARIANT }}_dylib
           path: decrypt_helper.dylib
 
       - name: Upload injected IPA
         if: ${{ github.event.inputs.ipa_url != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: hooked_ipa
+          name: hooked_${{ env.DH_BUILD_VARIANT }}_ipa
           path: hooked_*.ipa
