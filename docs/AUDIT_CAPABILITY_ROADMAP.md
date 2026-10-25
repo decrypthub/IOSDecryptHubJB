@@ -1,6 +1,6 @@
 # IOSDecryptHub 审计能力演进与自验证计划
 
-> **适用范围更新（2026-10-25）**：本文保留为 v1 / 巨魔版的历史演进与测试参考；其中“共用核心、禁止 Inline / DBI”等条款不约束越狱 v2。`jailbreak` 分支只以 [JAILBREAK_V2_DESIGN.md](./JAILBREAK_V2_DESIGN.md) 作为新架构和实施路线，不同时执行两份路线图。本文的旧阶段状态不代表当前越狱 v2 进度。
+> **适用范围更新（2026-10-25）**：本文仅为导入的 v1 历史与测试参考，不再定义本项目路线。独立越狱整包、手机常驻 daemon、应用开关与 APT 更新以 [PRODUCT_ARCHITECTURE.md](./PRODUCT_ARCHITECTURE.md) 为准；本文的旧阶段状态不代表新版进度。
 
 > 状态：阶段 0 已完成，阶段 1 待开始
 > 基线版本：1.23.0

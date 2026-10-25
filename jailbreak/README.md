@@ -1,23 +1,7 @@
-# 越狱插件源码已迁出
+# 旧跨仓打包入口（迁移参考）
 
-本仓库的越狱版由 [`jailbreak`](https://github.com/taisuii/IOSDecryptHub/tree/jailbreak) 分支独立维护，`main` 为巨魔版维护分支。越狱开发与打包前先执行 `git fetch origin`、`git switch jailbreak`。
+本目录来自旧引擎仓，原流程是先编译 dylib 再复制到并列 IOSDecryptHubJB 打包。新项目已经是独立 IOSDecryptHubJB，该流程不再作为正式交付方式。
 
-加载器、设置面板和 deb 打包脚本现在位于工作区并列仓库：
+新版要求一次任务构建 daemon、Manager、Loader 和 Agent 并输出完整 deb；不需要用户独立编译或选择 dylib。新版整包任务尚未实现，不能把旧脚本当作新版已经可用。
 
-```
-../IOSDecryptHubJB/
-```
-
-本目录只保留入口脚本：编译闭源 `decrypt_helper.dylib`，拷进 `IOSDecryptHubJB/vendor/dylib/`，再调用开源仓打包。
-
-并列仓库不在默认位置时，可用 `DH_JB_DIR` 指定其路径。
-
-```bash
-make deb              # 仍从本私有仓触发，产物同步到 build/deb/
-make deb-rootless
-make deb-roothide
-```
-
-不要在本目录重新放入加载器源码。越狱层必须保持为薄加载器，源码以开源仓为准。
-
-越狱 v2 允许独立大幅重构，采用目标进程 Agent / 设备 Broker / PC Host 分层，逐阶段推进 Inline Hook、调用前后观测、函数 Trace 与可选指令 Trace。上述薄加载器约束继续保留，具体 Broker 与现有 daemon 的整合需核对本开源仓源码。新 Agent 不再受 v1 一份共享核心的约束，设计和验收见 [越狱版 v2 设计](../docs/JAILBREAK_V2_DESIGN.md)；当前尚未实现 v2。
+产品与实施正本：[PRODUCT_ARCHITECTURE.md](../docs/PRODUCT_ARCHITECTURE.md)。旧脚本保留作迁移历史，正式流水线实现时替换，不跨仓写入另一套引擎。

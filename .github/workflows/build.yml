@@ -1,50 +1,22 @@
-name: Build 解密助手 dylib
+name: Build JB legacy migration baseline
 
 on:
   push:
-    branches: [ main, jailbreak ]
+    branches: [ main ]
   workflow_dispatch:
-    inputs:
-      ipa_url:
-        description: '目标 IPA 的下载链接(可选, 填写后自动注入)'
-        required: false
 
 jobs:
-  build:
+  legacy-engine:
+    name: Legacy engine only - complete deb not implemented
     runs-on: macos-latest
-    env:
-      DH_BUILD_VARIANT: ${{ github.ref_name == 'jailbreak' && 'rootless' || 'trollstore' }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Build dylib
-        run: make VARIANT="$DH_BUILD_VARIANT"
-
-      - name: Install insert_dylib
-        if: ${{ github.event.inputs.ipa_url != '' }}
-        run: |
-          brew install insert_dylib 2>/dev/null || \
-          ( git clone https://github.com/Tyilo/insert_dylib.git /tmp/insert_dylib && \
-            cd /tmp/insert_dylib && make && cp build/insert_dylib /usr/local/bin/ )
-
-      - name: Download & Inject IPA
-        if: ${{ github.event.inputs.ipa_url != '' }}
-        run: |
-          curl -fSL "${{ github.event.inputs.ipa_url }}" -o input.ipa
-          chmod +x scripts/inject.sh
-          ./scripts/inject.sh input.ipa decrypt_helper.dylib
-
-      - name: Upload dylib artifact
+      - name: Compile imported engine for migration verification
+        run: make -B VARIANT=rootless ARCHS="arm64 arm64e" all
+      - name: Upload internal baseline artifact
         uses: actions/upload-artifact@v4
         with:
-          name: decrypt_helper_${{ env.DH_BUILD_VARIANT }}_dylib
+          name: idh-jb-legacy-engine-internal
           path: decrypt_helper.dylib
-
-      - name: Upload injected IPA
-        if: ${{ github.event.inputs.ipa_url != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: hooked_${{ env.DH_BUILD_VARIANT }}_ipa
-          path: hooked_*.ipa
+          if-no-files-found: error

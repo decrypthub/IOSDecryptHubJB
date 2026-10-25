@@ -1,4 +1,6 @@
 # 解密助手 (Decrypt Helper) — iOS dylib
+# 本文件是导入的 v1 引擎迁移基线；新版完整 deb 构建尚未实现。
+# 对用户的交付以 docs/PRODUCT_ARCHITECTURE.md 为准，不单独分发此处 dylib。
 #
 # 提供两条编译路径:
 #   1) macOS xcrun (默认): 在 GitHub Actions / macOS 本机用
