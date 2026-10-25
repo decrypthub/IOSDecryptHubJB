@@ -15,8 +15,8 @@ IOSDecryptHub 是一个注入到 iOS App 进程中的运行时分析 dylib，可
 
 | 版本 | 维护分支 | 定位与开发方向 |
 |------|----------|----------------|
-| 巨魔版（TrollStore） | [`main`](https://github.com/taisuii/IOSDecryptHub/tree/main)（默认分支） | 面向免越狱注入，维护 TrollStore 管理器、IPA 注入、fishhook / ObjC swizzle 与现有 Web / MCP 分析能力，优先保证兼容性与稳定性 |
-| 越狱版（Jailbreak） | [`jailbreak`](https://github.com/taisuii/IOSDecryptHub/tree/jailbreak) | 面向 rootless / roothide 越狱环境，在现有能力上持续开发更强的运行时分析功能，包括 Inline Hook、Trace 等 |
+| 巨魔版（TrollStore） | [`main`](https://github.com/taisuii/IOSDecryptHub/tree/main)（默认分支） | 能力基本定型，保留现有注入、Web / MCP 形态，重点维护兼容性与稳定性 |
+| 越狱版（Jailbreak） | [`jailbreak`](https://github.com/taisuii/IOSDecryptHub/tree/jailbreak) | 独立演进为运行时分析平台，允许重构 Agent / 控制面，规划 Inline Hook、调用前后观测与 Trace 等 |
 
 ```bash
 git fetch origin
@@ -24,7 +24,7 @@ git switch main        # 巨魔版开发与维护
 git switch jailbreak   # 越狱版开发与维护；首次切换时自动跟踪 origin/jailbreak
 ```
 
-公共引擎修复按需通过 `git cherry-pick -x <commit>` 同步，并分别验证两端兼容性；平台专属功能只进入对应分支。越狱版增强功能不整分支合回 `main`，避免引入免越狱环境不支持的依赖。后续发布分别使用 `trollstore-v<版本号>` / `jailbreak-v<版本号>` 标签，历史 `v*` 标签保持不变。
+两条产品线分别构建、验证和发布，不再强制保持同一份核心。适用的公共修复按提交同步或明确移植；越狱版不整分支合回 `main`。后续发布分别使用 `trollstore-v<版本号>` / `jailbreak-v<版本号>` 标签，历史 `v*` 标签保持不变。
 
 ### 越狱版后续规划
 
@@ -34,7 +34,9 @@ git switch jailbreak   # 越狱版开发与维护；首次切换时自动跟踪 
 - **Trace**：逐步提供函数调用追踪、调用链分析，并探索指令级执行追踪，帮助定位关键算法及数据流。
 - **分析联动**：将越狱扩展产生的事件接入现有 Web / MCP，提供可控的启停、过滤与导出能力。
 
-高级能力需按设备权限、架构和运行环境检测后启用；Inline Hook / Trace 实现保持在越狱专属扩展中，共用引擎继续使用 fishhook + ObjC swizzle。详细约束见 [架构边界](./docs/ARCHITECTURE_BOUNDARY.md)。
+越狱 v2 参考 Android DecryptHub 的分层：目标进程 Agent 负责轻量采集与执行，设备 Broker 负责接入与路由，PC Host 负责存储、反汇编、关联分析及 Web / MCP。Inline Hook / Trace 在新 Agent 的后端中隔离实现，按真实设备能力启用；现有 v1 引擎先保留兼容路径。
+
+完整方案、目录规划、Hook / Trace 语义与逐阶段验收见 [越狱版 v2 设计](./docs/JAILBREAK_V2_DESIGN.md)。目前为设计阶段，尚未实现 v2。
 
 ## 获取 dylib
 

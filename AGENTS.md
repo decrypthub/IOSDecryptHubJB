@@ -5,13 +5,16 @@ Always respond in Chinese-simplified
 > **开始任何代码变更前，必须先读 `docs/ARCHITECTURE_BOUNDARY.md`（架构铁律）。**
 > 本文件是仓库级开发指南；工作区级产品说明见上层 `../AGENTS.md`。
 
+> **本分支为 `jailbreak`。越狱 v2 的架构与实施路线以 `docs/JAILBREAK_V2_DESIGN.md` 为准。**
+> 用户已明确：巨魔版基本定型，越狱版允许大幅重构、独立发展 Inline Hook / Trace。下文现有目录、命令和启动顺序描述 v1；不要把 v1 共享核心限制套到新 `agent/` 实现上。
+
 ---
 
 ## 产品简介
 
 IOSDecryptHub 是一个 iOS 运行时安全分析 dylib。注入目标 App 进程后，实时捕获加解密（CommonCrypto / SecKey / OpenSSL EVP）、文件、网络、Keychain、动态加载行为，提供 Web 面板 + MCP 分析服务 + 脱壳能力。
 
-项目以两个长期分支分别维护：`main` 为 TrollStore 巨魔版，`jailbreak` 为越狱版。两条路线复用 `src/` 下的公共核心，公共修复按提交同步；越狱专属增强仅在 `jailbreak` 推进。共享核心只使用 fishhook + ObjC swizzle；Inline Hook / Trace 等高级能力应隔离在越狱侧独立扩展中，详见架构文档 §3.1。
+项目以两个长期分支分别维护：`main` 为基本定型的 TrollStore 巨魔版；`jailbreak` 向独立分析平台演进。v1 `src/` 保留兼容路径，v2 新 Agent 仅负责采集/执行，PC Host 负责 Web / MCP / 存储 / 重分析，设备 Broker 负责接入与路由。允许在新 `agent/src/hook/backends/` 引入经过验证的 Inline Hook；两条产品线不再强制保持同一份核心。
 
 ---
 
@@ -55,7 +58,7 @@ IOSDecryptHub/
 | `make test-mcp` | MCP 集成测试（需 jq） |
 | `make clean` | 清理构建产物 |
 
-**三个编译变体**：`dev`（默认）、`trollstore` 和 `rootless`。`jailbreak` 是维护分支名，不是 `VARIANT` 值。变体只决定注入载体和能力标识，共享核心 hook 引擎保持一致。巨魔版构建在 `main` 进行，越狱版构建与 deb 打包在 `jailbreak` 进行。
+**现有 v1 的三个编译变体**：`dev`（默认）、`trollstore` 和 `rootless`。`jailbreak` 是维护分支名，不是 `VARIANT` 值。巨魔版构建在 `main` 进行，越狱版构建与 deb 打包在 `jailbreak` 进行。v2 构建目标在对应实现切片中新增，不能把设计目录当作已有可构建功能。
 
 ---
 
@@ -63,11 +66,11 @@ IOSDecryptHub/
 
 完整内容见 `docs/ARCHITECTURE_BOUNDARY.md`，此处列出最关键的：
 
-- **巨魔 + 越狱分支维护**。`main` 维护巨魔版，`jailbreak` 维护越狱版；公共核心修复按提交同步
-- **共享核心与越狱扩展隔离**。`src/` 不得使用 MSHookFunction、`%hook` 等越狱框架 API，不得引用 daemon / dh_server；越狱高级能力由独立扩展承载，加载器继续保持薄层
-- **共享 Hook 只用 fishhook + ObjC swizzle**。共享核心不做 inline hook、不生成可执行内存；越狱侧 Inline Hook / Trace 按架构文档 §3.1 的隔离条件开发，当前属于后续规划
+- **产品线独立维护**。巨魔版定型维护，越狱版允许重构；公共修复按需移植，不强制保持源码/行为一致
+- **新旧引擎隔离**。现有 v1 `src/` 继续只用 fishhook + ObjC swizzle；v2 `agent/` 可实现 Inline / Trace，但后端、ABI、内存与生命周期必须统一管理
+- **进程边界**。新 Agent 不包含 HTTP / MCP / 数据库 / 常驻重分析；Host 分析、Broker 路由、Manager 注入管理分别实现
 - **不崩溃原则**：dylib 在别人进程里跑，任何 crash 都杀死宿主 App
-- **MCP 复用 8088 端口**（`POST /api/mcp`），不额外开端口
+- **MCP**。v1 保持设备 8088；v2 由 Host 提供 8088 `/api/mcp`，设备 Broker 通道按新设计单独验收
 - **手动连接**：PC 端 `idh connect <设备 IP>:8088` 指定设备，无自动发现
 
 ---
@@ -127,7 +130,7 @@ IOSDecryptHub/
 
 - 长期维护分支：`main`（巨魔版，默认）/ `jailbreak`（越狱版）
 - 平台专属功能从对应维护分支创建功能分支，并回到同一维护分支；不得将越狱专属依赖整分支合入 `main`
-- 公共修复通过 `git cherry-pick -x <commit>` 按需同步；同步后分别验证巨魔与越狱兼容性
+- 公共修复适用时通过 `git cherry-pick -x <commit>` 同步；结构分化后明确移植，不强行整段同步
 - 后续发布标签：`trollstore-v<版本号>` / `jailbreak-v<版本号>`，从对应维护分支打标签；历史 `v*` 标签不重写
 - Commit 格式：`type: 中文描述`（type = feat/fix/refactor/docs/test/style）
 - 不提交：密钥/token/dylib 产物/dSYM/build 目录、自动生成的 Web 头文件、自动下载的签名二进制

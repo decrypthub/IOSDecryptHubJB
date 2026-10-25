@@ -14,8 +14,8 @@ The TrollStore and Jailbreak editions are maintained on two long-lived branches:
 
 | Edition | Branch | Focus |
 |---------|--------|-------|
-| TrollStore | [`main`](https://github.com/taisuii/IOSDecryptHub/tree/main) (default) | Non-jailbroken injection, the TrollStore manager, IPA injection, fishhook / ObjC swizzle, and existing web / MCP analysis, with compatibility and stability as priorities |
-| Jailbreak | [`jailbreak`](https://github.com/taisuii/IOSDecryptHub/tree/jailbreak) | Rootless / roothide devices, with more advanced runtime analysis planned, including Inline Hook and Trace |
+| TrollStore | [`main`](https://github.com/taisuii/IOSDecryptHub/tree/main) (default) | Feature scope largely settled; maintain the existing injection and web / MCP architecture, compatibility and stability |
+| Jailbreak | [`jailbreak`](https://github.com/taisuii/IOSDecryptHub/tree/jailbreak) | An independently evolving runtime-analysis platform, with Agent / control-plane restructuring, Inline Hook, entry/exit observation and Trace planned |
 
 ```bash
 git fetch origin
@@ -23,7 +23,7 @@ git switch main        # TrollStore development and maintenance
 git switch jailbreak   # Jailbreak development; tracks origin/jailbreak on first checkout
 ```
 
-Port shared engine fixes as needed with `git cherry-pick -x <commit>` and verify both editions separately. Keep platform-specific features on their respective branches; do not merge the entire Jailbreak branch back into `main`. Future releases use `trollstore-v<version>` / `jailbreak-v<version>` tags; existing `v*` tags remain unchanged.
+Build, verify and release the editions independently; an identical core is no longer required. Cherry-pick applicable shared fixes or port them explicitly as the architectures diverge. Do not merge the entire Jailbreak branch back into `main`. Future releases use `trollstore-v<version>` / `jailbreak-v<version>` tags; existing `v*` tags remain unchanged.
 
 ### Jailbreak Roadmap
 
@@ -33,7 +33,9 @@ The following features are planned for `jailbreak`; **creating these branches do
 - **Trace**: add function-call tracing and call-chain analysis, and explore instruction-level execution tracing for algorithm and data-flow analysis.
 - **Analysis integration**: feed extension events into the existing web / MCP interfaces, with start/stop controls, filtering and export.
 
-Enable advanced capabilities only after checking device permissions, architecture and runtime support. Keep Inline Hook / Trace implementations in Jailbreak-only extensions; the shared engine continues to use fishhook + ObjC swizzle. See [Architecture Boundaries](./docs/ARCHITECTURE_BOUNDARY.md).
+Jailbreak v2 follows Android DecryptHub's separation: a lightweight in-process Agent collects and executes, a device Broker routes sessions, and a PC Host owns storage, disassembly, analysis and web / MCP. Inline Hook / Trace live behind Agent backend interfaces and require runtime validation. The current v1 engine remains available during migration.
+
+See the [Jailbreak v2 design](./docs/JAILBREAK_V2_DESIGN.md) for the proposed layout, semantics and staged acceptance criteria. This is a design; v2 is not implemented yet.
 
 ## Getting the dylib
 

@@ -20,4 +20,4 @@ make deb-roothide
 
 不要在本目录重新放入加载器源码。越狱层必须保持为薄加载器，源码以开源仓为准。
 
-后续将在 `jailbreak` 维护线推进 Inline Hook、函数调用 Trace / 调用链分析，并探索指令级追踪；这些目前属于规划。高级能力由越狱侧独立扩展承载，保持共享 `src/` 的 fishhook + ObjC swizzle 边界，详见 [架构约束](../docs/ARCHITECTURE_BOUNDARY.md)。
+越狱 v2 允许独立大幅重构，采用目标进程 Agent / 设备 Broker / PC Host 分层，逐阶段推进 Inline Hook、调用前后观测、函数 Trace 与可选指令 Trace。上述薄加载器约束继续保留，具体 Broker 与现有 daemon 的整合需核对本开源仓源码。新 Agent 不再受 v1 一份共享核心的约束，设计和验收见 [越狱版 v2 设计](../docs/JAILBREAK_V2_DESIGN.md)；当前尚未实现 v2。
