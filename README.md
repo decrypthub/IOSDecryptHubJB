@@ -6,23 +6,26 @@
 
 本项目在 `decrypthub` 组织公开维护。既有公开 [IOSDecryptHub v1](https://github.com/decrypthub/IOSDecryptHub) 另有已发布的管理器、加载器、updater 和整包脚本，保留原地址和发布链路；v2 后续从这些实际实现迁移，不将其误判为不存在。
 
-## 产品使用流程
+## 当前版本与使用
 
-安装越狱源中的整包 → 打开 Manager → 在应用列表开启目标注入 → 启动或重新启动目标 → 查看采集与分析 → 按需配置 Inline Hook / Trace 任务。
+[v1.27.6 完整包](https://github.com/decrypthub/IOSDecryptHubJB/releases/tag/v1.27.6) 基于组织正式 `a94a396` 的完整 v1 源码，包含 Manager、Loader、一次性管理 daemon、引擎与资源。添加源 **https://ios.decrypthub.com**，在 Sileo / Zebra 安装 IOSDecryptHub；rootless / RootHide 请使用对应架构的完整 deb。
 
-- 常驻 daemon 独立于 Manager 和目标 App，管理界面退出后仍可运行。
-- 手机可以开启/关闭某个应用或全局注入，展示配置与真实加载状态。
-- dylib 是整包内部组件，不要求用户单独下载、编译、选择或更新。
-- 手机 daemon 提供会话、存储、Web / MCP 和受限分析，PC 是可选客户端。
-- 更新由 Sileo / Zebra 等包管理器完成，整包组件统一版本，不使用宿主内覆盖 dylib 的更新方式。
+打开 Manager → 开启目标应用的注入 → 启动或手动重启目标 → 通过原有 Web / MCP 查看分析。关闭注入影响后续加载；已加载的引擎要在目标退出后才离开进程。
 
-## 当前状态
+v1.27.6 将版本检查切换到规范 APT 源，按安装包架构选择版本，更新与回退交给系统包管理器。Manager、Loader、daemon 与引擎统一升级；旧单引擎安装/回滚请求会被拒绝，遗留 staging 不再覆盖包内引擎。
 
-**当前已校正到组织正式仓 `a94a396` 的完整 v1 基线，尚未发布独立新版。** 现有 Manager、Loader、一次性 updater 和完整 deb 构建已经恢复，Mac 上 `make deb` 两种环境均通过。新版常驻分析服务、Manager 改造、scope IPC、整包升级改造和 Inline / Trace 仍未完成。
+**后续规划**：参考 Android 项目改造手机常驻分析服务与新 Manager，增加真实会话/scope 状态、Inline Hook、出口采集和 Trace。当前 daemon 仍按请求或周期运行后退出，这些新能力尚未实现。
 
-正式下载仍使用原公开仓的 [v1.27.5 Release](https://github.com/decrypthub/IOSDecryptHub/releases/tag/v1.27.5)。本仓构建只用于基线核验，不替换正式发布或线上源。详细差异、纠正和线上 SHA-256 见 [基线核验报告](./docs/BASELINE_AUDIT_2026-10-26.md)。
+## 构建与验证
 
-现有 v1 整包可在 Mac 执行 `make deb`，自动构建引擎、Loader、Manager 和 updater；本项目不再需要旧跨仓复制入口。
+在 Mac 上执行：
+
+```bash
+make test-updater  # 无需网络或手机的版本选择/旧更新请求边界回归
+make deb           # 一次构建 rootless 和 RootHide 完整包
+```
+
+无需单独编译或从巨魔项目复制 dylib。v1.27.6 已通过 Mac 回归和双环境整包编译、包内容与签名检查；尚未在手机上验收安装、升级或包管理器跳转。详见 [当前进度](./docs/PROGRESS.md)；此前正式基线的核验记录见 [基线核验报告](./docs/BASELINE_AUDIT_2026-10-26.md)。
 
 ## 设计与实施
 

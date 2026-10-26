@@ -50,4 +50,4 @@ Always respond in Chinese-simplified.
 
 ## 当前实现说明
 
-已恢复组织正式 a94a396 的完整 v1 Manager、Loader、一次性 updater、引擎与整包构建，Mac 的 make deb 双环境通过。常驻分析服务、新 Manager 设计、scope IPC、整包更新改造、Inline / Trace 未实现。Makefile 1.27.5 是正式 v1 源码基线，不是新独立项目已发布的版本。正式下载继续指向原公开仓；不发布本轮本地测试包。
+已恢复组织正式 a94a396 的完整 v1。v1.27.6 按安装包架构检查 APT 源，安装与回退由包管理器负责；daemon 拒绝旧单引擎安装/回滚，updated.sh 不再应用旧 staging。Mac 本地回归和 make deb 双环境验证通过。当前管理 daemon 仍是一次性进程；常驻分析服务、新 Manager、scope IPC、Inline / Trace 未实现。未在手机验收安装、升级与包管理器跳转。

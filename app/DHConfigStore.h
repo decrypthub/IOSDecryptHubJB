@@ -25,11 +25,11 @@ NSDictionary *DHReadUpdaterState(void);
 /// 扫本机 8088..8108：bundleId → @{ @"port": N, @"version": @"..." }。引擎已进进程才会响应。
 NSDictionary<NSString *, NSDictionary *> *DHProbeInjectedApps(void);
 
-/// 向 daemon 提交更新请求（check / install / rollback）；version 非空时安装指定版本
+/// 向 daemon 提交检查请求；旧 install / rollback 请求拒绝，整包交给包管理器
 BOOL DHWriteUpdateRequest(NSString *action, NSString *_Nullable version);
 
 /// 若 daemon 已探到更新，返回可用版本号（如 "1.25.4"），否则 nil。
-/// 数据来自 daemon 写的 state（每 12 小时自动检查一次，不占 API 配额）。
+/// 数据来自 daemon 写的 state（每 12 小时自动检查一次，按包架构查询 APT 源）。
 NSString *_Nullable DHPendingUpdateVersion(void);
 
 /// 请求停止指定 App（只结束进程，不重新打开，由 daemon 执行）
@@ -41,11 +41,14 @@ BOOL DHWriteRestartRequest(NSString *bundleID);
 /// 拉取历史版本列表；回调在主线程。元素：@{@"tag": @"v1.25.1", @"version": @"1.25.1", @"date": @"2026-09-13"}
 void DHFetchReleases(void (^completion)(NSArray<NSDictionary *> *_Nullable releases, NSError *_Nullable error));
 
-/// 前台即时查询 GitHub 最新 release；回调在主线程。
+/// 前台即时查询当前包架构的 APT 候选版本；回调在主线程。
 /// 成功：info = @{@"tag": @"v1.24.10", @"version": @"1.24.10"}；失败：error 非空
 void DHFetchLatestRelease(void (^completion)(NSDictionary *_Nullable info, NSError *_Nullable error));
 
 /// 版本号比较（去 v 前缀，按数字分段）；返回 NSOrderedAscending 等
 NSComparisonResult DHCompareVersions(NSString *left, NSString *right);
+
+/// 打开系统包管理器，由它完成完整 deb 的安装/更新。
+BOOL DHOpenPackageManager(void);
 
 NS_ASSUME_NONNULL_END

@@ -1,4 +1,4 @@
-name: Verify official v1 package baseline
+name: Verify complete packages
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   package-baseline:
-    name: Complete v1 baseline packages - no release
+    name: Complete packages and update policy
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -20,11 +20,13 @@ jobs:
         run: |
           command -v dpkg-deb >/dev/null || brew install dpkg
           command -v ldid >/dev/null || brew install ldid
+      - name: Test package update policy
+        run: make test-updater
       - name: Build and validate rootless and RootHide packages
         run: make deb
-      - name: Upload internal baseline verification packages
+      - name: Upload verification packages
         uses: actions/upload-artifact@v4
         with:
-          name: official-v1-baseline-test-only
+          name: complete-packages-test-only
           path: build/deb/*.deb
           if-no-files-found: error

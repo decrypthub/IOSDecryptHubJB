@@ -41,13 +41,13 @@
 }
 
 - (NSString *)tableView:(__unused UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return self.releases.count > 0 ? @"选择要安装的版本" : nil;
+    return self.releases.count > 0 ? @"已发布的完整包版本" : nil;
 }
 
 - (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (self.errorText) return nil;
     return self.releases.count > 0
-        ? @"安装历史版本只切换引擎，App 与后台服务保持当前版本。" : nil;
+        ? @"安装或回退均由包管理器完成，管理器、服务和引擎随整包一起更新。" : nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -83,18 +83,17 @@
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     if (self.releases.count == 0 || indexPath.row >= (NSInteger)self.releases.count) return;
-    NSDictionary *item = self.releases[indexPath.row];
-    NSString *version = item[@"version"];
-    if (self.currentVersion.length && [version isEqualToString:self.currentVersion]) return;
-
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:
-        [NSString stringWithFormat:@"安装 %@", version]
-        message:@"切换后已启用的 App 会被自动重启。" preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"在包管理器中选择版本"
+        message:@"打开 Sileo 或 Zebra，在包详情的可用版本中选择需要的完整包。"
+        preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    __weak typeof(self) weakSelf = self;
-    [alert addAction:[UIAlertAction actionWithTitle:@"安装" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) {
-        if (DHWriteUpdateRequest(DH_REQ_INSTALL, version)) {
-            [weakSelf.navigationController popViewControllerAnimated:YES];
+    [alert addAction:[UIAlertAction actionWithTitle:@"打开" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) {
+        if (!DHOpenPackageManager()) {
+            UIAlertController *error = [UIAlertController alertControllerWithTitle:@"未找到包管理器"
+                message:@"请在 Sileo 或 Zebra 添加 https://ios.decrypthub.com 后搜索 IOSDecryptHub。"
+                preferredStyle:UIAlertControllerStyleAlert];
+            [error addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:error animated:YES completion:nil];
         }
     }]];
     [self presentViewController:alert animated:YES completion:nil];

@@ -82,7 +82,7 @@ static void dh_settings_state_changed(__unused CFNotificationCenterRef center,
 - (void)refreshAvailability {
     NSString *pending = self.latestVersion ?: DHPendingUpdateVersion();
     self.latestVersion = pending;
-    self.hasUpdateRow = (pending != nil);
+    self.hasUpdateRow = pending.length && DHCompareVersions(DHReadEngineMeta()[@"version"] ?: @"0", pending) == NSOrderedAscending;
 }
 
 #pragma mark - 表格
@@ -118,7 +118,7 @@ static void dh_settings_state_changed(__unused CFNotificationCenterRef center,
     if (self.working) return @"正在检查更新…";
     // 有新版就在这里点出来（全 App 唯一一处按需出现的版本号）
     if (self.hasUpdateRow && self.latestVersion.length) {
-        return [NSString stringWithFormat:@"发现新版本 %@，点上方安装。", self.latestVersion];
+        return [NSString stringWithFormat:@"发现完整更新 %@，在包管理器中安装。", self.latestVersion];
     }
     return nil;
 }
@@ -141,7 +141,7 @@ static void dh_settings_state_changed(__unused CFNotificationCenterRef center,
     if (indexPath.section == DHSectionUpdate) {
         if (indexPath.row == 0) return [self actionCell:@"检查更新" image:nil enabled:!self.working];
         if (self.hasUpdateRow && indexPath.row == 1) {
-            return [self actionCell:@"安装新版本" image:nil enabled:!self.working];
+            return [self actionCell:@"在包管理器中更新" image:nil enabled:!self.working];
         }
         return [self actionCell:@"历史版本" image:nil enabled:!self.working];
     }
@@ -238,7 +238,8 @@ static void dh_settings_state_changed(__unused CFNotificationCenterRef center,
     [self setWorking:YES];
     DHFetchLatestRelease(^(NSDictionary *_Nullable info, NSError *_Nullable error) {
         [self setWorking:NO];
-        self.latestVersion = nil;
+        NSString *candidate = info[@"version"];
+        if (!error) self.latestVersion = candidate;
         [self reload];
         if (error) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"检查失败"
@@ -259,24 +260,11 @@ static void dh_settings_state_changed(__unused CFNotificationCenterRef center,
 }
 
 - (void)installUpdate {
-    NSString *version = self.latestVersion ?: @"";
-    NSString *message = version.length
-        ? [NSString stringWithFormat:@"将在后台安装 %@。已启用的 App 会被自动重启，无需手动操作。", version]
-        : @"将在后台安装新版本。已启用的 App 会被自动重启，无需手动操作。";
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"安装新版本"
-        message:message preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"安装" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) {
-        if (DHWriteUpdateRequest(DH_REQ_INSTALL, nil)) {
-            self.hasUpdateRow = NO;
-            [self.tableView reloadData];
-        } else {
-            UIAlertController *fail = [UIAlertController alertControllerWithTitle:@"提交失败"
-                message:@"请确认插件已正确安装。" preferredStyle:UIAlertControllerStyleAlert];
-            [fail addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:fail animated:YES completion:nil];
-        }
-    }]];
+    if (DHOpenPackageManager()) return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"通过包管理器更新"
+        message:@"请在 Sileo 或 Zebra 添加 https://ios.decrypthub.com，搜索 IOSDecryptHub 安装完整更新。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 

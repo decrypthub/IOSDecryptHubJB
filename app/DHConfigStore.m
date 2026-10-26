@@ -2,6 +2,8 @@
 
 #import "DHConfigStore.h"
 #import "dh_shared.h"
+#import "dh_package_update.h"
+#import <UIKit/UIKit.h>
 #import <dlfcn.h>
 
 NSString *_Nullable DHBootstrapRoot(void) {
@@ -295,6 +297,7 @@ NSDictionary<NSString *, NSDictionary *> *DHProbeInjectedApps(void) {
 }
 
 BOOL DHWriteUpdateRequest(NSString *action, NSString *_Nullable version) {
+    if (DHPackageManagerRequired(action)) return NO;
     NSMutableDictionary *request = [NSMutableDictionary dictionary];
     request[@"action"] = action ?: DH_REQ_NONE;
     request[@"time"] = @([[NSDate date] timeIntervalSince1970]);
@@ -343,149 +346,9 @@ static NSError *dh_net_error(NSError *error) {
                            userInfo:@{NSLocalizedDescriptionKey: text}];
 }
 
-#pragma mark - 最新版本：优先 releases/latest 302，API 只兜底
-
-// GitHub API 未认证配额是 60 次/小时/IP，共享出口/VPN 很容易 403；管理器 App
-// 之前只走 API，失败时用户看到的就是"没网"。releases/latest 的 302 不吃配额，
-// 与 daemon 的主路径保持一致。
-@interface DHAppRedirectProbe : NSObject <NSURLSessionTaskDelegate>
-@property (nonatomic, copy, nullable) NSString *location;
-@property (nonatomic, copy, nullable) void (^onRedirect)(void);
-@end
-
-@implementation DHAppRedirectProbe
-
-- (void)URLSession:(__unused NSURLSession *)session
-              task:(__unused NSURLSessionTask *)task
-willPerformHTTPRedirection:(NSHTTPURLResponse *)response
-        newRequest:(NSURLRequest *)request
- completionHandler:(void (^)(NSURLRequest *_Nullable))completionHandler {
-    id location = response.allHeaderFields[@"Location"];
-    self.location = [location isKindOfClass:[NSString class]]
-        ? location : request.URL.absoluteString;
-    completionHandler(nil);
-    if (self.onRedirect) self.onRedirect();
-}
-
-@end
-
-// 从 .../releases/tag/v1.27.5 解析 tag；形状不对返回 nil。
-static NSString *_Nullable dh_tag_from_location(NSString *_Nullable location) {
-    if (![location isKindOfClass:[NSString class]] || location.length == 0) return nil;
-    NSString *tag = [NSURL URLWithString:location].lastPathComponent;
-    if (tag.length == 0) return nil;
-    NSString *body = ([tag hasPrefix:@"v"] || [tag hasPrefix:@"V"])
-        ? [tag substringFromIndex:1] : tag;
-    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"0123456789."];
-    if (body.length == 0) return nil;
-    if ([body rangeOfCharacterFromSet:allowed.invertedSet].location != NSNotFound) return nil;
-    if ([body rangeOfString:@"."].location == NSNotFound) return nil;
-    return tag;
-}
-
-static void dh_fetch_latest_via_redirect(void (^completion)(NSDictionary *_Nullable, NSError *_Nullable)) {
-    NSURL *url = [NSURL URLWithString:DH_RELEASE_LATEST];
-    if (!url) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            completion(nil, [NSError errorWithDomain:@"DHManager" code:-10 userInfo:
-                @{NSLocalizedDescriptionKey: @"releases/latest 地址无效"}]);
-        });
-        return;
-    }
-    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-    cfg.timeoutIntervalForRequest = 20;
-    cfg.timeoutIntervalForResource = 30;
-    DHAppRedirectProbe *probe = [[DHAppRedirectProbe alloc] init];
-    __weak DHAppRedirectProbe *weakProbe = probe;
-    __block BOOL finished = NO;
-    __block NSURLSession *session = nil;
-    void (^finish)(NSDictionary *, NSError *) = ^(NSDictionary *info, NSError *err) {
-        if (finished) return;
-        finished = YES;
-        [session invalidateAndCancel];
-        dispatch_async(dispatch_get_main_queue(), ^{ completion(info, err); });
-    };
-    probe.onRedirect = ^{
-        NSString *tag = dh_tag_from_location(weakProbe.location);
-        if (tag.length) {
-            finish(@{@"tag": tag, @"version": dh_strip_v(tag)}, nil);
-        } else {
-            finish(nil, [NSError errorWithDomain:@"DHManager" code:-11 userInfo:
-                @{NSLocalizedDescriptionKey: @"GitHub 重定向里没有可解析的版本号"}]);
-        }
-    };
-    session = [NSURLSession sessionWithConfiguration:cfg
-                                            delegate:probe
-                                       delegateQueue:nil];
-    [[session dataTaskWithURL:url completionHandler:^(__unused NSData *data,
-        NSURLResponse *_Nullable response, NSError *_Nullable error) {
-        if (finished) return;
-        if (error) {
-            finish(nil, dh_net_error(error));
-            return;
-        }
-        NSString *tag = dh_tag_from_location(response.URL.absoluteString);
-        if (tag.length) {
-            finish(@{@"tag": tag, @"version": dh_strip_v(tag)}, nil);
-        } else {
-            finish(nil, [NSError errorWithDomain:@"DHManager" code:-12 userInfo:
-                @{NSLocalizedDescriptionKey: @"GitHub releases/latest 未返回版本号"}]);
-        }
-    }] resume];
-}
-
 static void dh_fetch_latest_direct(void (^completion)(NSDictionary *_Nullable, NSError *_Nullable)) {
-    dh_fetch_latest_via_redirect(^(NSDictionary *_Nullable info, NSError *_Nullable redirectError) {
-        if (info) {
-            completion(info, nil);
-            return;
-        }
-        // 兜底：API 能拿到资产列表，容忍引擎改名，但可能受未认证配额限制。
-        NSURL *url = [NSURL URLWithString:DH_GITHUB_LATEST];
-        if (!url) {
-            completion(nil, redirectError);
-            return;
-        }
-        NSURLSession *session = dh_shared_session();
-        [[session dataTaskWithURL:url completionHandler:^(NSData *_Nullable data,
-            NSURLResponse *_Nullable response, NSError *_Nullable error) {
-            NSDictionary *apiInfo = nil;
-            NSError *err = dh_net_error(error);
-            if (!err) {
-                NSInteger code = [response isKindOfClass:[NSHTTPURLResponse class]]
-                    ? [(NSHTTPURLResponse *)response statusCode] : 0;
-                if (code >= 400) {
-                    err = [NSError errorWithDomain:@"DHManager" code:code userInfo:
-                        @{NSLocalizedDescriptionKey: [NSString stringWithFormat:
-                            @"GitHub API HTTP %ld（未认证配额可能已用尽）", (long)code]}];
-                }
-            }
-            if (!err) {
-                @try {
-                    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data
-                        options:0 error:&err];
-                    NSString *tag = json[@"tag_name"];
-                    if (!err && [tag isKindOfClass:[NSString class]] && tag.length) {
-                        apiInfo = @{@"tag": tag, @"version": dh_strip_v(tag)};
-                    } else if (!err) {
-                        err = [NSError errorWithDomain:@"DHManager" code:-2 userInfo:
-                            @{NSLocalizedDescriptionKey: @"release 信息缺失 tag_name"}];
-                    }
-                } @catch (__unused NSException *e) {
-                    err = [NSError errorWithDomain:@"DHManager" code:-3 userInfo:
-                        @{NSLocalizedDescriptionKey: @"release 信息解析失败"}];
-                }
-            }
-            if (!apiInfo && redirectError && err) {
-                NSString *text = [NSString stringWithFormat:@"%@；API 兜底：%@",
-                    redirectError.localizedDescription, err.localizedDescription];
-                err = [NSError errorWithDomain:err.domain code:err.code
-                                       userInfo:@{NSLocalizedDescriptionKey: text}];
-            }
-            dispatch_async(dispatch_get_main_queue(), ^{
-                completion(apiInfo, apiInfo ? nil : err);
-            });
-        }] resume];
+    DHFetchPackageUpdate(^(NSDictionary *info, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(info, error); });
     });
 }
 
@@ -512,7 +375,7 @@ static void dh_fetch_latest_from_daemon(void (^completion)(NSDictionary *_Nullab
             poll = nil;   // 断开递归 block 的自引用
             id latest = state[@"latestVersion"];
             id errText = state[@"lastCheckError"];
-            if ([latest isKindOfClass:[NSString class]] && [latest length] > 0) {
+            if (![errText isKindOfClass:[NSString class]] && [latest isKindOfClass:[NSString class]] && [latest length] > 0) {
                 completion(@{@"tag": latest, @"version": dh_strip_v(latest)}, nil);
             } else if ([errText isKindOfClass:[NSString class]] && [errText length] > 0) {
                 completion(nil, [NSError errorWithDomain:@"DHManager" code:-20 userInfo:
@@ -581,7 +444,7 @@ BOOL DHWriteStopRequest(NSString *bundleID) {
 
 #pragma mark - 历史版本
 
-#define DH_RELEASES_API @"https://api.github.com/repos/decrypthub/IOSDecryptHub/releases?per_page=30"
+#define DH_RELEASES_API @"https://api.github.com/repos/decrypthub/IOSDecryptHubJB/releases?per_page=30"
 
 void DHFetchReleases(void (^completion)(NSArray<NSDictionary *> *_Nullable, NSError *_Nullable)) {
     NSURL *url = [NSURL URLWithString:DH_RELEASES_API];
@@ -625,4 +488,13 @@ void DHFetchReleases(void (^completion)(NSArray<NSDictionary *> *_Nullable, NSEr
         }
         dispatch_async(dispatch_get_main_queue(), ^{ completion(list, err); });
     }] resume];
+}
+
+BOOL DHOpenPackageManager(void) {
+    UIApplication *app = UIApplication.sharedApplication;
+    for (NSString *address in @[@"sileo://package/com.iosdecrypthub", @"zbra://"]) {
+        NSURL *url = [NSURL URLWithString:address];
+        if ([app canOpenURL:url]) { [app openURL:url options:@{} completionHandler:nil]; return YES; }
+    }
+    return NO;
 }

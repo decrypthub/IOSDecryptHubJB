@@ -101,7 +101,7 @@ compile_app() {
     # shellcheck disable=SC2086
     $CC "${ARCH_FLAGS[@]}" -isysroot "$SDK" -miphoneos-version-min=14.0 \
         -ObjC -fobjc-arc -Wall -O2 \
-        -I"$SCRIPT_DIR/src" \
+        -I"$SCRIPT_DIR/src" -DDH_PACKAGE_ARCH=\"${3}\" \
         -framework Foundation -framework UIKit -framework CoreGraphics \
         $APP_SRCS -o "$OUT"
 }
@@ -118,7 +118,7 @@ compile_daemon() {
     mkdir -p "$(dirname "$OUT")"
     $CC "${ARCH_FLAGS[@]}" -isysroot "$SDK" -miphoneos-version-min=14.0 \
         -ObjC -fobjc-arc -Wall -O2 \
-        -I"$SCRIPT_DIR/src" \
+        -I"$SCRIPT_DIR/src" -DDH_PACKAGE_ARCH=\"${3}\" \
         -framework Foundation \
         "$DAEMON_SRC" -o "$OUT"
 }
@@ -163,8 +163,8 @@ build_variant() {
 
     ENGINE_DYLIB=$(require_vendor_dylib "$VARIANT" "$MACHO_ARCHS")
     compile_loader "$MACHO_ARCHS" "$LOADER_OUT"
-    compile_app "$APP_MACHO_ARCHS" "$APP_EXEC"
-    compile_daemon "$APP_MACHO_ARCHS" "$DAEMON_OUT"
+    compile_app "$APP_MACHO_ARCHS" "$APP_EXEC" "$ARCHITECTURE"
+    compile_daemon "$APP_MACHO_ARCHS" "$DAEMON_OUT" "$ARCHITECTURE"
 
     info "打包 $VARIANT (arch=$ARCHITECTURE, prefix=${PREFIX:-/})..."
     rm -rf "$STAGE"

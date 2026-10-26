@@ -9,15 +9,14 @@
 //         EPERM，由 updated.sh（launchd 的 /bin/sh）把 prefs 拷过去。
 //         loader：prefs 读到数组就用；读不到再回退 jb。空数组=全关。
 //   引擎: <bootstrap>/usr/lib/IOSDecryptHub/decrypt_helper.dylib
-//         由 dpkg 安装；OTA 时 Mach-O 下载到 DH_STAGE_DIR，updated.sh（launchd 的 /bin/sh）落位。
+//         仅由 dpkg 随完整 deb 安装，管理器和 daemon 不单独替换。
 //   元信息: <bootstrap>/usr/lib/IOSDecryptHub/version.plist              {version, variant, arch}
 //   状态: DH_STATE_PATH（mobile 可写）；引擎目录里的 state.plist 仅作 rootless 兼容镜像
 //   请求: DH_REQUEST_PATH
 //         (mobile 可写，daemon 读；launchd 用 WatchPaths 监听它；内容不可信，
-//          daemon 只取 action 与可选的 version —— 下载地址一律自己按发布命名约定
-//          推导，绝不采用请求里的地址)
-//         action: check / install / rollback / restart / stop / set-enabled / none
-//         version: 可选，指定要安装的版本（历史版本），如 "1.25.1"
+//          daemon 只取有限 action；check 查询规范 APT 源，安装交给包管理器)
+//         action: check / restart / stop / set-enabled / none
+//         兼容接收旧 install / rollback，但明确拒绝并提示使用包管理器
 //         bundle:  可选，restart / stop 要操作的 App（bundle id）
 //                  restart = 结束进程并尽量重新打开；stop = 只结束进程
 //         enabledBundles: set-enabled 时的完整名单（字符串数组；内容不可信，daemon 只收 NSString）
@@ -29,9 +28,6 @@
 // 开关表现为「写入启用名单失败」。
 #define DH_CONFIG_REL     @"usr/lib/IOSDecryptHub/config/enabledBundles.plist"
 #define DH_ENGINE_NAME    @"decrypt_helper.dylib"
-#define DH_ENGINE_BAK     @"decrypt_helper.dylib.bak"
-#define DH_ENGINE_NEW     @"decrypt_helper.dylib.new"
-#define DH_BAK_META       @"decrypt_helper.dylib.bak.plist"
 #define DH_VERSION_FILE   @"version.plist"
 #define DH_STATE_FILE     @"state.plist"
 
@@ -45,18 +41,9 @@
 #define DH_LOADER_PREFS   @"/var/mobile/Library/Preferences/com.iosdecrypthub.loader.plist"
 #define DH_STATE_PATH     @"/var/mobile/Library/Preferences/com.iosdecrypthub.updater.state.plist"
 #define DH_LOCK_PATH      @"/var/mobile/Library/Preferences/com.iosdecrypthub.updated.lock"
-#define DH_STAGE_DIR      @"/var/mobile/Library/Caches/com.iosdecrypthub"
 #define DH_JB_LOCK_REL    @"var/log/com.iosdecrypthub.updated.lock"
 #define DH_JB_STATE_REL   @"var/log/com.iosdecrypthub.updater.state.plist"
-#define DH_JB_STAGE_REL   @"var/cache/com.iosdecrypthub"
 #define DH_NOTIFY_STATE   @"com.iosdecrypthub.updater.state"
-
-// 更新来源：先走 releases/latest 的 302 拿 tag（不耗 GitHub API 配额，共享出口/VPN
-// 用户不会莫名被 403 掐掉），资产地址按发布流程的命名约定拼；命名变化时由 API 兜底。
-#define DH_RELEASE_LATEST @"https://github.com/decrypthub/IOSDecryptHub/releases/latest"
-#define DH_ASSET_FMT      @"https://github.com/decrypthub/IOSDecryptHub/releases/download/%@/decrypt_helper-%@.dylib"
-// 兜底：API 能拿到资产列表，容忍引擎改名
-#define DH_GITHUB_LATEST  @"https://api.github.com/repos/decrypthub/IOSDecryptHub/releases/latest"
 
 #define DH_REQ_CHECK      @"check"
 #define DH_REQ_INSTALL    @"install"

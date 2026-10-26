@@ -11,14 +11,14 @@
 #   make VARIANT=rootless      编译越狱变体 (arm64) —— deb 包里的引擎
 #   make dist                  产出带版本号的 decrypt_helper-<version>.dylib
 #   make deb                   打 rootless + roothide 两个越狱 deb
-#   make test-updater          仿真回归测试 (线上 release 走完整更新链路)
+#   make test-updater          整包更新边界回归测试 (macOS，无需网络)
 #
 # 也可在 Linux/WSL 交叉编译: 需设置 IOS_SDK 指向 iPhoneOS SDK,
 # CROSS_CC 指向支持 Apple target 的 clang, 然后 make linux。
 #
 # 依赖: macOS + Xcode (xcrun); 打 deb 另需 dpkg-deb / ldid / install_dylib
 
-VERSION := 1.27.5
+VERSION := 1.27.6
 TARGET  := decrypt_helper.dylib
 
 # Capstone 反汇编库源文件（仅 ARM/ARM64 架构）
@@ -260,11 +260,14 @@ deb:
 	$(MAKE) deb-rootless
 	$(MAKE) deb-roothide
 
-# 仿真回归测试：在 macOS 上把 daemon 跑成真机布局，用线上 release 走完整更新链路
-# 测试需要一个「旧引擎」作替身，所以先 stage 一份 roothide 引擎（该目录不入版本库）
-test-updater: stage-roothide
-	@chmod +x tests/updater_sim_test.sh
-	./tests/updater_sim_test.sh
+# 在 macOS 验证源版本选择与旧引擎覆盖请求拒绝；无需网络或设备。
+test-package-update:
+	@mkdir -p build/tests
+	xcrun clang -fobjc-arc -Wall -Isrc -framework Foundation tests/package_update_test.m -o build/tests/package_update_test
+	./build/tests/package_update_test
+
+test-updater: test-package-update
+	bash tests/updater_sim_test.sh
 
 clean:
 	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) decrypt_helper-*.dylib
@@ -272,4 +275,4 @@ clean:
 	rm -f vendor/dylib/rootless/$(TARGET) vendor/dylib/roothide/$(TARGET)
 	rm -rf build/
 
-.PHONY: all linux mac sim dist clean deb deb-rootless deb-roothide test-updater
+.PHONY: all linux mac sim dist clean deb deb-rootless deb-roothide test-updater test-package-update
