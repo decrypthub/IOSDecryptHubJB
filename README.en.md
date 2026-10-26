@@ -10,7 +10,9 @@ The Manager enables or disables injection per app and shows both saved policy an
 
 The injected dylib remains an internal build artifact. Users do not download, compile, select or update it separately. Package managers such as Sileo / Zebra perform complete-package updates.
 
-**Current status: project and design migration only.** The imported legacy engine is available as a migration baseline; the new daemon, Manager, scope IPC, complete deb pipeline, APT channel, Inline Hook and Trace are not implemented. The production repository URL is not configured. Successful Mac builds of the legacy engine do not establish package or device acceptance.
+**Current status: aligned to the complete official v1 source at a94a396; no independent release has been published.** The existing Manager, loader, one-shot updater and complete deb build are restored, and both package variants build on the Mac. The new persistent analysis service, Manager redesign, scope IPC, package-update changes, Inline Hook and Trace remain planned.
+
+Official downloads remain at [v1.27.5](https://github.com/decrypthub/IOSDecryptHub/releases/tag/v1.27.5). Local package builds are verification artifacts, not a new release. See the [baseline audit](./docs/BASELINE_AUDIT_2026-10-26.md).
 
 Design documents:
 

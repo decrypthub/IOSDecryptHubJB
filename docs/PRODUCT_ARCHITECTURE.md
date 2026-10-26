@@ -11,7 +11,7 @@
 - dylib 仍是注入到目标进程所需的内部二进制，由整包任务自动编译、签名、校验并装入 deb，不单独作为用户的下载、构建或更新步骤。
 - 通过独立的 APT 越狱源交给 Sileo / Zebra 等包管理器统一升级。Manager / daemon / loader / agent 必须同一批次发布，禁止各组件自行下载覆盖。
 
-本项目从旧越狱提交 `4858677` 导入并保留历史与引擎源码。旧目录暂留作迁移基线；它们存在不代表新版 Manager、daemon、Inline 或整包已完成。
+本项目最初从个人引擎仓拆出，随后于 2026-10-26 按组织正式 `a94a396` 校正基线并纳入其历史，恢复完整 v1 Manager、Loader、一次性 updater 与整包构建。见 [基线核验](./BASELINE_AUDIT_2026-10-26.md)。现有 v1 组件可构建不代表 v2 常驻分析服务、UI 改造或 Inline / Trace 已完成。
 
 **公开源码补充核对**：组织既有 [IOSDecryptHub](https://github.com/decrypthub/IOSDecryptHub) 的 `main` 已包含 `app/` 管理器、`src/loader.m`、一次性 updater daemon、`build_deb.sh` 和发布 workflow，并有 v1.27.5 dylib / 两类 deb Release。新仓已将其登记为本机只读参考 `legacy-public/main`（核对提交 `a94a396`）。这些是要迁移的实际 v1 功能，区别于本设计新增的常驻分析服务与整包源更新；不能因为前期未检索到本地并列仓就从零重复实现。旧公开仓不覆盖、不重命名，以保留现有下载和更新地址。
 
@@ -133,7 +133,7 @@ Web / MCP 对外保持设备 `8088` 与 `/api/mcp` 的产品习惯，stdio 网�
 
 ## 8. 工程结构与迁移
 
-拟新增目录（未实现部分不建立空壳冒充交付）：
+目标目录与已有组件的迁移方向（现有 `app/` 为正式 UIKit Manager，现有 `daemon/` 为一次性 updater；未实现部分不建立空壳冒充交付）：
 
 ```text
 manager/       手机 SwiftUI App
@@ -167,7 +167,7 @@ J0/J1 优先解决“安装整包、打开应用开关就能采集”的手机�
 
 ## 10. 当前事实
 
-- 已建立本独立项目，保留旧引擎与历史，已核对 Android 的 Manager / scope / daemon 结构。
-- 已验证现有引擎可在用户 Mac 经 SSH 编译 arm64 和 arm64+arm64e；这是旧基线编译证明。
+- 已建立独立项目并校正到正式 a94a396 的完整 v1 基线，恢复 app/、daemon/、Loader 与 make deb；已核对 Android 的 Manager / scope / daemon 结构。
+- 已在 Mac 经 SSH 验证完整 make deb，rootless / RootHide 包内组件、架构、依赖与布局检查通过；测试包未发布、未安装手机。
 - 本工作树尚未完成新常驻 daemon、Manager 改造、scope IPC、整包迁移与 Inline / Trace；现有公开 v1 已有管理器、一次性 updater、整包与源说明，必须区分新旧状态。本次未安装手机、未发布 deb、未部署源。
 - 已知旧公开 README 声明源 `https://ios.decrypthub.com`、包 ID `com.iosdecrypthub`。新包需先核对线上索引、签名与存量安装再设计接管；本轮未改变旧源或更新服务。

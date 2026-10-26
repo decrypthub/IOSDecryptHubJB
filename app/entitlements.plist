@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 平台化：越狱 App 才能在 <jbroot>/Applications 下正常运行 -->
+    <key>platform-application</key>
+    <true/>
+    <!-- 放开沙盒：App 要读越狱路径下的启用名单与更新状态（<jbroot>/usr/lib/IOSDecryptHub）。
+         注意：no-sandbox 只解决文件/进程沙盒，不解决网络策略。缺少
+         com.apple.security.network.client 时，NSURLSession 会直接返回
+         NSURLErrorDataNotAllowed (-1020)，UI 表现就是"检查更新/历史版本没网"。
+         148/162 实测：补上 network.client 后管理器 App 才能稳定直连 GitHub。 -->
+    <key>com.apple.private.security.no-sandbox</key>
+    <true/>
+    <key>com.apple.private.security.no-container</key>
+    <true/>
+    <key>com.apple.private.security.container-required</key>
+    <false/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

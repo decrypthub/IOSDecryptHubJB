@@ -9,6 +9,7 @@ Always respond in Chinese-simplified.
 3. 涉及 UI 读 `docs/MANAGER_UI.md`，涉及 Hook / Trace 读 `docs/HOOK_AND_TRACE_DESIGN.md`。
 4. 按用户要求先读本机该项目 Claude memory 索引，再用代码和现场状态核对记忆。
 5. 既有公开 v1 源码在 `https://github.com/decrypthub/IOSDecryptHub`（本机只读参考 remote：`legacy-public`），包含 app/、daemon/、src/loader.m、build_deb.sh 与 release workflow。开始重做组件前先核对，不把“本工作树没有”误认为“产品从未实现”。
+6. `docs/BASELINE_AUDIT_2026-10-26.md`：已校正的正式基线、完整组件、线上哈希与验证范围。不能仅凭 VERSION 一样就认为与正式代码一致。
 
 ## 产品定位
 
@@ -49,4 +50,4 @@ Always respond in Chinese-simplified.
 
 ## 当前实现说明
 
-本轮仅导入旧引擎历史与设计；新 daemon、Manager、scope IPC、整包/源流水线、Inline / Trace 未实现。继承的 Makefile 版本 1.27.5 是旧引擎基线，不是已发布的独立项目版本。
+已恢复组织正式 a94a396 的完整 v1 Manager、Loader、一次性 updater、引擎与整包构建，Mac 的 make deb 双环境通过。常驻分析服务、新 Manager 设计、scope IPC、整包更新改造、Inline / Trace 未实现。Makefile 1.27.5 是正式 v1 源码基线，不是新独立项目已发布的版本。正式下载继续指向原公开仓；不发布本轮本地测试包。

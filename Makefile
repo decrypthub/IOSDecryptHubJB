@@ -1,15 +1,22 @@
-# 解密助手 (Decrypt Helper) — iOS dylib
-# 本文件是导入的 v1 引擎迁移基线；新版完整 deb 构建尚未实现。
-# 对用户的交付以 docs/PRODUCT_ARCHITECTURE.md 为准，不单独分发此处 dylib。
+# IOSDecryptHub — 完整源码仓
 #
-# 提供两条编译路径:
-#   1) macOS xcrun (默认): 在 GitHub Actions / macOS 本机用
-#       make                       -> decrypt_helper.dylib
-#   2) Linux 交叉编译 (WSL): 需要环境变量 IOS_SDK 指向 iPhoneOS SDK 路径,
-#       并且 CROSS_CC 指向支持 Apple target 的 clang.
-#       export IOS_SDK=/path/to/iPhoneOS17.x.sdk
-#       export CROSS_CC=/path/to/theos/toolchain/linux/iphone/bin/clang
-#       make linux                 -> decrypt_helper.dylib
+# 本仓同时包含:
+#   * 运行时分析引擎 dylib 的全部源码 (src/, 含第三方 fishhook / Capstone)
+#   * 越狱加载器 (src/loader.m)、管理器 App (app/)、updater daemon (daemon/)
+#   * 打包脚本 (build_deb.sh) 与发布产物 (vendor/)
+#
+# ---------- 常用命令 ----------
+#   make                       编译引擎 (dev 变体, arm64)
+#   make VARIANT=trollstore    编译巨魔变体 (arm64) —— Release 里那个 dylib 资产
+#   make VARIANT=rootless      编译越狱变体 (arm64) —— deb 包里的引擎
+#   make dist                  产出带版本号的 decrypt_helper-<version>.dylib
+#   make deb                   打 rootless + roothide 两个越狱 deb
+#   make test-updater          仿真回归测试 (线上 release 走完整更新链路)
+#
+# 也可在 Linux/WSL 交叉编译: 需设置 IOS_SDK 指向 iPhoneOS SDK,
+# CROSS_CC 指向支持 Apple target 的 clang, 然后 make linux。
+#
+# 依赖: macOS + Xcode (xcrun); 打 deb 另需 dpkg-deb / ldid / install_dylib
 
 VERSION := 1.27.5
 TARGET  := decrypt_helper.dylib
@@ -77,9 +84,13 @@ CAPSTONE_DEF := -DCAPSTONE_USE_SYS_DYN_MEM -DCAPSTONE_HAS_ARM -DCAPSTONE_HAS_ARM
 VERSION_DEF := -DDH_VERSION_STR=\"$(VERSION)\"
 
 # ---------- 打包变体矩阵 ----------
-# 一份源码产出 2 变体, 差异仅: DH_VARIANT 编号。
-#   make                       -> dev  (开发者 / DYLD_INSERT 注入, arm64)
-#   make VARIANT=trollstore    -> 巨魔 (arm64, TrollStore 持久化)
+# 一份源码编出 4 个变体, 差别只有编译期 -DDH_VARIANT 编号 (见 src/core/dh_capability.c)。
+# 该编号目前只影响 MCP get_capabilities 握手自报的 variant 字段, 能力位不随变体改变。
+# 编号 0/1/2 已是已发布产物的既有语义, 不得重排; 新增只能往后追加。
+#   make                       -> dev        (0) 开发者手动注入 / DYLD_INSERT
+#   make VARIANT=trollstore    -> trollstore (1) 巨魔注入器 —— Release 里的 dylib 资产
+#   make VARIANT=rootless      -> rootless   (2) 越狱 rootless 包
+#   make VARIANT=roothide      -> roothide   (3) 越狱 roothide 包 (胖切片 arm64+arm64e)
 VARIANT ?= dev
 
 ifeq ($(VARIANT),dev)
@@ -94,8 +105,12 @@ else ifeq ($(VARIANT),rootless)
     DH_VARIANT_NUM := 2
     ARCH    := arm64
     MIN_IOS := 14.0
+else ifeq ($(VARIANT),roothide)
+    DH_VARIANT_NUM := 3
+    ARCH    := arm64
+    MIN_IOS := 14.0
 else
-    $(error 未知 VARIANT=$(VARIANT); 可选: dev / trollstore / rootless)
+    $(error 未知 VARIANT=$(VARIANT); 可选: dev / trollstore / rootless / roothide)
 endif
 
 # ---------- 1) iOS 真机 dylib (默认 target) ----------
@@ -137,9 +152,12 @@ $(TARGET): $(WEB_ASSETS) $(SRC) Makefile
 	@echo "✅ $(TARGET)"
 
 # ---------- 2) Linux 交叉编译 (WSL) ----------
+# 需自备 iPhoneOS SDK 与支持 Apple target 的 clang:
+#   export IOS_SDK=/path/to/iPhoneOS17.x.sdk
+#   export CROSS_CC=/path/to/clang
 linux:
 	@if [ -z "$(IOS_SDK)" ] || [ -z "$(CROSS_CC)" ]; then \
-		echo "❌ 需设置 IOS_SDK 和 CROSS_CC, 参考 scripts/wsl_setup_toolchain.sh"; exit 1; fi
+		echo "❌ 需设置 IOS_SDK (iPhoneOS SDK 路径) 和 CROSS_CC (支持 Apple target 的 clang)"; exit 1; fi
 	@echo "[*] Linux 交叉编译 (VARIANT=$(VARIANT))..."
 	python3 tools/gen_web.py web/index.html $(WEB_HEADER)
 	python3 tools/gen_web.py web/wechat-follow.png $(WECHAT_HEADER) kDHWeChatPNG
@@ -176,7 +194,7 @@ $(MAC_TARGET): $(WEB_ASSETS) $(SRC) Makefile
 	$(CC) $(MAC_CFLAGS) $(SRC) -o $(MAC_TARGET)
 	@echo "✅ macOS dylib: $(MAC_TARGET)"
 
-# ---------- 3b) iOS Simulator (真 UIKit / file / dlopen 环境, 注入模拟器 App 测试) ----------
+# ---------- 3b) iOS Simulator ----------
 SIM_TARGET := decrypt_helper.sim.dylib
 SIM_SDK    := $(shell xcrun --sdk iphonesimulator --show-sdk-path 2>/dev/null)
 SIM_ARCH   := $(shell uname -m)
@@ -202,101 +220,56 @@ $(SIM_TARGET): $(WEB_ASSETS) $(SRC) Makefile
 	codesign -s - -f $(SIM_TARGET) 2>/dev/null || true
 	@echo "✅ simulator dylib: $(SIM_TARGET)"
 
-# ---------- 4) Mac 灰度测试 ----------
-# 编 dylib + 编 exercise_runner + DYLD_INSERT_LIBRARIES 跑.
-# 跑完浏览器开 http://127.0.0.1:8088 应该能看到 ~12 条日志.
-TEST_BIN := tests/exercise_runner
-OPENSSL_PREFIX := $(shell brew --prefix openssl@3 2>/dev/null || brew --prefix openssl 2>/dev/null)
-TEST_OPENSSL_CFLAGS :=
-TEST_OPENSSL_LIBS :=
-ifneq ($(OPENSSL_PREFIX),)
-ifneq ($(wildcard $(OPENSSL_PREFIX)/include/openssl/evp.h),)
-TEST_OPENSSL_CFLAGS := -I$(OPENSSL_PREFIX)/include -DHAVE_OPENSSL=1
-TEST_OPENSSL_LIBS := -L$(OPENSSL_PREFIX)/lib -lcrypto
-endif
-endif
-
-test-mac: $(MAC_TARGET) $(TEST_BIN)
-	@echo "[*] 启动测试: DYLD_INSERT_LIBRARIES=$(MAC_TARGET) $(TEST_BIN)"
-	@echo "[*] 一秒后请打开 http://127.0.0.1:8088"
-	DYLD_INSERT_LIBRARIES=./$(MAC_TARGET) ./$(TEST_BIN)
-
-# 自动化集成测试: 注入 dylib 到 runner, 驱动真实 MCP/HTTP 端点断言 (认证/工具/查询/关联/诊断)。
-.PHONY: test-mcp
-test-mcp:
-	@chmod +x tests/mcp_test.sh
-	./tests/mcp_test.sh
-
-.PHONY: test-persistence
-test-persistence:
-	@chmod +x tests/persistence_test.sh
-	./tests/persistence_test.sh
-
-.PHONY: test-unit
-test-unit:
-	python3 -m unittest tests.test_patch_info_plist tests.test_scenarios
-
-.PHONY: verify-architecture
-verify-architecture:
-	@chmod +x tests/verify_architecture.sh
-	./tests/verify_architecture.sh
-
-.PHONY: test-audit-mac
-test-audit-mac: test-unit verify-architecture test-mcp test-persistence
-
-.PHONY: test-audit-sim
-test-audit-sim: test-unit verify-architecture
-	@chmod +x tests/sim_test.sh
-	./tests/sim_test.sh
-
-.PHONY: verify-fast
-verify-fast: test-unit verify-architecture test-mcp test-persistence
-
-$(TEST_BIN): tests/exercise_runner.m
-	@if [ -z "$(MAC_SDK)" ]; then echo "❌ 没找到 macOS SDK"; exit 1; fi
-	@echo "[*] 编 exercise_runner ..."
-	$(CC) -arch $(MAC_ARCH) -isysroot $(MAC_SDK) -mmacosx-version-min=$(MAC_MIN) \
-	      -ObjC -fobjc-arc -Wall -Wno-deprecated-declarations -O0 -g \
-	      $(TEST_OPENSSL_CFLAGS) \
-	      -framework Foundation -framework CoreFoundation -framework Security -framework Network \
-	      tests/exercise_runner.m -o $(TEST_BIN) $(TEST_OPENSSL_LIBS)
-	@echo "✅ test runner: $(TEST_BIN)"
-
-# ---------- 5) 发布产物: 带版本号的 dylib ----------
-# release 资产用带版本号的文件名, 方便区分不同版本的下载。
+# ---------- 4) 发布产物: 带版本号的 dylib ----------
+# 发布 Release 里的 dylib 资产时用:  make VARIANT=trollstore dist
 # 文件名与 install_name(LC_ID) 都带版本; inject.sh 从文件名推导 LC_LOAD_DYLIB, 故注入仍自洽。
-# 主构建产物保持 decrypt_helper.dylib 不变(测试 IPA / inject 默认名不受影响)。
 DIST_DYLIB := decrypt_helper-$(VERSION).dylib
 dist: $(TARGET)
 	cp $(TARGET) $(DIST_DYLIB)
 	install_name_tool -id @executable_path/$(DIST_DYLIB) $(DIST_DYLIB)
-	@echo "✅ 发布产物: $(DIST_DYLIB)"
+	@echo "✅ 发布产物: $(DIST_DYLIB) (VARIANT=$(VARIANT))"
 
-# ---------- 7) TrollStore IPA (管理器 App + dylib 打包) ----------
-# 参考 TrollFools 方案: App 直接 patch 目标 App 的 Mach-O 二进制。
-# 不依赖 daemon / plist / Substrate, 全程非越狱。
-ipa:
-	@chmod +x app-trollstore/build_ipa.sh
-	./app-trollstore/build_ipa.sh
+# ---------- 5) 越狱 deb 包 (rootless / roothide) ----------
+# 引擎在本仓编译 → 落进 vendor/dylib/<variant>/ → 交给 build_deb.sh 打包。
+# 每个 deb 包编自己的引擎变体, 架构也各按环境: rootless=arm64, roothide=arm64+arm64e。
+# (1.27.5 及之前 roothide 包用的也是 rootless 变体引擎, 于是包内 version.plist 写
+#  roothide 而引擎自报 rootless, 两者矛盾; 现已修正为各自对应的变体。)
+.PHONY: stage-rootless stage-roothide
 
-# ---------- 8) 越狱 deb 包 (rootless / roothide) ----------
-# 本仓只编译闭源 dylib。加载器 / 设置面板 / 打包在并列开源仓 IOSDecryptHubJB。
-# jailbreak/build_deb.sh 会把成品拷进 ../IOSDecryptHubJB/vendor/dylib/ 再调用其打包脚本。
+stage-rootless:
+	@echo "[*] 编译引擎 (VARIANT=rootless, archs=arm64) → vendor/dylib/rootless"
+	$(MAKE) -B VARIANT=rootless ARCHS=arm64 all
+	mkdir -p vendor/dylib/rootless
+	cp $(TARGET) vendor/dylib/rootless/$(TARGET)
+
+stage-roothide:
+	@echo "[*] 编译引擎 (VARIANT=roothide, archs=arm64 arm64e) → vendor/dylib/roothide"
+	$(MAKE) -B VARIANT=roothide ARCHS="arm64 arm64e" all
+	mkdir -p vendor/dylib/roothide
+	cp $(TARGET) vendor/dylib/roothide/$(TARGET)
+
+deb-rootless: stage-rootless
+	@chmod +x build_deb.sh
+	./build_deb.sh rootless
+
+deb-roothide: stage-roothide
+	@chmod +x build_deb.sh
+	./build_deb.sh roothide
+
 deb:
-	@chmod +x jailbreak/build_deb.sh
-	./jailbreak/build_deb.sh all
+	$(MAKE) deb-rootless
+	$(MAKE) deb-roothide
 
-deb-rootless:
-	@chmod +x jailbreak/build_deb.sh
-	./jailbreak/build_deb.sh rootless
-
-deb-roothide:
-	@chmod +x jailbreak/build_deb.sh
-	./jailbreak/build_deb.sh roothide
+# 仿真回归测试：在 macOS 上把 daemon 跑成真机布局，用线上 release 走完整更新链路
+# 测试需要一个「旧引擎」作替身，所以先 stage 一份 roothide 引擎（该目录不入版本库）
+test-updater: stage-roothide
+	@chmod +x tests/updater_sim_test.sh
+	./tests/updater_sim_test.sh
 
 clean:
-	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) $(TEST_BIN) decrypt_helper-*.dylib
+	rm -f $(TARGET) $(MAC_TARGET) $(SIM_TARGET) decrypt_helper-*.dylib
+	rm -f $(WEB_HEADER) $(WECHAT_HEADER)
+	rm -f vendor/dylib/rootless/$(TARGET) vendor/dylib/roothide/$(TARGET)
 	rm -rf build/
 
-.PHONY: all linux mac sim test-mac test-mcp test-unit test-audit-mac test-audit-sim \
-	verify-architecture verify-fast dist clean ipa deb deb-rootless deb-roothide
+.PHONY: all linux mac sim dist clean deb deb-rootless deb-roothide test-updater

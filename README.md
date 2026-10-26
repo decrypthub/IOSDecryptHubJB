@@ -18,9 +18,11 @@
 
 ## 当前状态
 
-**当前为独立工程与设计迁移阶段，尚无新版可安装整包。** 仓库保留旧引擎源码和历史作为迁移基线；新版常驻分析 daemon、Manager 改造、scope IPC、整包 / 源更新迁移，以及 Inline / Trace 尚未完成。既有 v1 的源和包 ID 需要按升级兼容性接管，不另造相互冲突的渠道。
+**当前已校正到组织正式仓 `a94a396` 的完整 v1 基线，尚未发布独立新版。** 现有 Manager、Loader、一次性 updater 和完整 deb 构建已经恢复，Mac 上 `make deb` 两种环境均通过。新版常驻分析服务、Manager 改造、scope IPC、整包升级改造和 Inline / Trace 仍未完成。
 
-已验证旧引擎可经 SSH 在 Mac 编译 arm64 / arm64e；这不等于新版整包或真机功能已验收。旧 Makefile 和跨仓脚本仅用于追溯/迁移，不是新版产品交付入口。
+正式下载仍使用原公开仓的 [v1.27.5 Release](https://github.com/decrypthub/IOSDecryptHub/releases/tag/v1.27.5)。本仓构建只用于基线核验，不替换正式发布或线上源。详细差异、纠正和线上 SHA-256 见 [基线核验报告](./docs/BASELINE_AUDIT_2026-10-26.md)。
+
+现有 v1 整包可在 Mac 执行 `make deb`，自动构建引擎、Loader、Manager 和 updater；本项目不再需要旧跨仓复制入口。
 
 ## 设计与实施
 
